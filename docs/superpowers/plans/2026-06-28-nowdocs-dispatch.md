@@ -321,6 +321,12 @@
 【前置】先读 AGENTS.md（项目铁律），再读 plan Wave 2「Task 2b 详细 TDD plan」（已展开 7 步 + 锁定签名 + API 事实）。严格按 plan 的 step 顺序 TDD。
 【spec】§4.2（lancedb 单依赖 hybrid）、§6.4 B1（原生 Lance FTS）、§6.5 C1（共享 Session 内存策略 + flat 搜索）
 
+【分支】Task 2a 已 ff 合回 feat/1a-cargo-skeleton @ 14d21ae（含 load_for/sha256/hf-hub 0.4）。
+        从该分支拉：git switch -c feat/2b-store。基点已干净含 2a，无需确认。
+        **前置硬阻塞**：本机 + CI 必须有 `protoc`（lance build script 需要）。先 `protoc --version` 确认；
+        无则 Debian `apt-get install protobuf-compiler`。无 protoc 时 cargo build 在 lance-index/lance-table
+        build script 失败，2b 第一步就卡。
+
 【Main 已核实的事实——按此为准，勿重复踩坑】
 - 共享 Session：`Arc<lancedb::Session>`（= `lance::session::Session`，lib.rs re-export）+
   `lancedb::connect(uri).session(arc.clone()).execute().await -> Connection`。Session 跨 docset 共享，
