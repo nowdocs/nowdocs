@@ -293,8 +293,8 @@
 5. 保持 load()/embed() 签名不变（S0 锁定，2a 不破坏）。load() 改为调用 load_for(&DEFAULT_SPEC)，
    DEFAULT_SPEC 用上面 pin 的常量。
 
-【分支】从 feat/1a-cargo-skeleton 拉新分支（S0 已合回的话从含 S0 的 feat/1a-cargo-skeleton 拉；
-        若 S0 还在 spike/s0-candle-jina 未合，先与 Main 确认基点）。git switch -c feat/2a-embedder-harden。
+【分支】S0 已 fast-forward 合入 feat/1a-cargo-skeleton (@ 0b1abc7, 含 embedder.rs/tests/S0 文档)。
+        从该分支拉：git switch -c feat/2a-embedder-harden。基点已干净，无需确认。
 
 【新测试（TDD：先写失败→验证失败→实现→验证通过→commit）】
 - 拒篡改 sha：构造一个 model_sha256 不匹配的 spec，load_for 必须返回 Err 且删掉已下载文件。
@@ -317,15 +317,72 @@
 > **依赖**：2a、1e。**派给**：Rust 主力。
 
 ```
-【任务】Task 2b：共享 Arc<Session> + 表 schema + 原生 Lance FTS + hybrid 查询
-【plan】读 Wave 2「2b lancedb store」contract
-【spec】§4.2、§6.4 B1、§6.5 C1 内存
+【任务】Task 2b：共享 Arc<Session> + 表 schema + 原生 Lance FTS + hybrid 查询（f16 向量）
+【前置】先读 AGENTS.md（项目铁律），再读 plan Wave 2「Task 2b 详细 TDD plan」（已展开 7 步 + 锁定签名 + API 事实）。严格按 plan 的 step 顺序 TDD。
+【spec】§4.2（lancedb 单依赖 hybrid）、§6.4 B1（原生 Lance FTS）、§6.5 C1（共享 Session 内存策略 + flat 搜索）
 
-【专属契约】
-- 新建 src/store.rs：open 共享 Arc<Session>（cache::db_path），表 schema(id,vector,heading_path,source_url,api_version,text,chunk_type)；建原生 Lance FTS（**禁 use_tantivy=True**，§6.4）；hybrid query().full_text_search().nearest_to().rerank(RRFReranker).execute_hybrid()。
-- v1 用 flat 精确搜索（IVF/HNSW 移 deferred，§6.5 A10）。
-- lancedb 版本以 cargo 解析为准（plan 起点 0.18，spec 内部参考 0.30）；实际 API 名核实后写入 spec 附录（属实现核实类修订）。
-- 测试：insert→hybrid-search 召回 round-trip。只改 src/store.rs + tests/store_tests.rs + Cargo.toml 的 lancedb 行（仅此 task 可改该行）。
+【Main 已核实的事实——按此为准，勿重复踩坑】
+- 共享 Session：`Arc<lancedb::Session>`（= `lance::session::Session`，lib.rs re-export）+
+  `lancedb::connect(uri).session(arc.clone()).execute().await -> Connection`。Session 跨 docset 共享，
+  50 docset 共用一个 LRU+metadata cache（spec §6.5 核心，省内存）。session() 方法在 connection.rs L849/1054。
+- 建表：`conn.create_table(name, Vec<RecordBatch>).execute().await`——Vec<RecordBatch> 直接 Scannable，table.rs L886。
+- FTS 索引：`table.create_index(&["text"], Index::FTS(FtsIndexBuilder::default())).execute().await`。
+  FtsIndexBuilder = lance_index::scalar::InvertedIndexParams（index/scalar.rs L54 re-export），.default() 即原生 Lance inverted index。
+  **use_tantivy 字段在 0.30 已删除**（旧 tantivy backend 移除）——spec §6.4「禁 use_tantivy=True」约束已自动满足（空操作，不用传也无法传）。若 API 找不到 use_tantivy 不是 bug，别瞎找。
+- hybrid 链：table.query()
+    .full_text_search(FullTextSearchQuery::new(q.to_string()))   // QueryBase trait
+    .nearest_to(&qv_f16)?                                          // 返回 Result<VectorQuery>，要 ? 解包！query.rs L858
+    .rerank(Arc::new(RRFReranker::new(1.0)))                        // VectorQuery
+    .execute_hybrid(QueryExecutionOptions::default()).await         // -> SendableRecordBatchStream, query.rs L1207
+  结果 .try_collect::<Vec<RecordBatch>>().await（需 use futures::TryStreamExt）。
+  batch 自动含 _distance（向量距离）+ _score（FTS 分）两列，按 score 取 top_k。
+  FullTextSearchQuery 在 lance_index::scalar（非 lancedb crate），::new(String) 只传文本，列名从 FTS 索引推断。
+- 向量列 schema：DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float16, true)), 512)。**存 f16**
+  （manifest dtype:"f16" 锁定，AGENTS §4.2）。embedder.embed 给 Vec<f32>，insert 内部用 half::f16 转 f16。
+  查询时 nearest_to 收 &[f16]/Vec<f16>（query.rs L222/342 IntoQueryVector for &[f16]），查询向量也转 f16。
+- async 边界（D-2b-1）：lancedb 全 async，顶层同步。Store 内部持 tokio::runtime::Runtime
+  （Builder::new_current_thread().enable_all().build()?），每个 async 调用 self.runtime.block_on(...) 同步包装。
+  **铁律：绝不在已存在的 tokio runtime 上下文里调 Store**——lancedb 内部 tokio::spawn，嵌套 block_on 会 panic
+  「Cannot start a runtime from within a runtime」。nowdocs 顶层无 tokio context 故安全；W4 若 mcp.rs 变 async 需重审。
+- v1 flat 搜索：不建 IVF/HNSW 向量索引（spec §6.5 A10，小 docset YAGNI），靠 flat 精确扫描。FTS 索引必建（BM25 走它）。
+- protoc：lance build script 需系统 protoc（§10.4 已知缺口）。2b 首次真编译 lancedb 全链——**先 protoc --version 确认可用**，
+  否则 cargo build 在 lance-index/lance-table build script 失败。CI 装 protobuf-compiler。
+
+【锁定签名（不改）】
+pub struct SearchHit { score:f32, chunk_idx:u32, heading_path:String, source_url:String,
+                       api_version:Option<String>, chunk_type:ChunkType, text:String }
+pub struct Store { docset:String, conn:lancedb::Connection, runtime:tokio::runtime::Runtime }
+impl Store {
+    pub fn open(docset:&str) -> anyhow::Result<Self>;                              // 开/建表+FTS 索引
+    pub fn insert(&self, chunks:&[Chunk], vectors:&[Vec<f32>]) -> anyhow::Result<()>; // len 相等校验+f16 转换
+    pub fn hybrid_search(&self, qv:&[f32], qtext:&str, top_k:usize) -> anyhow::Result<Vec<SearchHit>>;
+}
+表 schema 字段：id, vector(FixedSizeList<f16,512>), heading_path, source_url, api_version,
+                chunk_type, chunk_idx, text
+
+【Cargo.toml 改动（仅 2b 可改这些行，AGENTS §4.5 已授权）】
+[dependencies] 新增（lancedb = "0.30" 已存在）：
+  tokio = { version = "1", features = ["rt","macros","fs"] }
+  arrow = "55" / arrow-array = "55" / arrow-schema = "55"   # 版本 cargo tree -p arrow 核对匹配 lancedb 0.30
+  half = "2"        # f32→f16 转换
+  futures = "0.3"   # try_collect
+（版本以 cargo update 解析为准；arrow 必须与 lancedb 0.30 依赖的 arrow 同一版本——cargo tree 核对。）
+
+【新测试（TDD：先写失败→验证失败→实现→验证通过→commit）——plan 7 步已列全】
+- test_open_insert_recall：插 3 chunk（chunk[1] 含唯一词 "zzzunique_token"），hybrid_search 该词返回 chunk[1] 排第一（BM25 精确命中）。用确定性 embed_stub 假嵌入（非真 embedder，真嵌入归 2c）。
+- test_insert_len_mismatch_bails：chunks.len != vectors.len 必须 Err。
+- test_open_empty_docset_creates_table：空表 hybrid_search 返回空不报错。
+测试用 tempdir + XDG_CACHE_HOME 重定向 cache_root 做隔离，不污染本机 ~/.cache/nowdocs。
+
+【命令输出管控】cargo test --test store_tests > 2b-test.log 2>&1 后看 tail，不直接 dump��build 日志同理重定向。
+
+【完成后三件事（缺一不可）】
+1. 打勾：Edit plan 的 Task 2b 全部 `- [ ]` → `- [x]`（7 个 step）。
+2. spec 修订：仅「实现核实���」——lancedb 0.30 实际 API（FtsIndexBuilder=InvertedIndexParams 无 use_tantivy / FullTextSearchQuery::new / execute_hybrid 返回 _distance+_score / arrow 实际解析版本）写进 spec 附录。架构不变（Arc<Session>/f16/flat 都是 spec 已定，2b 落实非改架构）。
+3. 报告：① task=2b ② commit sha ③ 测试结果（3 测试全绿 + cargo build 全链编译过）④ Cargo.toml diff（tokio/arrow/half/futures 行 + arrow 版本）
+   ⑤ Open Questions。报告完停下，不做 2c/3a。
+
+【铁律】TDD；不擅自 push；子代理遇未明决策基于默认推进或列 Open Question（不交互提问）。
 ```
 
 ### Task 2c：ingest

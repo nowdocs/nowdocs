@@ -648,7 +648,125 @@ pub fn default_config() -> ChunkConfig { ChunkConfig { min_tokens: 256, max_toke
 
 ### Wave 2 — Engines (2a→2b serial; 2c off 2b)
 - **2a embedder hardening** (`src/embedder.rs`): extend S0 — pin `model_revision`+`model_sha256`, verify via `sha2`, F16 load, mmap, `auto_map` removal, `Embedder::load_for(spec: &EmbedderSpec)` gating. Gate: E2 still green; new test rejects tampered sha.
-- **2b lancedb store** (`src/store.rs`): open shared `Arc<Session>` (`cache::db_path`), create table schema (id, vector, heading_path, source_url, text, chunk_type), build native Lance FTS (NOT tantivy), hybrid query `full_text_search().nearest_to().rerank(RRFReranker)`. Gate: round-trip insert→hybrid-search recall test.
+- **2b lancedb store** (`src/store.rs`): open shared `Arc<Session>` (`cache::db_path`), create table schema (id, vector, heading_path, source_url, api_version, text, chunk_type, chunk_idx), build native Lance FTS (NOT tantivy), hybrid query `full_text_search().nearest_to().rerank(RRFReranker).execute_hybrid()`. Gate: round-trip insert→hybrid-search recall test. **详细 TDD 见下方「Task 2b」段。**
+
+#### Task 2b: lancedb store — 详细 TDD plan
+
+**Files:**
+- Create: `src/store.rs`
+- Create: `tests/store_tests.rs`
+- Modify: `src/lib.rs`（加 `pub mod store;`）
+- Modify: `Cargo.toml`（lancedb 行已存在；新增 `tokio` runtime、`arrow`/`arrow-array`/`arrow-schema`、`half`——仅此 task 可改 Cargo.toml 这些行，AGENTS §4.5）
+
+**Interfaces:**
+- Consumes:
+  - `crate::cache::{db_path, ensure_layout}` — docset 的 lance 表路径 `~/.cache/nowdocs/db/<docset>.lance`（1e 已建）
+  - `crate::chunker::{Chunk, ChunkType}` — insert 的行数据来源（1c 已建）。`Chunk{ idx:u32, heading_path:String, source_url:String, api_version:Option<String>, chunk_type:ChunkType, text:String }`
+  - `lancedb 0.30` API（已核实，见下方「API 事实」）
+- Produces（后续 task 依赖的签名，**锁定不改**）:
+  - `pub struct SearchHit { score:f32, chunk_idx:u32, heading_path:String, source_url:String, api_version:Option<String>, chunk_type:ChunkType, text:String }`
+  - `pub struct Store { docset:String, conn:lancedb::Connection, runtime:tokio::runtime::Runtime }`
+  - `pub fn Store::open(docset:&str) -> anyhow::Result<Self>` — 打开/建表（表不存在则建 schema + 建 FTS 索引）
+  - `pub fn Store::insert(&self, chunks:&[Chunk], vectors:&[Vec<f32>]) -> anyhow::Result<()>` — 批量插（len 相等校验，f32→f16 转换）
+  - `pub fn Store::hybrid_search(&self, query_vector:&[f32], query_text:&str, top_k:usize) -> anyhow::Result<Vec<SearchHit>>` — 向量+BM25+RRF，返回 top_k
+
+**lancedb 0.30 API 事实（Main 已核实，按此为准，勿重复踩坑）:**
+- 共享 Session：`Arc<lance::session::Session>` + `lancedb::connect(uri).session(arc.clone()).execute().await -> Connection`（connection.rs L849/1054 的 `.session()` 方法注入共享 Session，spec §6.5 L266 正确——50 docset 共享一个 Session 的 LRU+metadata cache，省内存）。`Session` 来自 `lancedb::Session`（= `lance::session::Session` 的 re-export，lib.rs L267）。
+- 建表：`conn.create_table(name, Vec<RecordBatch>).execute().await`（table Vec<RecordBatch> 直接 Scannable，table.rs L886/1829）。
+- FTS 索引：`table.create_index(&["text"], Index::FTS(FtsIndexBuilder::default())).execute().await`。**`FtsIndexBuilder` = `lance_index::scalar::InvertedIndexParams`**（index/scalar.rs L54 re-export），`.default()` 即原生 Lance inverted index。**`use_tantivy` 字段在 0.30 已删除**（旧 tantivy backend 移除，spec §6.4「禁 use_tantivy=True」约束已自动满足——空操作，不用也无法传）。
+- hybrid 查询链：`table.query().full_text_search(FullTextSearchQuery::new(q.to_string())).nearest_to(&vec)?.rerank(Arc::new(RRFReranker::new(1.0))).execute_hybrid(QueryExecutionOptions::default()).await`。
+  - `nearest_to` 返回 `Result<VectorQuery>`（query.rs L858，**要 `?` 解包，不能直接链**）。
+  - `FullTextSearchQuery` 在 `lance_index::scalar`（非 lancedb），`::new(String)` 只传 query 文本，列名从 FTS 索引推断（`.with_column()` 可选）。
+  - `execute_hybrid` 返回 `SendableRecordBatchStream`（query.rs L1207），`.try_collect::<Vec<RecordBatch>>().await`（需 `use futures::TryStreamExt`）。
+  - 结果 batch 自动含 `_distance`（向量距离，lance_index::vector::DIST_COL）+ `_score`（FTS 分，lance_index::scalar::inverted::SCORE_COL）两列。
+- 向量列 schema：`DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float16, true)), 512)`。**存 f16**（manifest `dtype:"f16"` 锁定，AGENTS §4.2）。embedder.embed 给 `Vec<f32>`，insert 内部用 `half::f16` 转 f16 写入 `FixedSizeListArray`。查询时 `nearest_to` 收 `&[f16]`/`Vec<f16>`（query.rs L222/342 `IntoQueryVector for &[f16]`），把查询向量也转 f16 传入。
+- **async 边界（D-2b-1）**：lancedb 全 async，nowdocs 顶层（mcp.rs/cli.rs）同步。Store 内部持 `tokio::runtime::Runtime`（`Builder::new_current_thread().enable_all().build()?`），每个 async 调用用 `self.runtime.block_on(...)` 同步包装。**铁律：绝不在已存在的 tokio runtime 上下文里调 Store**（lancedb 内部 `tokio::spawn`，嵌套 `block_on` 会 panic「Cannot start a runtime from within a runtime」）。nowdocs 顶层无 tokio context，故安全；W4 mcp.rs 若将来变 async 需重审。
+- v1 flat 搜索：不建 IVF/HNSW 向量索引（spec §6.5 A10，小 docset YAGNI），靠 flat 精确扫描。FTS 索引必建（BM25 走它）。
+- protoc：lance build script 需系统 `protoc`（§10.4 已知缺口）。2b 首次真正编译 lancedb 全链，**先确认 `protoc --version` 可用**，否则 `cargo build` 在 lance-index/lance-table build script 失败。CI 装 `protobuf-compiler`。
+
+**TDD steps:**
+
+- [ ] **Step 1: 加 Cargo.toml 依赖 + 确认 protoc**
+
+`Cargo.toml` `[dependencies]` 新增（lancedb 行已存在 = `lancedb = "0.30"`）：
+```toml
+tokio = { version = "1", features = ["rt", "macros", "fs"] }
+arrow = "55"
+arrow-array = "55"
+arrow-schema = "55"
+half = "2"
+futures = "0.3"   # try_collect
+```
+（版本以 `cargo update` 解析为准；arrow 版本需匹配 lancedb 0.30 的 arrow 依赖，用 `cargo tree -p arrow` 核对同一版本。）
+
+Run: `protoc --version`（预期有版本号；无则装 `protobuf-compiler`）+ `cargo build > 2b-build.log 2>&1`
+Expected: build 通过（lancedb/lance 全链编译成功）
+
+- [ ] **Step 2: 写失败测试 — open 建表 + 插入 + 精确召回**
+
+`tests/store_tests.rs`：用 tempdir 作 cache_root（测试隔离），插入 3 个 chunk（含一个文本唯一关键词如 "zzzunique_token"），hybrid_search 用该关键词的查询向量应返回该 chunk 排第一。
+```rust
+// 伪代码骨架（实现时补全 arrow 构造细节）
+#[test]
+fn test_open_insert_recall() {
+    let dir = tempfile::tempdir().unwrap();
+    std::env::set_var("XDG_CACHE_HOME", dir.path());  // 重定向 cache_root
+    let store = Store::open("test_docset").unwrap();
+    let chunks = vec![ /* 3 个 Chunk，chunk[1].text 含 "zzzunique_token" */ ];
+    let vectors: Vec<Vec<f32>> = chunks.iter().map(|c| embed_stub(&c.text)).collect();
+    store.insert(&chunks, &vectors).unwrap();
+    let qv = embed_stub("zzzunique_token");
+    let hits = store.hybrid_search(&qv, "zzzunique_token", 3).unwrap();
+    assert!(hits.len() >= 1);
+    assert_eq!(hits[0].chunk_idx, chunks[1].idx);  // BM25 精确命中
+}
+```
+（`embed_stub` 用确定性假嵌入：对含 "zzzunique_token" 的文本返回特定向量，保证可复现。真嵌入归 2c ingest 测。）
+
+Run: `cargo test --test store_tests > 2b-test.log 2>&1`
+Expected: FAIL（`Store` 未定义）
+
+- [ ] **Step 3: 实现 store.rs 骨架（open + 表 schema + FTS 索引）**
+
+`src/store.rs`：定义 `Store`/`SearchHit`，`Store::open` 建 `Runtime` + 共享 `Arc<Session>` + `connect(db_path).session(arc).execute()` + `create_table`（schema: id, vector FixedSizeList<f16>,512>, heading_path, source_url, api_version, chunk_type, chunk_idx, text）+ 建 FTS 索引（`Index::FTS(FtsIndexBuilder::default())` on "text"）。表已存在则 open_table。
+
+Run: `cargo test --test store_tests` → 仍 FAIL（insert/hybrid_search 未实现）
+
+- [ ] **Step 4: 实现 insert（chunks+vectors → RecordBatch → table.add）**
+
+把 `&[Chunk]` + `&[Vec<f32>]` 转 arrow `RecordBatch`（vector 列 f32→f16 via `half`，其他列 String/Option<String>/u32），`table.add(batches).execute().await`（block_on）。
+
+Run: `cargo test --test store_tests` → 仍 FAIL（hybrid_search 未实现）
+
+- [ ] **Step 5: 实现 hybrid_search（hybrid 链 + 结果转 SearchHit）**
+
+`table.query().full_text_search(FullTextSearchQuery::new(q.to_string())).nearest_to(&qv_f16)?.rerank(Arc::new(RRFReranker::new(1.0))).execute_hybrid(Default::default())` → `try_collect::<Vec<RecordBatch>>()` → 逐行取 `_distance`/`_score` 取 score、text/heading_path/source_url/chunk_idx 取字段 → 组 `SearchHit`，按 score 排序取 top_k。
+
+Run: `cargo test --test store_tests > 2b-test.log 2>&1`
+Expected: PASS（`test_open_insert_recall` 绿）
+
+- [ ] **Step 6: 加边界测试 — insert 长度不等 bail + 空 docset open**
+
+```rust
+#[test]
+fn test_insert_len_mismatch_bails() {
+    let store = Store::open("test_docset2").unwrap();
+    let chunks = vec![ /* 2 个 */ ];
+    let vectors: Vec<Vec<f32>> = vec![ /* 3 个 */ ];  // len 不等
+    assert!(store.insert(&chunks, &vectors).is_err());
+}
+#[test]
+fn test_open_empty_docset_creates_table() {
+    let store = Store::open("empty_ds").unwrap();
+    let hits = store.hybrid_search(&[0.0;512], "anything", 5).unwrap();
+    assert!(hits.is_empty());  // 空表查询返回空，不报错
+}
+```
+Run: `cargo test --test store_tests` → Expected: 全 PASS
+
+- [ ] **Step 7: lib.rs 注册 + commit**
+
+`src/lib.rs` 加 `pub mod store;`（在 embedder 行后）。`cargo build` + `cargo test` 全绿后 commit：`feat(store): lancedb hybrid store + FTS + f16 vectors (2b)`。
 - **2c ingest** (`src/ingest.rs`): md dir → `chunker` → `embedder.embed` → `store.insert`. Uses `manifest` + `cache`. Gate: ingest a fixture dir, search returns expected chunk.
 
 ### Wave 3 — Retrieval + eval

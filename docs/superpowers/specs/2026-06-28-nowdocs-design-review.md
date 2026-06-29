@@ -236,7 +236,7 @@ nowdocs 把任意第三方文档块喂给有 shell 权限的 agent——正是 C
 - 拒绝绝对路径 / `../` / 符号链接（解析到缓存根外）
 - 下载 URL **必须指向 `nowdocs-registry` 自己的 GitHub Releases 域**，拒绝任何外部 URL
 - **CI 重建表（D10 拍定）**：`share` 只发布**分块文本 + manifest + config**，CI 用固定标准模型重新 embed 出表——不发布 contributor 本地预构建向量。一石三鸟：① 消解原 spec §3.3"打包本地 LanceDB 目录（含向量）"与 CI 重建原则的矛盾 ② **关闭对抗性向量注入**（向量是不透明浮点，contributor 直发可伪造向量让恶意 chunk 命中特定查询、无法审计；CI 从可审计文本重算则投毒路径关死）③ 关闭模型版本漂移（contributor 用异版模型 → 垃圾 cosine）。附带：contributor 无需本地有模型即可贡献、文本包比向量包小。
-- 拒绝 `next`/不稳定格式版本 + 拒绝 `use_tantivy=True` FTS 索引
+- 拒绝 `next`/不稳定格式版本。FTS 索引约束 `use_tantivy=True` 拒绝项在 lancedb 0.30 已自动满足（旧 tantivy backend 移除，`Index::FTS` 只剩原生 Lance inverted index，无 `use_tantivy` 字段——见附录 §G）。
 - pin 嵌入器 `model_id + model_version + model_sha256`，不匹配拒绝
 - 发布这些 CI 规则作为威胁模型，contributor 事先知晓
 
@@ -248,6 +248,8 @@ spec 写"首次运行下载"但**无完整性校验**。`hf-hub` crate 默认不
 
 ### 6.4 B1 FTS 用原生 Lance 非 tantivy
 若碰 `use_tantivy=True` 会引入版本偏移的 `IncompatibleIndex` 失败面。必须：原生 Lance FTS + CI 写在 pin 的稳定 Lance 格式版本（2.1）+ CI 重建每个 contributor 表。
+
+> **实现核实（2026-06-29，lancedb 0.30 源码）**：`use_tantivy` 字段在 0.30 已删除——`Index::FTS(FtsIndexBuilder::default())` 其中 `FtsIndexBuilder` = `lance_index::scalar::InvertedIndexParams`（lancedb `src/index/scalar.rs:54` re-export），`.default()` 即原生 Lance inverted index，无 tantivy backend 可选。本约束（B1）因此**已自动满足**，CI 闸门无需额外检查该字段（属空操作）。详见附录 §G。
 
 ### 6.5 C1 内存（澄清，非炸弹）
 **纠正子代理误报**：所谓"每个 Table 默认 6GiB 索引缓存，50 docset = 350GiB"是**幻觉**。源码核实（lance 7.0 `dataset.rs:110`）：
@@ -454,3 +456,15 @@ Python 参考实现（transformers `AutoModel` + mean-pooling，与 sentence-tra
 ### F. 本地 HF 缓存写入问题
 
 当前环境 `~/.cache/huggingface/hub` 属 root，hf-hub 0.3 写入失败。测试通过 `ensure_hf_cache()` 在未设置 `HF_HOME` 时回退到 `~/.cache/nowdocs/hf`。CI / 其他环境若默认缓存可写，此回退不触发。
+
+### G. lancedb 0.30 FTS + hybrid API 核实（Task 2b 实现）
+
+**Main 源码级核实（2026-06-29，`~/.cargo/registry/src/index.crates.io-.../lancedb-0.30.0/` + `lance-index-7.0.0/`）**：
+
+- **共享 Session**：`Arc<lancedb::Session>`（= `lance::session::Session`，`lancedb/src/lib.rs:267` re-export）+ `lancedb::connect(uri).session(arc.clone()).execute().await -> Connection`（`.session()` 在 `connection.rs:849/1054`）。§6.5 的"共享 Arc<Session>"架构决策**成立**，非误。Connection 内部持 `Option<Arc<Session>>`（`connection.rs:618/967`）。
+- **FTS 索引**：`table.create_index(&["text"], Index::FTS(FtsIndexBuilder::default())).execute().await`。`FtsIndexBuilder` = `lance_index::scalar::InvertedIndexParams`（`lancedb/src/index/scalar.rs:54` re-export）。**`use_tantivy` 字段在 0.30 已删除**——旧 tantivy backend 完全移除，只剩原生 Lance inverted index（§6.4 B1 约束已自动满足，空操作）。
+- **`FullTextSearchQuery`**：在 `lance-index-7.0.0/src/scalar.rs:302-382`（**非 lancedb crate**）。`::new(String)` 只传 query 文本，列名从 FTS 索引推断（`.with_column()` 可选）。
+- **hybrid 链**：`table.query().full_text_search(fts).nearest_to(&vec)?`（`nearest_to` 返回 `Result<VectorQuery>`，`query.rs:858`，**要 `?` 解包**）`.rerank(Arc::new(RRFReranker::new(1.0)))`（`rerankers/rrf.rs:23`，`.rerank()` trait method `query.rs:509`）`.execute_hybrid(QueryExecutionOptions::default()).await`（`query.rs:1207`，返回 `SendableRecordBatchStream`）→ `.try_collect::<Vec<RecordBatch>>().await`（需 `use futures::TryStreamExt`）。结果 batch 自动含 `_distance`（向量，`lance_index::vector::DIST_COL`）+ `_score`（FTS，`lance_index::scalar::inverted::SCORE_COL`）。
+- **向量列 schema**：`DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float16, true)), 512)` 存 f16。`IntoQueryVector for &[f16]` / `Vec<f16>`（`query.rs:222/342`）存在——查询向量收 f16。注：lancedb 自带测试多用 f32，但 f16 schema+查询路径成立。
+- **async 边界**：lancedb 全 async。Store 内部持 `tokio::runtime::Runtime`，`self.runtime.block_on(...)` 同步包装。**陷阱**：lancedb 内部 `tokio::spawn`，若在已有 tokio runtime 上下文里 `Runtime::new().block_on` 会 panic「Cannot start a runtime from within a runtime」。nowdocs 顶层无 tokio context 故安全；W4 mcp.rs 若变 async 需重审（改用 `Handle::current().block_on`）。
+- **insert**：`table.add(Vec<RecordBatch>).execute().await`（`Vec<RecordBatch>` 直接 `Scannable`，`table.rs:886/1829`）。
