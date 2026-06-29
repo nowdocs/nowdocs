@@ -71,6 +71,9 @@ impl Embedder {
         // Verify sha256 of model weights (A3 integrity).
         let actual_sha = sha256_hex(&weights)?;
         if actual_sha != spec.model_sha256 {
+            // Delete the actual blob file (weights is a symlink into snapshots/).
+            let real_path = std::fs::canonicalize(&weights).unwrap_or(weights.clone());
+            let _ = std::fs::remove_file(&real_path);
             let _ = std::fs::remove_file(&weights);
             anyhow::bail!(
                 "model integrity check failed: expected sha256={}, got={actual_sha}. File deleted.",
