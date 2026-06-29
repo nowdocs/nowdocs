@@ -1,0 +1,23 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock  # 二进制 crate 保留 lock；如改为 lib 工作区再评估（默认二进制保留）
+
+# 构建产物 / 嵌入模型缓存（绝不入仓库）
+*.lance
+/model.safetensors
+/config.json
+/tokenizer.json
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# 环境与密钥（三防线：密钥不入库）
+.env
+.env.*
+*.local
+secrets/
