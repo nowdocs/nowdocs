@@ -21,3 +21,4 @@
 .env.*
 *.local
 secrets/
+2a-test.log
