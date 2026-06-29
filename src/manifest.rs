@@ -46,9 +46,49 @@ pub struct RefreshSpec {
     pub auto_days: u32,
 }
 
-pub fn parse_manifest(_json: &str) -> anyhow::Result<Manifest> {
-    todo!("1b")
+pub fn parse_manifest(json: &str) -> anyhow::Result<Manifest> {
+    let m: Manifest = serde_json::from_str(json)?;
+    Ok(m)
 }
-pub fn validate(_m: &Manifest) -> anyhow::Result<()> {
-    todo!("1b")
+
+/// Validate manifest against v1 invariants:
+/// - schema version must be 1 (only v1 supported)
+/// - embedder must be the locked model (jina-v2-small, 512-dim, candle, f16)
+/// - retrieval.tokenizer must be "default" (lindera reserved for v2)
+/// - license must be allowlisted; CC-BY-4.0 requires non-empty attribution
+pub fn validate(m: &Manifest) -> anyhow::Result<()> {
+    if m.nowdocs_schema_version != 1 {
+        anyhow::bail!(
+            "unsupported nowdocs_schema_version: {} (only 1 supported)",
+            m.nowdocs_schema_version
+        );
+    }
+    if m.embedder.model_id != "jinaai/jina-embeddings-v2-small-en" {
+        anyhow::bail!("embedder.model_id mismatch: {}", m.embedder.model_id);
+    }
+    if m.embedder.vector_dim != 512 {
+        anyhow::bail!("embedder.vector_dim must be 512, got {}", m.embedder.vector_dim);
+    }
+    if m.embedder.engine != "candle" {
+        anyhow::bail!("embedder.engine must be \"candle\", got {}", m.embedder.engine);
+    }
+    if m.embedder.dtype != "f16" {
+        anyhow::bail!("embedder.dtype must be \"f16\", got {}", m.embedder.dtype);
+    }
+    if m.retrieval.tokenizer != "default" {
+        anyhow::bail!(
+            "retrieval.tokenizer must be \"default\" (v1), got {}",
+            m.retrieval.tokenizer
+        );
+    }
+    match m.legal.license.as_str() {
+        "MIT" | "Apache-2.0" => {}
+        "CC-BY-4.0" => {
+            if m.legal.attribution.trim().is_empty() {
+                anyhow::bail!("CC-BY-4.0 license requires non-empty attribution");
+            }
+        }
+        other => anyhow::bail!("license not allowlisted: {}", other),
+    }
+    Ok(())
 }
