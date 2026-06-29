@@ -2,7 +2,7 @@
 
 > 纯 Rust 单二进制 MCP server，本地运行，给 LLM coding agent（Cursor / Claude Code / Aider）提供最新第三方开发文档，治 LLM 对快变库的幻觉。
 
-**状态**：🟡 设计定稿，待实现（spec 已评审 + 自审通过，plan 已拆 6 wave，待派发实现）。
+**状态**：🟢 Wave 1 完成（8 task / 48 tests 绿，在 `feat/1a-cargo-skeleton` 分支）→ S0 命门 spike 进行中。
 
 ---
 
@@ -37,7 +37,7 @@ nowdocs/
     └── plans/                    # 实施计划 + 派发手册
 ```
 
-代码尚未生成。实现从 Task 1a（Cargo 骨架）开始。
+Wave 1 基础层已落地（manifest / chunker / token / cache / sanitize / input / mcp 共 8 module，48 tests 全绿）。S0 命门（candle + jina 验证）进行中，green 后开 Wave 2 引擎层。
 
 ## 技术栈
 

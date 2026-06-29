@@ -49,21 +49,76 @@
 
 ```
 【任务】Task S0：jina-v2-small 在 candle 上跑通 + E2 余弦>0.99 断言（命门）
-【plan】读 plan 的 Task S0 全部 step（含 gen_reference.py / embedder_tests.rs / embedder.rs 完整代码）
+【前置】先读 AGENTS.md（项目铁律），再读 plan 的 Task S0 全部 step
+        （docs/superpowers/plans/2026-06-28-nowdocs-impl.md §"Wave 0 — S0 Spike"，
+        含 gen_reference.py / embedder_tests.rs / embedder.rs 完整代码——那是伪代码起点）
 【spec】§5.2 Embedder、§6.3 A3 模型完整性、§6.9 E2
+
+【当前仓库实情——已核实，按此为准】
+- 1a 已跑完。Cargo.toml 已含 candle-core 0.11(default-features=false)/candle-nn 0.11/
+  candle-transformers 0.11/tokenizers 0.23/hf-hub 0.3。**S0 不改 Cargo.toml**。
+- src/lib.rs 已有 `pub mod embedder;`。**S0 不改 lib.rs**。
+- src/embedder.rs 现为 `// placeholder — populated by Task S0`。**S0 替换其全部内容**。
+- protoc 与本任务无关（candle/jina/tiktoken 不拉 prost-build；protoc 只 Task 2b 的 lancedb 才需要）。
+  本任务不应出现任何 protoc/PROTOC 相关报错；若出现说明走偏了，停下上报。
+
+【分支】
+- 从 feat/1a-cargo-skeleton 拉新分支：git switch -c spike/s0-candle-jina
+  （不要从 main 拉——main 停在文档态，没有 1a 代码）
+- 完成后 commit 在本分支，不合并、不 push（无 remote）。
 
 【专属契约】
 - 模型：jinaai/jina-embeddings-v2-small-en，vector_dim=512，DType::F16。
-- 产出的 Embedder 接口：pub fn load() -> anyhow::Result<Self> + pub fn embed(&self, text:&str) -> anyhow::Result<Vec<f32>>（512 维）。Wave 2 Task 2a 会扩展为 load_for(spec) + sha 校验，保持 load/embed 签名稳定。
-- E2 三层断言：① dim==512 ② 语义自洽（近查询 cosine>0.7、无关<0.5）③ 跨实现 cosine>0.99（需 tests/fixtures/jina_ref.json，由 gen_reference.py 生成；无 Python 环境则标 #[ignore] 后补）。
-- spike 阶段 model_revision/sha256 可暂不 pin（Wave 2 Task 2a 补），但若已能 pin 则顺手 pin。
-- candle API（JinaBertModel::Config::base_v2 / load 签名）跨版本会变：以 cargo 解析的实际版本为准适配调用，保持 load/embed 签名不变。适配结果写入 spec 附录（属「实现核实类」修订）。
+- 产出 Embedder：pub fn load() -> anyhow::Result<Self> +
+  pub fn embed(&self, text:&str) -> anyhow::Result<Vec<f32>>（512 维）。
+  这俩签名锁死——Wave 2 Task 2a 会扩展（加 load_for(spec)+sha 校验+F16+mmap），但保持 load/embed 不变。
+- jina 用 mean-pooling（非 [CLS]）；cosine 对归一化不敏感，故 candle 端不必归一化（与 Python 参考一致即可）。
 
-【命门判定】
-- 三层断言全 PASS（③ 可 #[ignore]）→ 绿，汇报可开 Wave 1。
-- load 失败 / dim 错 / 语义断言 FAIL → 不强凑。记录失败根因（model load error? pooling 错? dim 不对?），列为 Open Question 上报 ort 回退决策，停下。
+【candle API 适配——最大风险点，务必核实】
+- plan 里 JinaBertModel::Config::base_v2() / load(&vb,&config) 是伪代码。
+  candle-transformers 0.11 的 jina_bert 模块实际签名可能不同。
+- 核实法：① 读 HF 上 jina-v2-small-en 的 config.json（hidden_size / num_hidden_layers /
+  max_position_embeddings），确认 base_v2() 是否匹配；不匹配则手构 Config。
+  ② 读本地 cargo 解析的 candle-transformers 0.11 源码里 jina_bert.rs 的实际 API 适配调用。
+- model 文件名：优先 model.safetensors；若该 repo 只有 pytorch_model.bin 则适配，
+  并在报告里注明。config.json 取回后须删 auto_map 字段（防任意代码执行，A3）。
+- 适配结果写入 spec 附录（属「实现核实类」修订，不改架构决策）。
 
-【注意】若 1a 尚未跑、Cargo.toml 不存在，你需在本 task 的 Step 自行创建 Cargo.toml（按 plan 1a Step 1 的依赖清单），或先跑 1a。优先先跑 1a 再跑 S0（1a 已含 candle 依赖）。与 Main 确认 1a 状态后再开。
+【model provenance——顺手做，省 Task 2a 的事】
+- hf-hub 默认拉 latest main。若能顺手拿到解析后的 HF commit SHA（revision）+
+  model.safetensors 的 sha256，记成常量/注释留给 2a；拿不到就留 TODO 注释，不强求。
+- 不为 spike 强行 pin 固定 revision（pin 是 2a 的事）。
+
+【E2 三层断言】
+① dim==512（必跑）
+② 语义自洽：近查询 cosine>0.7、无关<0.5（必跑，无需 Python）
+③ 跨实现 cosine>0.99 vs tests/fixtures/jina_ref.json（需 Python sentence-transformers+torch+联网；
+   环境不具备则保留 #[ignore]，CI 后补。①②仍跑并 gate）。
+- jina_ref.json 由 tests/fixtures/gen_reference.py 生成（query="how to use clerkMiddleware"）。
+  Python 环境不具备时，跳过生成，③ 留 #[ignore]。
+
+【网络】
+- 首次 load 需从 huggingface.co 下 ~66MB 模型（缓存到 ~/.cache/huggingface/hub）。
+  若 HF 不可达，load 会失败——记录为网络阻塞上报，**不要**改成本地假数据凑过。
+
+【命令输出管控】
+- cargo test --test embedder_tests > s0-test.log 2>&1 后看 tail，不直接 dump。
+
+【命门判定——核心交付】
+- ①② PASS（③可 #[ignore]）= GREEN：candle 路线成立，汇报"可开 Wave 2"。
+- load 失败 / dim 错 / 语义断言 FAIL = RED：**不强凑**。记录根因
+ （model load error? pooling 错? dim 不对? config 不匹配? API 变更?），列 Open Question
+  上报 ort 回退决策，停下。RED 时不要硬改到 PASS。
+
+【完成后三件事（缺一不可）】
+1. 打勾：Edit plan 的 Task S0 全部 `- [ ]` → `- [x]`。
+2. spec 修订：仅「实现核实类」——candle 0.11 jina_bert 实际 API 适配写进 spec 附录。
+3. 报告：① task=S0 ② commit sha ③ 测试结果（①②③各 PASS/FAIL）
+   ④ GREEN/RED ⑤ 若顺手 pin 了，附 revision SHA + sha256 ⑥ Open Questions。
+   报告完停下，不做 Wave 2。
+
+【铁律】TDD（先写失败测试→验证失败→最小实现→验证通过→commit）；不擅自 push；
+       子代理遇未明决策基于默认推进或列 Open Question（不交互提问）。
 ```
 
 ---

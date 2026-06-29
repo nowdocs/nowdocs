@@ -1,7 +1,7 @@
 # Rust
 /target
 **/*.rs.bk
-Cargo.lock  # 二进制 crate 保留 lock；如改为 lib 工作区再评估（默认二进制保留）
+# Cargo.lock 被显式追踪（二进制 crate 应入仓库），此处不设 ignore 规则——勿补回 `Cargo.lock` 忽略行（曾因尾空格 pattern 失配而意外"不忽略"，若改回正常忽略会掩盖 lock 变更）
 
 # 构建产物 / 嵌入模型缓存（绝不入仓库）
 *.lance

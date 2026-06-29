@@ -11,7 +11,7 @@ nowdocs = 纯 Rust 单二进制 MCP server，本地运行，给 LLM coding agent
 
 ## 2. 当前阶段
 
-🟡 **设计定稿，待实现**。spec 已评审+自审，plan 已拆 6 wave。尚无代码。实现从 Task 1a（Cargo 骨架）开始。
+**Wave 1 ✅ 已完成（8 task / 48 tests 绿），S0 命门 spike 进行中**。spec 已评审+自审，plan 已拆 6 wave。代码在 `feat/1a-cargo-skeleton` 分支（未合并 main、无 remote）。下一站：S0 验证 candle+jina → Wave 2 引擎层。
 
 ## 3. 必读文档（按顺序）
 
