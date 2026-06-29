@@ -397,3 +397,57 @@ candle 跑 jina-v2-small 是推断。pin 一个参考查询（如 "how to use cl
 - jina-v5-omni-small：HF model card + `config.json` + `modeling_jina_embeddings_v5_omni.py`
 - jina-v2-small 许可：HF model card YAML `license: apache-2.0`
 - Context7：`github.com/upstash/context7` + 官方 docs + Issues #2663/#2673/#2340/#2145/#339
+
+## 附：S0 — candle 0.11 jina-v2-small 实际 API 适配（实现核实）
+
+> 本附录记录 Task S0 对 candle-transformers 0.11 真实 API 的适配结果，属「实现核实类」修订，未改变架构决策。
+
+### A. candle-transformers 0.11 的 jina_bert 模块
+
+- 实际导出类型为 `candle_transformers::models::jina_bert::BertModel`（plan 中的 `JinaBertModel` 是伪代码命名）。
+- 配置结构为 `Config`；**没有** `base_v2()` 之类的工厂函数，只有 `Config::v2_base()`（对应 base 变体，hidden_size=768）。v2-small 必须手构：
+  - `vocab_size = 30528`
+  - `hidden_size = 512`
+  - `num_hidden_layers = 4`
+  - `num_attention_heads = 8`
+  - `intermediate_size = 2048`
+  - `hidden_act = candle_nn::Activation::Gelu`
+  - `max_position_embeddings = 8192`
+  - `type_vocab_size = 2`
+  - `pad_token_id = 0`
+  - `position_embedding_type = PositionEmbeddingType::Alibi`
+- 权重通过 `candle_nn::VarBuilder::from_mmaped_safetensors(..., DType::F32, &Device::Cpu)` 加载。注意：**该函数在 0.11 是 `unsafe`**，需显式 `unsafe` 块。
+
+### B. F16 加载失败，F32 通过
+
+spec / plan 原想用 `DType::F16` 加载以压缩内存，但 candle-transformers 0.11 的 jina_bert 内部把 ALiBi bias 构造为 `F32`（`build_alibi_bias` 中 `to_dtype(DType::F32)`），并在 encoder 里与 hidden 状态相加。若权重以 `F16` 加载，forward 时会触发：
+
+```
+dtype mismatch in add, lhs: F16, rhs: F32
+```
+
+因此 S0 先用 `DType::F32` 加载。内存增量从 ~66MB（F16 文件）变为 ~131MB（F32 运行时）。Task 2a 硬 embedder 时可再评估是否通过自定义 `BertModel`  wrapper 实现 F16 推理，或接受 F32。
+
+### C. Provenance（留给 Task 2a）
+
+- 模型 ID：`jinaai/jina-embeddings-v2-small-en`
+- HF main 当前 revision SHA：`44e7d1d6caec8c883c2d4b207588504d519788d0`
+- `model.safetensors` SHA256：`c9a9a7ec012d01efd780474fbb65e25917f3a2aebdff84b5f87daa00f7e90b27`
+- 文件来源：HF repo 提供 `model.safetensors`（~66MB），无 `pytorch_model.bin` 需求。
+
+### D. A3 安全适配
+
+`config.json` 来自 `jinaai/jina-bert-implementation` 并含 `auto_map`（指向该 repo 的 Python 实现文件）。S0 实现读取 `config.json` 后将其 `auto_map` 字段删除再写回，避免后续若被 Python transformers 流水线消费时执行任意自定义代码。
+
+### E. E2 阈值调整
+
+Python 参考实现（transformers `AutoModel` + mean-pooling，与 sentence-transformers 内部路径等价）对固定查询对的测量值为：
+
+- 近查询（"how to use clerkMiddleware" vs "using clerkMiddleware in middleware"）：cosine ≈ 0.9488
+- 无关查询（"how to use clerkMiddleware" vs "tomato soup recipe"）：cosine ≈ 0.6921
+
+因此 plan 中「无关 < 0.5」的阈值对 jina-v2-small 过严。测试调整为「无关 < 0.75」，仍保留与近查询的明显间隔。
+
+### F. 本地 HF 缓存写入问题
+
+当前环境 `~/.cache/huggingface/hub` 属 root，hf-hub 0.3 写入失败。测试通过 `ensure_hf_cache()` 在未设置 `HF_HOME` 时回退到 `~/.cache/nowdocs/hf`。CI / 其他环境若默认缓存可写，此回退不触发。

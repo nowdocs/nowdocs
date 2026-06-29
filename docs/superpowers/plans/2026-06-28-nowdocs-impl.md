@@ -89,7 +89,7 @@ nowdocs/
 
 > **命门**: If candle cannot load jina-v2-small or E2 cosine < 0.99, the candle route fails. Fallback = `ort` (re-evaluate). Do NOT proceed to Wave 1 embedder-dependent tasks until S0 is green. S0 may run before or after 1a; if before, add the candle deps in this task's Cargo.toml step.
 
-- [ ] **Step 1: Generate the reference vector fixture (cross-implementation gate)**
+- [x] **Step 1: Generate the reference vector fixture (cross-implementation gate)**
 
 Write `tests/fixtures/gen_reference.py`:
 ```python
@@ -118,7 +118,7 @@ Expected: `tests/fixtures/jina_ref.json` written with `dim=512`.
 
 > If the Python env is unavailable, the cross-implementation assertion in Step 2 is marked `#[ignore]` and run manually/CI later. The dim + semantic-self-consistency assertions still run and gate the spike.
 
-- [ ] **Step 2: Write the failing E2 test**
+- [x] **Step 2: Write the failing E2 test**
 
 Write `tests/embedder_tests.rs`:
 ```rust
@@ -163,12 +163,12 @@ fn test_embed_matches_reference_above_0_99() {
 }
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `cargo test --test embedder_tests`
 Expected: FAIL — `Embedder` not defined (or model download/load error). This is the 命门 checkpoint.
 
-- [ ] **Step 4: Implement minimal candle embedder**
+- [x] **Step 4: Implement minimal candle embedder**
 
 Write `src/embedder.rs`:
 ```rust
@@ -222,7 +222,7 @@ impl Embedder {
 
 > The exact `JinaBertModel::Config::base_v2()` / `load` signature varies across candle versions — verify against the candle version resolved by Cargo. The intent: load jina-v2-small safetensors via candle, run forward, mean-pool to 512-dim. If the API differs, adapt the call but keep `load()`/`embed()` signatures.
 
-- [ ] **Step 5: Run tests — THE GATE**
+- [x] **Step 5: Run tests — THE GATE**
 
 Run: `cargo test --test embedder_tests`
 Expected: `test_embed_dim_is_512` PASS, `test_embed_semantic_self_consistency` PASS.
@@ -232,7 +232,7 @@ Expected: `test_embed_matches_reference_above_0_99` PASS (cosine > 0.99).
 
 > **If FAIL**: candle route is not viable as-is. Do NOT force it. Record the failure (model load error? wrong pooling? dim mismatch?) and escalate for the ort fallback decision before proceeding.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/embedder.rs src/lib.rs tests/embedder_tests.rs tests/fixtures/
