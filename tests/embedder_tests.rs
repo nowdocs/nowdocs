@@ -1,18 +1,9 @@
-use nowdocs::embedder::Embedder;
+use nowdocs::embedder::{Embedder, EmbedderSpec};
 
-fn ensure_hf_cache() {
-    // The default ~/.cache/huggingface/hub may not be writable in some CI/sandbox
-    // environments. Route hf-hub into the project-named cache dir for S0.
-    if std::env::var("HF_HOME").is_err() {
-        let home = std::env::var("HOME").expect("HOME env var");
-        let cache = std::path::PathBuf::from(home)
-            .join(".cache")
-            .join("nowdocs")
-            .join("hf");
-        std::fs::create_dir_all(&cache).ok();
-        std::env::set_var("HF_HOME", cache.as_os_str());
-    }
-}
+// S0 provenance constants (pinned for reproducibility)
+const S0_MODEL_ID: &str = "jinaai/jina-embeddings-v2-small-en";
+const S0_REVISION: &str = "44e7d1d6caec8c883c2d4b207588504d519788d0";
+const S0_SHA256: &str = "c9a9a7ec012d01efd780474fbb65e25917f3a2aebdff84b5f87daa00f7e90b27";
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
@@ -21,25 +12,31 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
     if na == 0.0 || nb == 0.0 { 0.0 } else { dot / (na * nb) }
 }
 
+// --- Existing E2 tests (S0 regression) ---
+
 #[test]
 fn test_embed_dim_is_512() {
-    ensure_hf_cache();
-    let e = Embedder::load().expect("model load");
+    let spec = EmbedderSpec {
+        model_id: S0_MODEL_ID.to_string(),
+        model_revision: S0_REVISION.to_string(),
+        model_sha256: S0_SHA256.to_string(),
+    };
+    let e = Embedder::load_for(&spec).expect("model load");
     let v = e.embed("hello world").expect("embed");
     assert_eq!(v.len(), 512, "jina-v2-small must produce 512-dim vectors");
 }
 
 #[test]
 fn test_embed_semantic_self_consistency() {
-    ensure_hf_cache();
-    // Two semantically near queries must be much closer than an unrelated one.
-    let e = Embedder::load().expect("model load");
+    let spec = EmbedderSpec {
+        model_id: S0_MODEL_ID.to_string(),
+        model_revision: S0_REVISION.to_string(),
+        model_sha256: S0_SHA256.to_string(),
+    };
+    let e = Embedder::load_for(&spec).expect("model load");
     let a = e.embed("how to use clerkMiddleware").unwrap();
     let b = e.embed("using clerkMiddleware in middleware").unwrap();
     let c = e.embed("tomato soup recipe").unwrap();
-    // Reference (Python transformers mean-pooling) gives ~0.95 / ~0.69 for these
-    // pairs, so 0.5 was too strict for jina-v2-small. Keep a clear margin between
-    // near and unrelated.
     assert!(cosine(&a, &b) > 0.7, "near queries should be close");
     assert!(cosine(&a, &c) < 0.75, "unrelated query should be far");
 }
@@ -47,8 +44,12 @@ fn test_embed_semantic_self_consistency() {
 #[test]
 #[ignore] // requires tests/fixtures/jina_ref.json from gen_reference.py
 fn test_embed_matches_reference_above_0_99() {
-    ensure_hf_cache();
-    let e = Embedder::load().expect("model load");
+    let spec = EmbedderSpec {
+        model_id: S0_MODEL_ID.to_string(),
+        model_revision: S0_REVISION.to_string(),
+        model_sha256: S0_SHA256.to_string(),
+    };
+    let e = Embedder::load_for(&spec).expect("model load");
     let v = e.embed("how to use clerkMiddleware").unwrap();
     let fixture = std::fs::read_to_string("tests/fixtures/jina_ref.json")
         .expect("run gen_reference.py first");
@@ -57,4 +58,33 @@ fn test_embed_matches_reference_above_0_99() {
         .iter().map(|x| x.as_f64().unwrap() as f32).collect();
     let sim = cosine(&v, &ref_vec);
     assert!(sim > 0.99, "candle output must match reference embedder (cosine={:.4})", sim);
+}
+
+// --- New 2a tests ---
+
+#[test]
+fn test_load_for_rejects_tampered_sha() {
+    let spec = EmbedderSpec {
+        model_id: S0_MODEL_ID.to_string(),
+        model_revision: S0_REVISION.to_string(),
+        model_sha256: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+    };
+    match Embedder::load_for(&spec) {
+        Ok(_) => panic!("load_for must reject tampered sha256"),
+        Err(e) => {
+            let err_msg = e.to_string();
+            assert!(
+                err_msg.contains("sha256") || err_msg.contains("integrity") || err_msg.contains("mismatch"),
+                "error should mention sha256 mismatch, got: {err_msg}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_load_delegates_to_load_for() {
+    // load() should work with DEFAULT_SPEC (S0 provenance constants)
+    let e = Embedder::load().expect("load() should succeed with DEFAULT_SPEC");
+    let v = e.embed("test").expect("embed");
+    assert_eq!(v.len(), 512);
 }

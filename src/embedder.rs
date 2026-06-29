@@ -1,15 +1,23 @@
 use anyhow::{Context, Result};
 use candle_core::{DType, Device, Module, Tensor};
 use candle_transformers::models::jina_bert::{BertModel, Config, PositionEmbeddingType};
-use hf_hub::api::sync::Api;
+use hf_hub::api::sync::ApiBuilder;
+use hf_hub::{Repo, RepoType};
+use sha2::{Digest, Sha256};
 use tokenizers::Tokenizer;
 
-const MODEL_ID: &str = "jinaai/jina-embeddings-v2-small-en";
+/// Pinned provenance for the default embedder model (S0 spike results).
+const DEFAULT_MODEL_ID: &str = "jinaai/jina-embeddings-v2-small-en";
+const DEFAULT_REVISION: &str = "44e7d1d6caec8c883c2d4b207588504d519788d0";
+const DEFAULT_SHA256: &str = "c9a9a7ec012d01efd780474fbb65e25917f3a2aebdff84b5f87daa00f7e90b27";
 const VECTOR_DIM: usize = 512;
 
-// TODO(S0-spike): pin a real revision commit SHA + sha256 before Wave 2 (A3 integrity).
-// For the spike, hf-hub default (latest main) is acceptable to validate the path.
-// If available, record the resolved revision here for Task 2a to harden.
+/// Spec for loading an embedder with pinned provenance.
+pub struct EmbedderSpec {
+    pub model_id: String,
+    pub model_revision: String,
+    pub model_sha256: String,
+}
 
 pub struct Embedder {
     model: BertModel,
@@ -17,48 +25,84 @@ pub struct Embedder {
 }
 
 impl Embedder {
+    /// Load the default embedder with pinned revision + sha256.
     pub fn load() -> Result<Self> {
-        let api = Api::new().context("hf-hub api")?;
-        let repo = api.model(MODEL_ID.to_string());
+        let spec = EmbedderSpec {
+            model_id: DEFAULT_MODEL_ID.to_string(),
+            model_revision: DEFAULT_REVISION.to_string(),
+            model_sha256: DEFAULT_SHA256.to_string(),
+        };
+        Self::load_for(&spec)
+    }
 
-        // Fetch files. Prefer safetensors; fall back to pytorch pickle if necessary.
+    /// Load an embedder for the given spec: pin revision, download, verify sha256,
+    /// sanitize config, and build the candle model.
+    pub fn load_for(spec: &EmbedderSpec) -> Result<Self> {
+        // Route hf-hub cache under nowdocs cache layout.
+        // Set HF_HOME so hf-hub uses ~/.cache/nowdocs/models/<model_id>/
+        // as its base (creating hub/ inside it).
+        let model_cache = crate::cache::model_path(&spec.model_id);
+        std::fs::create_dir_all(&model_cache).context("create model cache dir")?;
+        // SAFETY: single-threaded embedder load; no concurrent HF_HOME readers.
+        unsafe { std::env::set_var("HF_HOME", &model_cache) };
+
+        let api = ApiBuilder::from_env()
+            .with_progress(false)
+            .build()
+            .context("hf-hub api")?;
+
+        let repo = api.repo(Repo::with_revision(
+            spec.model_id.clone(),
+            RepoType::Model,
+            spec.model_revision.clone(),
+        ));
+
+        // Fetch files.
         let weights = repo
             .get("model.safetensors")
             .or_else(|_| repo.get("pytorch_model.bin"))
-            .context("fetch model weights (model.safetensors or pytorch_model.bin)")?;
+            .context("fetch model weights")?;
 
         let config_path = repo.get("config.json").context("fetch config.json")?;
         sanitize_config(&config_path).context("sanitize config.json (remove auto_map)")?;
 
         let tok_path = repo.get("tokenizer.json").context("fetch tokenizer.json")?;
 
-        // candle-transformers 0.11 exposes jina_bert::BertModel (not JinaBertModel).
-        // v2-small config: hidden_size=512, layers=4, heads=8, intermediate=2048, alibi.
+        // Verify sha256 of model weights (A3 integrity).
+        let actual_sha = sha256_hex(&weights)?;
+        if actual_sha != spec.model_sha256 {
+            let _ = std::fs::remove_file(&weights);
+            anyhow::bail!(
+                "model integrity check failed: expected sha256={}, got={actual_sha}. File deleted.",
+                spec.model_sha256
+            );
+        }
+
+        // Build candle model. Weights load as F32 (candle 0.11 ALiBi bias is hardcoded F32).
         let config = Config::new(
-            30528,                        // vocab_size
-            VECTOR_DIM,                   // hidden_size
-            4,                            // num_hidden_layers
-            8,                            // num_attention_heads
-            2048,                         // intermediate_size
-            candle_nn::Activation::Gelu,  // hidden_act (geglu gate uses gelu)
-            8192,                         // max_position_embeddings
-            2,                            // type_vocab_size
-            0.02,                         // initializer_range
-            1e-12,                        // layer_norm_eps
-            0,                            // pad_token_id
-            PositionEmbeddingType::Alibi, // position_embedding_type
+            30528,
+            VECTOR_DIM,
+            4,
+            8,
+            2048,
+            candle_nn::Activation::Gelu,
+            8192,
+            2,
+            0.02,
+            1e-12,
+            0,
+            PositionEmbeddingType::Alibi,
         );
 
-        // candle-transformers 0.11's jina_bert builds the ALiBi bias in F32 and
-        // broadcasts it into the hidden activations, so weights must load as F32
-        // even though the safetensors file stores F16-compatible values. Loading
-        // F16 triggers `dtype mismatch in add, lhs: F16, rhs: F32`.
         let vb = if weights.extension().map_or(false, |e| e == "safetensors") {
-            // SAFETY: mmap of a read-only model file in the HF cache; the file is
-            // not modified concurrently (we only read / sanitize config.json).
+            // SAFETY: mmap of a read-only model file in the HF cache.
             unsafe {
-                candle_nn::VarBuilder::from_mmaped_safetensors(&[weights], DType::F32, &Device::Cpu)
-                    .context("mmap safetensors")?
+                candle_nn::VarBuilder::from_mmaped_safetensors(
+                    &[weights.clone()],
+                    DType::F32,
+                    &Device::Cpu,
+                )
+                .context("mmap safetensors")?
             }
         } else {
             candle_nn::VarBuilder::from_pth(&weights, DType::F32, &Device::Cpu)
@@ -84,8 +128,6 @@ impl Embedder {
             .to_dtype(DType::I64)?;
 
         let out = self.model.forward(&input).context("forward")?;
-        // Mean-pool over the sequence dimension (dim 1), matching the Python
-        // sentence-transformers path with normalize_embeddings=false.
         let pooled = out.mean(1).context("mean pool")?;
         let v = pooled
             .squeeze(0)
@@ -96,8 +138,7 @@ impl Embedder {
     }
 }
 
-/// Remove `auto_map` from the HF config.json to prevent arbitrary code execution
-/// if the file is later consumed by a Python transformers pipeline (A3).
+/// Remove `auto_map` from the HF config.json to prevent arbitrary code execution (A3).
 fn sanitize_config(path: &std::path::Path) -> Result<()> {
     let text = std::fs::read_to_string(path).context("read config.json")?;
     let mut val: serde_json::Value = serde_json::from_str(&text).context("parse config.json")?;
@@ -107,4 +148,11 @@ fn sanitize_config(path: &std::path::Path) -> Result<()> {
     std::fs::write(path, serde_json::to_string_pretty(&val).context("serialize config")?)
         .context("write sanitized config.json")?;
     Ok(())
+}
+
+/// Compute SHA256 hex digest of a file.
+fn sha256_hex(path: &std::path::Path) -> Result<String> {
+    let bytes = std::fs::read(path).context("read file for sha256")?;
+    let hash = Sha256::digest(&bytes);
+    Ok(format!("{hash:x}"))
 }
