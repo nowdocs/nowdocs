@@ -163,7 +163,7 @@ pub fn chunk_markdown(md: &str, cfg: &ChunkConfig) -> Vec<Chunk> {
     let mut chunks: Vec<Chunk> = Vec::new();
     let mut idx: u32 = 0;
 
-    let mut emit = |chunks: &mut Vec<Chunk>, path: &str, ctype: ChunkType, text: String, idx: &mut u32| {
+    let emit = |chunks: &mut Vec<Chunk>, path: &str, ctype: ChunkType, text: String, idx: &mut u32| {
         chunks.push(Chunk {
             idx: *idx,
             heading_path: path.to_string(),
