@@ -1,1 +1,156 @@
-// tests for src/mcp.rs — populated by Task 1x
+//! Integration test: spawn the `nowdocs serve` binary and talk MCP 2025-11-25
+//! over stdio NDJSON.
+
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Command, Stdio};
+
+struct McpSession {
+    stdin: std::process::ChildStdin,
+    stdout: BufReader<std::process::ChildStdout>,
+}
+
+fn bin_path() -> String {
+    // Cargo injects CARGO_BIN_EXE_nowdocs for integration tests in some
+    // invocations; fall back to the manifest's target/debug path otherwise
+    // (the bin is built explicitly before the test run).
+    if let Ok(p) = std::env::var("CARGO_BIN_EXE_nowdocs") {
+        return p;
+    }
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    format!("{manifest}/target/debug/nowdocs")
+}
+
+fn spawn() -> (McpSession, std::process::Child) {
+    let bin = bin_path();
+    // Isolate the cache so ensure_layout writes into a tempdir, not the real
+    // user cache. Leaked (not auto-cleaned) so it outlives the child process.
+    let cache = tempfile::tempdir().unwrap();
+    let cache_path = cache.path().to_path_buf();
+    std::mem::forget(cache);
+
+    let mut child = Command::new(&bin)
+        .arg("serve")
+        .env("XDG_CACHE_HOME", &cache_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn nowdocs serve");
+    let stdin = child.stdin.take().unwrap();
+    let stdout = BufReader::new(child.stdout.take().unwrap());
+    let session = McpSession { stdin, stdout };
+    (session, child)
+}
+
+impl McpSession {
+    /// Send one NDJSON request and read back the single NDJSON response line
+    /// matching its id.
+    fn round_trip(&mut self, req: &serde_json::Value) -> serde_json::Value {
+        let mut line = serde_json::to_string(req).unwrap();
+        line.push('\n');
+        self.stdin.write_all(line.as_bytes()).unwrap();
+        self.stdin.flush().unwrap();
+
+        let mut buf = String::new();
+        loop {
+            buf.clear();
+            let n = self.stdout.read_line(&mut buf).expect("read response");
+            assert!(n > 0, "server closed stdout before responding to {:?}", req);
+            let trimmed = buf.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let resp: serde_json::Value = serde_json::from_str(trimmed)
+                .unwrap_or_else(|e| panic!("non-JSON response: {trimmed:?} ({e})"));
+            // Skip notifications (no id) — we only expect responses with an id.
+            if resp.get("id").is_some() {
+                return resp;
+            }
+        }
+    }
+}
+
+#[test]
+fn initialize_returns_2025_11_25() {
+    let (mut s, _child) = spawn();
+    let req = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0.0.0"}
+        }
+    });
+    let resp = s.round_trip(&req);
+    let result = resp.get("result").expect("initialize must return result");
+    assert_eq!(result["protocolVersion"], "2025-11-25");
+    assert_eq!(result["capabilities"]["tools"]["listChanged"], false);
+    assert_eq!(result["serverInfo"]["name"], "nowdocs");
+}
+
+#[test]
+fn tools_list_exposes_search_and_list() {
+    let (mut s, _child) = spawn();
+    // initialize first (real clients always do).
+    let _ = s.round_trip(&serde_json::json!({
+        "jsonrpc":"2.0","id":1,"method":"initialize",
+        "params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}
+    }));
+    let resp = s.round_trip(&serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
+    let tools = resp["result"]["tools"].as_array().expect("tools array");
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"nowdocs_search"), "missing nowdocs_search: {:?}", names);
+    assert!(names.contains(&"nowdocs_list"), "missing nowdocs_list: {:?}", names);
+
+    let search = tools.iter().find(|t| t["name"] == "nowdocs_search").unwrap();
+    assert!(search["inputSchema"].is_object(), "search needs inputSchema");
+    let required = search["inputSchema"]["required"].as_array().unwrap();
+    let req_names: Vec<&str> = required.iter().map(|r| r.as_str().unwrap()).collect();
+    assert!(req_names.contains(&"query"), "query must be required");
+    assert!(req_names.contains(&"docset"), "docset must be required");
+    assert_eq!(search["annotations"]["readOnlyHint"], true);
+    assert_eq!(search["annotations"]["openWorldHint"], false);
+
+    let list = tools.iter().find(|t| t["name"] == "nowdocs_list").unwrap();
+    assert!(list["inputSchema"].is_object());
+    assert_eq!(list["annotations"]["readOnlyHint"], true);
+}
+
+#[test]
+fn tools_call_search_returns_structured_error_not_crash() {
+    let (mut s, mut child) = spawn();
+    let _ = s.round_trip(&serde_json::json!({
+        "jsonrpc":"2.0","id":1,"method":"initialize",
+        "params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}
+    }));
+    let resp = s.round_trip(&serde_json::json!({
+        "jsonrpc":"2.0","id":2,"method":"tools/call",
+        "params":{"name":"nowdocs_search","arguments":{"query":"how to use middleware","docset":"nextjs"}}
+    }));
+    // Handler is not wired in Wave 1 — must be a structured JSON-RPC error,
+    // never a crash / dropped connection.
+    assert!(resp.get("error").is_some(), "expected error result, got: {}", resp);
+    let code = resp["error"]["code"].as_i64().expect("error code");
+    assert!(code == -32601, "expected -32601 not-implemented, got {}", code);
+
+    // Server must still be alive (not crashed).
+    let alive = s.round_trip(&serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/list"}));
+    assert!(alive.get("result").is_some());
+    // cleanup
+    let _ = child.kill();
+}
+
+#[test]
+fn tools_call_rejects_invalid_docset() {
+    let (mut s, mut child) = spawn();
+    let _ = s.round_trip(&serde_json::json!({
+        "jsonrpc":"2.0","id":1,"method":"initialize",
+        "params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}
+    }));
+    let resp = s.round_trip(&serde_json::json!({
+        "jsonrpc":"2.0","id":2,"method":"tools/call",
+        "params":{"name":"nowdocs_search","arguments":{"query":"x","docset":"../etc"}}
+    }));
+    assert!(resp.get("error").is_some(), "invalid docset must error, got: {}", resp);
+    let _ = child.kill();
+}
