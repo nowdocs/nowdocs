@@ -71,7 +71,7 @@
 - 模型：jinaai/jina-embeddings-v2-small-en，vector_dim=512，DType::F16。
 - 产出 Embedder：pub fn load() -> anyhow::Result<Self> +
   pub fn embed(&self, text:&str) -> anyhow::Result<Vec<f32>>（512 维）。
-  这俩签名锁死——Wave 2 Task 2a 会扩展（加 load_for(spec)+sha 校验+F16+mmap），但保持 load/embed 不变。
+  这俩签名锁死——Wave 2 Task 2a 会扩展（加 load_for(spec)+sha 校验+mmap；权重维持 F32 加载，见 2a 段核实），但保持 load/embed 不变。
 - jina 用 mean-pooling（非 [CLS]）；cosine 对归一化不敏感，故 candle 端不必归一化（与 Python 参考一致即可）。
 
 【candle API 适配——最大风险点，务必核实】
@@ -261,15 +261,56 @@
 > **依赖**：S0 绿、1b、1e。**派给**：Rust 主力。
 
 ```
-【任务】Task 2a：Embedder::load_for(spec) + sha 校验 + auto_map 剥除 + F16/mmap
-【plan】读 Wave 2「2a embedder hardening」contract；TDD step 自行展开（plan 给了 contract，需你补测试细节）
-【spec】§5.2、§6.3 A3 模型完整性
+【任务】Task 2a：Embedder::load_for(spec) + sha 校验 + auto_map 剥除 + hf-hub 0.4 + cache.rs 接线
+【前置】先读 AGENTS.md（项目铁律），再读 plan Wave 2「2a embedder hardening」contract；TDD step 自行展开
+【spec】§5.2（注意：权重 F32 加载，非 F16——见下方核实）、§6.3 A3 模型完整性
 
-【专属契约】
-- 扩展 src/embedder.rs（S0 已有 load/embed）：加 load_for(spec:&EmbedderSpec)->Result<Self>，按 manifest 的 model_revision pin HF commit SHA + model_sha256，下载后 sha2::Sha256 重算比对，不符即删；从 config.json 删 auto_map（防任意代码执行），手写 BERT 前向；F16 加载 + mmap。
-- 保持 load()/embed() 签名不变（S0 锁定，2a 不破坏）。
-- 新测试：拒篡改 sha 的模型；E2 仍绿。
-- 依赖：需 1b（EmbedderSpec）、1e（model_path）。只改 src/embedder.rs + tests/embedder_tests.rs。
+【S0 已核实的事实——按此为准，勿重复踩坑】
+- 权重加载 dtype = DType::F32（不是 F16）。candle 0.11 jina_bert 的 ALiBi bias 硬编码 F32，
+  F16 权重 forward 触发 `dtype mismatch in add, lhs: F16, rhs: F32`（S0 实测，spec 附录 §B）。
+  0.11.0 已是 crates.io 最新，无更新版可解。**2a 维持 F32 加载，不要尝试 F16 wrapper 重写**（YAGNI）。
+- 注意区分：权重加载 dtype（F32，candle 限制）≠ 向量存储 dtype（manifest dtype:"f16"，存进 lancedb，
+  省磁盘且 cosine 无影响）。2a 只管权重加载；向量存储 dtype 归 2b/2c。
+- S0 已确认的 API：candle_transformers::models::jina_bert::{BertModel, Config, PositionEmbeddingType}；
+  Config 手构（vocab=30528, hidden=512, layers=4, heads=8, intermediate=2048, max_pos=8192,
+  PositionEmbeddingType::Alibi）；from_mmaped_safetensors 在 0.11 是 unsafe，需 unsafe 块。
+- S0 provenance（已拿到，直接 pin，省你核实）：
+    model_id   = jinaai/jina-embeddings-v2-small-en
+    revision   = 44e7d1d6caec8c883c2d4b207588504d519788d0   (HF main commit SHA)
+    sha256     = c9a9a7ec012d01efd780474fbb65e25917f3a2aebdff84b5f87daa00f7e90b27  (model.safetensors)
+
+【本 task 五项核心改动】
+1. 移除 S0 的 ensure_hf_cache() HF_HOME hack：embedder 下载/读取统一走 cache::model_path(model_id)
+   （= ~/.cache/nowdocs/models/jinaai/jina-embeddings-v2-small-en）。删 tests/embedder_tests.rs 里
+   的 ensure_hf_cache()，测试改用与生产一致的路径。消除 S0 的双路径不一致。
+2. 升级 hf-hub 0.3 → 0.4（改 Cargo.toml 的 hf-hub 行——OQ#2 已授权 2a 改此行，AGENTS §4.5/dispatch §8
+   已放宽）。0.3 对 HF XET-backed repo 的 relative redirect 处理有缺陷，fresh CI 会下载失败；0.4 修。
+   改完 cargo build 确认 candle 链不冲突。
+3. 加 load_for(spec: &EmbedderSpec) -> Result<Self>：按 spec.model_revision pin HF commit SHA 下载
+   （hf-hub Api::revision 或 repo.set_revision，按 0.4 实际 API 适配），下载后用 sha2::Sha256 重算
+   model.safetensors 比对 spec.model_sha256，不符即删文件 + bail。
+4. 从 config.json 删 auto_map（S0 已有 sanitize_config，保留并复用；防任意代码执行，A3）。
+5. 保持 load()/embed() 签名不变（S0 锁定，2a 不破坏）。load() 改为调用 load_for(&DEFAULT_SPEC)，
+   DEFAULT_SPEC 用上面 pin 的常量。
+
+【分支】从 feat/1a-cargo-skeleton 拉新分支（S0 已合回的话从含 S0 的 feat/1a-cargo-skeleton 拉；
+        若 S0 还在 spike/s0-candle-jina 未合，先与 Main 确认基点）。git switch -c feat/2a-embedder-harden。
+
+【新测试（TDD：先写失败→验证失败→实现→验证通过→commit）】
+- 拒篡改 sha：构造一个 model_sha256 不匹配的 spec，load_for 必须返回 Err 且删掉已下载文件。
+- pin 生效：load_for 用真实 revision + sha256 常量能加载成功（联网测试，无网标 #[ignore]）。
+- 回归：E2 三层断言仍绿（① dim==512 ② 语义自洽 <0.75 ③ 跨实现 cosine>0.99）——S0 阈值已放宽到 <0.75，
+  勿改回 <0.5（spec 附录 §E 实测 unrelated≈0.6921，anisotropy 正常）。
+
+【命令输出管控】cargo test --test embedder_tests > 2a-test.log 2>&1 后看 tail，不直接 dump。
+
+【完成后三件事（缺一不可）】
+1. 打勾：Edit plan 的 Task 2a 全部 `- [ ]` → `- [x]`。
+2. spec 修订：仅「实现核实类」——hf-hub 0.4 实际 API（revision pin 调用）写进 spec 附录。架构不变。
+3. 报告：① task=2a ② commit sha ③ 测试结果（新测试 + E2 回归）④ Cargo.toml diff（hf-hub 行）
+   ⑤ Open Questions。报告完停下，不做 2b/2c。
+
+【铁律】TDD；不擅自 push；子代理遇未明决策基于默认推进或列 Open Question（不交互提问）。
 ```
 
 ### Task 2b：lancedb store
@@ -508,5 +549,5 @@
   - 策略 A（推荐）：串行派发同 wave 内有 plan 写冲突的 task，或用 git worktree 隔离每个并行 agent（各自工作树改，最后合并）。
   - 策略 B：agent 遇该错误重新 Read 再 Edit（重试，多数能成功）。
 - **进度看板**：只 Main 写，agent 不写（§7 已说明），避免表冲突。
-- **Cargo.toml**：除 1a（建）和 2b（lancedb 行）外，任何 agent 改 Cargo.toml 视为越界。
+- **Cargo.toml**：除 1a（建）、2b（lancedb 行）、2a（hf-hub 行，OQ#2 升 0.4 修 XET redirect）外，任何 agent 改 Cargo.toml 视为越界。
 - **spec 修订**：agent 只改「实现核实类」事实（API 名/版本/许可核实），架构决策变更上报 Main。多个 agent 改 spec 不同章节是安全的（Edit 精确匹配），但同一章节并发需协调。

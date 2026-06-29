@@ -50,7 +50,7 @@ nowdocs = 纯 Rust 单二进制 MCP server，本地运行，给 LLM coding agent
 - 项目许可 `MIT OR Apache-2.0`，贡献用 DCO 非 CLA。
 
 ### 4.5 文件改动边界（并发安全）
-- **Cargo.toml**：只有 Task 1a（建）和 Task 2b（lancedb 行）可改。其他 task 改 Cargo.toml = 越界。
+- **Cargo.toml**：只有 Task 1a（建）、Task 2b（lancedb 行）、Task 2a（hf-hub 行，OQ#2 升 0.4 修 XET redirect）可改。其他 task 改 Cargo.toml = 越界。
 - **签名锁定**：1a 已建好全部 module stub + 函数签名。1b-1h 只填函数体，**不改签名**。
 - **只改本 task 声明的文件**（`src/<mod>.rs` + `tests/<mod>_tests.rs`），不动其他 module、不改其他 task 的测试。
 - **进度看板**（dispatch §7）只 Main 维护，agent 不写。
