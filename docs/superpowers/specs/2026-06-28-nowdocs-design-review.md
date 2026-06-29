@@ -371,6 +371,8 @@ candle 跑 jina-v2-small 是推断。pin 一个参考查询（如 "how to use cl
 3. **分发矩阵（5 目标）**：`aarch64-apple-darwin` / `x86_64-apple-darwin` / `x86_64-unknown-linux-musl` / `aarch64-unknown-linux-musl` / `x86_64-pc-windows-msvc`，通过 `cargo-binstall` 分发。`candle-core default-features=false`。
 4. **protoc 构建前置（1a 实现核实）**：`lancedb` → `lance-*` 的 `prost-build` build script 需要系统 `protoc`。无 `protoc` 时 `cargo check` 在 `lance-index`/`lance-table` build script 失败。Debian：`apt-get install protobuf-compiler`；无 sudo 环境下载预编译 protoc 到 `~/.local/protoc` 并 `export PROTOC=...`。是否改用 `protoc-bin-vendored` 实现 hermetic 构建 = Open Question（见 §11）。
 5. **依赖解析版本（1a 实现核实，cargo 1.93 / 2026-06-29 解析）**：plan 起点版本因跨依赖 `half` 冲突（lancedb 0.18 锁 `half =2.4.1` vs candle 0.9 需 `half ^2.5`）无法共存，已统一升到最新兼容：`lancedb 0.30` / `candle-core 0.11`（default-features=false）/ `candle-nn 0.11` / `candle-transformers 0.11` / `tokenizers 0.23` / `tiktoken-rs 0.12` / `hf-hub 0.3`（stable，cargo 默认跳过 `1.0.0-rc.1`）。`clap 4.5` / `serde 1.0` / `anyhow 1.0` / `thiserror 1.0` / `regex 1.10` / `sha2 0.10` / `dirs 5.0` 维持 plan 约束。换依赖/换模型不在此列（架构级，需 Main 决策）；此处仅同依赖的版本号核实。
+6. **`resolve_max_tokens(0)` 语义（1g 实现核实）**：1a 锁定 `resolve_max_tokens(n: Option<u32>) -> u32`（非 `Result`），但 plan Step 3 写 "0→Err"。签名不可返回 Err，故 1g 取 clamp 语义：`None | Some(0)` → 默认 4000，`Some(v>0)` → `min(v, 4000)`。`0` 视为"未设置"回退默认值，而非硬错误。如需硬拒 `0`，需在 Wave 4 把签名改回 `Result`（架构级，1h 已依赖 u32 返回，改动面小但需 Main 拍）。
+7. **`CARGO_BIN_EXE` 在 `--test` 过滤下不注入（1h 实现核实）**：`cargo test --test mcp_tests`（cargo 1.93.1）实测**不**注入 `CARGO_BIN_EXE_nowdocs`（137 个环境变量中无 EXE），且不重建 bin target。1h 测试已加回退：`CARGO_BIN_EXE_nowdocs` 缺失时用 `{CARGO_MANIFEST_DIR}/target/debug/nowdocs`。TDD 循环需显式 `cargo build --bin nowdocs` 保证二进制新鲜，否则测到旧产物。完整 `cargo test`（无过滤）是否注入 + 自动重建 = Open Question（见 §11.6）。
 
 ---
 
@@ -381,6 +383,7 @@ candle 跑 jina-v2-small 是推断。pin 一个参考查询（如 "how to use cl
 3. **多客户端**：stdio 隐含单客户端，每个 client spawn 独立 nowdocs 进程，RAM 按进程计。是否需要守护进程模式？（建议 defer，README 记录）
 4. **私有 API 文档爬取**：原 spec 卖点 #2 在 crawler 外置后，`ingest` 仍是私有文档路径（私有文档从不触 registry）。需在 spec 明确重定义。
 5. **protoc hermetic 构建**：`lancedb` 依赖系统 `protoc`（见 §10.4）。是否引入 `protoc-bin-vendored`（build-dependency + build.rs 设 `PROTOC`）让 contributor / CI 无需预装 protoc？代价：多一个 build-dep + Cargo.toml 改动（仅 1a/2b 可改 Cargo.toml）。建议 Main 拍：CI 装系统 protoc（简单）vs vendored（hermetic、跨平台一致）。
+6. **`cargo test --test X` 不注入 `CARGO_BIN_EXE` / 不重建 bin**：1h 实测 `cargo test --test mcp_tests` 既不注入 `CARGO_BIN_EXE_nowdocs` 也不重建 bin target，与 cargo 文档"integration test 自动暴露 bin"描述不符（cargo 1.93.1，无 `.cargo/config`）。可能因 lib+bin 同名 `nowdocs`、或 `--test` 过滤跳过 bin 依赖。影响：stdio 集成测试需手动 `cargo build --bin nowdocs` + 路径回退。建议 Main 拍：(a) 改 bin 名解耦 lib/bin（如 `nowdocs` lib + `nowdocs` bin 同名是否触发）、(b) 引入 `assert_cmd` dev-dep 托管构建、(c) 维持现状（显式 build + 回退路径）。
 
 ---
 
