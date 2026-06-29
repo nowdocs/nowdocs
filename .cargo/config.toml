@@ -1,0 +1,5 @@
+# nowdocs build config
+# [env] 注入对整个构建环境生效（含传递依赖的 build script，如 lance 的 prost-build）。
+# protoc 装在用户目录（~/.local/protoc35），不污染系统，CI 可复刻。
+[env]
+PROTOC = "/home/kaige/.local/protoc35/bin/protoc"
