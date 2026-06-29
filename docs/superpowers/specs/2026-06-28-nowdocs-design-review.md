@@ -375,7 +375,7 @@ candle 跑 jina-v2-small 是推断。pin 一个参考查询（如 "how to use cl
    - L4 周级：`cargo udeps`（死代码）+ `cargo audit`
 3. **分发矩阵（5 目标）**：`aarch64-apple-darwin` / `x86_64-apple-darwin` / `x86_64-unknown-linux-musl` / `aarch64-unknown-linux-musl` / `x86_64-pc-windows-msvc`，通过 `cargo-binstall` 分发。`candle-core default-features=false`。
 4. **protoc 构建前置（1a 实现核实）**：`lancedb` → `lance-*` 的 `prost-build` build script 需要系统 `protoc`。无 `protoc` 时 `cargo check` 在 `lance-index`/`lance-table` build script 失败。Debian：`apt-get install protobuf-compiler`；无 sudo 环境下载预编译 protoc 到 `~/.local/protoc` 并 `export PROTOC=...`。是否改用 `protoc-bin-vendored` 实现 hermetic 构建 = Open Question（见 §11）。
-5. **依赖解析版本（1a 实现核实，cargo 1.93 / 2026-06-29 解析）**：plan 起点版本因跨依赖 `half` 冲突（lancedb 0.18 锁 `half =2.4.1` vs candle 0.9 需 `half ^2.5`）无法共存，已统一升到最新兼容：`lancedb 0.30` / `candle-core 0.11`（default-features=false）/ `candle-nn 0.11` / `candle-transformers 0.11` / `tokenizers 0.23` / `tiktoken-rs 0.12` / `hf-hub 0.3`（stable，cargo 默认跳过 `1.0.0-rc.1`）。`clap 4.5` / `serde 1.0` / `anyhow 1.0` / `thiserror 1.0` / `regex 1.10` / `sha2 0.10` / `dirs 5.0` 维持 plan 约束。换依赖/换模型不在此列（架构级，需 Main 决策）；此处仅同依赖的版本号核实。
+5. **依赖解析版本（1a 实现核实，cargo 1.93 / 2026-06-29 解析）**：plan 起点版本因跨依赖 `half` 冲突（lancedb 0.18 锁 `half =2.4.1` vs candle 0.9 需 `half ^2.5`）无法共存，已统一升到最新兼容：`lancedb 0.30` / `candle-core 0.11`（default-features=false）/ `candle-nn 0.11` / `candle-transformers 0.11` / `tokenizers 0.23` / `tiktoken-rs 0.12` / `hf-hub 0.4`（2a 升级，修 XET redirect；见附录 §H）。`clap 4.5` / `serde 1.0` / `anyhow 1.0` / `thiserror 1.0` / `regex 1.10` / `sha2 0.10` / `dirs 5.0` 维持 plan 约束。换依赖/换模型不在此列（架构级，需 Main 决策）；此处仅同依赖的版本号核实。
 6. **`resolve_max_tokens(0)` 语义（1g 实现核实）**：1a 锁定 `resolve_max_tokens(n: Option<u32>) -> u32`（非 `Result`），但 plan Step 3 写 "0→Err"。签名不可返回 Err，故 1g 取 clamp 语义：`None | Some(0)` → 默认 4000，`Some(v>0)` → `min(v, 4000)`。`0` 视为"未设置"回退默认值，而非硬错误。如需硬拒 `0`，需在 Wave 4 把签名改回 `Result`（架构级，1h 已依赖 u32 返回，改动面小但需 Main 拍）。
 7. **`CARGO_BIN_EXE` 在 `--test` 过滤下不注入（1h 实现核实）**：`cargo test --test mcp_tests`（cargo 1.93.1）实测**不**注入 `CARGO_BIN_EXE_nowdocs`（137 个环境变量中无 EXE），且不重建 bin target。1h 测试已加回退：`CARGO_BIN_EXE_nowdocs` 缺失时用 `{CARGO_MANIFEST_DIR}/target/debug/nowdocs`。TDD 循环需显式 `cargo build --bin nowdocs` 保证二进制新鲜，否则测到旧产物。完整 `cargo test`（无过滤）是否注入 + 自动重建 = Open Question（见 §11.6）。
 
@@ -468,3 +468,16 @@ Python 参考实现（transformers `AutoModel` + mean-pooling，与 sentence-tra
 - **向量列 schema**：`DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float16, true)), 512)` 存 f16。`IntoQueryVector for &[f16]` / `Vec<f16>`（`query.rs:222/342`）存在——查询向量收 f16。注：lancedb 自带测试多用 f32，但 f16 schema+查询路径成立。
 - **async 边界**：lancedb 全 async。Store 内部持 `tokio::runtime::Runtime`，`self.runtime.block_on(...)` 同步包装。**陷阱**：lancedb 内部 `tokio::spawn`，若在已有 tokio runtime 上下文里 `Runtime::new().block_on` 会 panic「Cannot start a runtime from within a runtime」。nowdocs 顶层无 tokio context 故安全；W4 mcp.rs 若变 async 需重审（改用 `Handle::current().block_on`）。
 - **insert**：`table.add(Vec<RecordBatch>).execute().await`（`Vec<RecordBatch>` 直接 `Scannable`，`table.rs:886/1829`）。
+
+### H. hf-hub 0.4 API 核实（Task 2a 实现）
+
+**源码级核实（2026-06-29，`~/.cargo/registry/src/index.crates.io-.../hf-hub-0.4.3/`）**：
+
+- **版本**：0.4.3（crates.io 稳定版，0.3→0.4 修 XET-backed repo relative redirect）。
+- **revision pin**：`Repo::with_revision(repo_id: String, repo_type: RepoType, revision: String) -> Repo`（`lib.rs:222`）。revision 为 HF commit SHA 或 `refs/pr/N`。传给 `Api::repo(repo)` 即锁定该 commit。
+- **ApiBuilder**：`ApiBuilder::new().with_cache_dir(path).with_progress(false).build() -> Result<Api, ApiError>`（`sync.rs:229-356`）。`ApiBuilder::from_env()` 读 `HF_HOME` + `HF_ENDPOINT` 环境变量。
+- **ApiRepo**：`Api::repo(Repo) -> ApiRepo`（`sync.rs:623`）。`ApiRepo::get(filename) -> Result<PathBuf, ApiError>` 先查缓存再下载（`sync.rs:709`）。`ApiRepo::download(filename)` 强制重新下载。
+- **Cache 路径**：`Cache::from_env()` 读 `HF_HOME`，拼接 `hub/`（`lib.rs:42-51`）。缓存结构 `hub/models--<org>--<repo>/blobs/` + `snapshots/<commit_hash>/` + `refs/<revision>`。
+- **token**：`Cache::token()` 在 `HF_HOME/token`（非 `HF_HOME/hub/token`，`lib.rs:59-65` `token_path()` pop 一级）。
+- **0.3→0.4 变更**：修复 XET-backed repo 的 relative redirect 处理（`sync.rs:473-501` redirect loop）。API 签名无破坏性变更。
+- **2a 实现策略**：`load_for(spec)` 设 `HF_HOME=<nowdocs_cache>/models/<model_id>` → `ApiBuilder::from_env()` → `Repo::with_revision(spec.model_id, RepoType::Model, spec.model_revision)` → `api.repo(repo).get("model.safetensors")`。下载后 `sha2::Sha256` 校验，不符即删+bail。

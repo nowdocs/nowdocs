@@ -647,7 +647,7 @@ pub fn default_config() -> ChunkConfig { ChunkConfig { min_tokens: 256, max_toke
 > These are NOT placeholder steps — they are the scope/contract for the next plan files. Each becomes its own `YYYY-MM-DD-nowdocs-impl-waveN.md`.
 
 ### Wave 2 — Engines (2a→2b serial; 2c off 2b)
-- **2a embedder hardening** (`src/embedder.rs`): extend S0 — pin `model_revision`+`model_sha256`, verify via `sha2`, F16 load, mmap, `auto_map` removal, `Embedder::load_for(spec: &EmbedderSpec)` gating. Gate: E2 still green; new test rejects tampered sha.
+- [x] **2a embedder hardening** (`src/embedder.rs`): extend S0 — pin `model_revision`+`model_sha256`, verify via `sha2`, F16 load, mmap, `auto_map` removal, `Embedder::load_for(spec: &EmbedderSpec)` gating. Gate: E2 still green; new test rejects tampered sha. **Done @ 8f2f175** — hf-hub 0.4, load_for(spec), sha256 verification, E2 green.
 - **2b lancedb store** (`src/store.rs`): open shared `Arc<Session>` (`cache::db_path`), create table schema (id, vector, heading_path, source_url, api_version, text, chunk_type, chunk_idx), build native Lance FTS (NOT tantivy), hybrid query `full_text_search().nearest_to().rerank(RRFReranker).execute_hybrid()`. Gate: round-trip insert→hybrid-search recall test. **详细 TDD 见下方「Task 2b」段。**
 
 #### Task 2b: lancedb store — 详细 TDD plan
