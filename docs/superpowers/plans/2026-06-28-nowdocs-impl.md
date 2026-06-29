@@ -263,7 +263,7 @@ git commit -m "feat(embedder): jina-v2-small candle spike + E2 cosine gate (S0 �
 - `input.rs` → `pub fn validate_docset(s: &str) -> anyhow::Result<String>;` `pub fn validate_query(s: &str) -> anyhow::Result<String>;` `pub fn resolve_max_tokens(n: Option<u32>) -> u32;` `pub fn resolve_top_k(n: Option<u32>) -> u32;`
 - `mcp.rs` → `pub fn run_loop() -> std::io::Result<()>;`
 
-- [ ] **Step 1: Write Cargo.toml**
+- [x] **Step 1: Write Cargo.toml**
 
 ```toml
 [package]
@@ -305,7 +305,7 @@ tempfile = "3.10"
 
 > `lancedb` version: verify the latest on crates.io (0.18 is a starting point; the design doc references 0.30.0 internals — use whatever `cargo add lancedb` resolves and adapt store.rs API calls in Wave 2). Only the store task may touch this line later.
 
-- [ ] **Step 2: Write the failing CLI test**
+- [x] **Step 2: Write the failing CLI test**
 
 Write `tests/cli_tests.rs`:
 ```rust
@@ -326,12 +326,12 @@ fn test_cli_help_lists_all_subcommands() {
 }
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `cargo test --test cli_tests`
 Expected: FAIL — binary not built / subcommands missing.
 
-- [ ] **Step 4: Implement cli.rs + main.rs + lib.rs + stubs**
+- [x] **Step 4: Implement cli.rs + main.rs + lib.rs + stubs**
 
 Write `src/cli.rs`:
 ```rust
@@ -435,7 +435,7 @@ Repeat the stub pattern for `chunker.rs` (`Chunk`, `ChunkType`, `ChunkConfig`, `
 
 If S0 has not run, create `src/embedder.rs` with `// placeholder — populated by Task S0` so `lib.rs` compiles; remove this once S0 lands.
 
-- [ ] **Step 5: Run tests to verify pass + check compiles**
+- [x] **Step 5: Run tests to verify pass + check compiles**
 
 Run: `cargo test --test cli_tests`
 Expected: PASS.
@@ -443,7 +443,7 @@ Expected: PASS.
 Run: `cargo check`
 Expected: compiles (stubs present; `todo!()` bodies compile).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Cargo.toml src/ tests/cli_tests.rs tests/*_tests.rs

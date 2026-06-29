@@ -369,6 +369,8 @@ candle 跑 jina-v2-small 是推断。pin 一个参考查询（如 "how to use cl
    - L3 CI：`cargo binstall` 产物校验 + 跨平台构建
    - L4 周级：`cargo udeps`（死代码）+ `cargo audit`
 3. **分发矩阵（5 目标）**：`aarch64-apple-darwin` / `x86_64-apple-darwin` / `x86_64-unknown-linux-musl` / `aarch64-unknown-linux-musl` / `x86_64-pc-windows-msvc`，通过 `cargo-binstall` 分发。`candle-core default-features=false`。
+4. **protoc 构建前置（1a 实现核实）**：`lancedb` → `lance-*` 的 `prost-build` build script 需要系统 `protoc`。无 `protoc` 时 `cargo check` 在 `lance-index`/`lance-table` build script 失败。Debian：`apt-get install protobuf-compiler`；无 sudo 环境下载预编译 protoc 到 `~/.local/protoc` 并 `export PROTOC=...`。是否改用 `protoc-bin-vendored` 实现 hermetic 构建 = Open Question（见 §11）。
+5. **依赖解析版本（1a 实现核实，cargo 1.93 / 2026-06-29 解析）**：plan 起点版本因跨依赖 `half` 冲突（lancedb 0.18 锁 `half =2.4.1` vs candle 0.9 需 `half ^2.5`）无法共存，已统一升到最新兼容：`lancedb 0.30` / `candle-core 0.11`（default-features=false）/ `candle-nn 0.11` / `candle-transformers 0.11` / `tokenizers 0.23` / `tiktoken-rs 0.12` / `hf-hub 0.3`（stable，cargo 默认跳过 `1.0.0-rc.1`）。`clap 4.5` / `serde 1.0` / `anyhow 1.0` / `thiserror 1.0` / `regex 1.10` / `sha2 0.10` / `dirs 5.0` 维持 plan 约束。换依赖/换模型不在此列（架构级，需 Main 决策）；此处仅同依赖的版本号核实。
 
 ---
 
@@ -378,6 +380,7 @@ candle 跑 jina-v2-small 是推断。pin 一个参考查询（如 "how to use cl
 2. **`nowdocs upgrade` 委托 vs 只提示**：委托（检测安装程序 + exec 包管理器）UX 好但增表面积；只提示更安全。（建议只提示起步）
 3. **多客户端**：stdio 隐含单客户端，每个 client spawn 独立 nowdocs 进程，RAM 按进程计。是否需要守护进程模式？（建议 defer，README 记录）
 4. **私有 API 文档爬取**：原 spec 卖点 #2 在 crawler 外置后，`ingest` 仍是私有文档路径（私有文档从不触 registry）。需在 spec 明确重定义。
+5. **protoc hermetic 构建**：`lancedb` 依赖系统 `protoc`（见 §10.4）。是否引入 `protoc-bin-vendored`（build-dependency + build.rs 设 `PROTOC`）让 contributor / CI 无需预装 protoc？代价：多一个 build-dep + Cargo.toml 改动（仅 1a/2b 可改 Cargo.toml）。建议 Main 拍：CI 装系统 protoc（简单）vs vendored（hermetic、跨平台一致）。
 
 ---
 
