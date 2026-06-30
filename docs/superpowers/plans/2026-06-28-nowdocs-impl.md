@@ -767,7 +767,286 @@ Run: `cargo test --test store_tests` → Expected: 全 PASS
 - [x] **Step 7: lib.rs 注册 + commit** (4b098a3)
 
 `src/lib.rs` 加 `pub mod store;`（在 embedder 行后）。`cargo build` + `cargo test` 全绿后 commit：`feat(store): lancedb hybrid store + FTS + f16 vectors (2b)`。
-- **2c ingest** (`src/ingest.rs`): md dir → `chunker` → `embedder.embed` → `store.insert`. Uses `manifest` + `cache`. Gate: ingest a fixture dir, search returns expected chunk.
+- **2c ingest** (`src/ingest.rs`): md dir → `chunker` → `embedder.embed` → `store.insert`. Uses `manifest` + `cache`. Gate: ingest a fixture dir, search returns expected chunk. **详细 TDD 见下方「Task 2c」段。**
+
+#### Task 2c: ingest pipeline — 详细 TDD plan
+
+**依赖**：1c(chunker) + 2a(embedder) + 2b(store) + 1b(manifest) + 1e(cache) + 1g(input)，全就位。DAG `2c[1c,2a,2b]`。串行（2b 之后、3a 之前），无并发冲突，可安全改 cache.rs/embedder.rs 加小导出。
+
+**spec 基线**：§A 方案 b（拍定）——抓取外置，`ingest` 只接已抓好的 Markdown 目录；核心职责 = 检索+索引引擎，不碰抓取。§6.2 D10——本地 ingest 走真 embedder 生成向量（区别于 share 只发文本 CI 重建）。§6.10 legal 白名单（validate 强校验 license）。
+
+**Files**:
+- Create: `src/ingest.rs`
+- Create: `tests/ingest_tests.rs`
+- Modify: `src/lib.rs`（加 `pub mod ingest;`）
+- Modify: `src/cache.rs`（加 `pub fn manifest_path(docset)` — D-2c-2，只加函数不改现有）
+- Modify: `src/embedder.rs`（加 `pub fn provenance() -> (&'static str, &'static str, &'static str)` — D-2c-1，只加 pub 导出不改 2a 逻辑）
+
+**Interfaces**:
+- Consumes: `chunker::chunk_markdown(md, &cfg) -> Vec<Chunk>`（**注意**：产出 Chunk 的 `source_url=空`/`api_version=None`/`idx` per-file 从0起 — 2c 要填 source_url + 重编全局 idx）；`chunker::default_config()`；`embedder::Embedder::load() -> Result<Embedder>` + `.embed(text) -> Result<Vec<f32>>`；`store::Store::open(docset) -> Result<Store>` + `.insert(chunks, vectors) -> Result<()>`；`manifest::{Manifest, EmbedderSpec, RetrievalSpec, SourceSpec, LegalSpec, RefreshSpec, validate, parse_manifest}`；`cache::{db_path, manifest_path, ensure_layout}`；`input::validate_docset`
+- Produces: `pub fn ingest_dir(dir: &Path, docset: &str) -> Result<IngestStats>`；`pub struct IngestStats { pub files: u32, pub chunks: u32 }`
+
+**锁定签名（不改）**:
+```rust
+pub struct IngestStats { pub files: u32, pub chunks: u32 }
+pub fn ingest_dir(dir: &std::path::Path, docset: &str) -> anyhow::Result<IngestStats>;
+```
+
+**设计决策（Main 拍定）**:
+- **D-2c-1 provenance 导出 + manifest EmbedderSpec 映射**：embedder.rs 的 `DEFAULT_MODEL_ID/REVISION/SHA256` 是私有 const。加 `pub fn provenance() -> (&'static str, &'static str, &'static str)` 返回三元组（DRY，不重复常量）。2c 在 ingest.rs 映射成 `manifest::EmbedderSpec`（7字段）：`model_id/model_revision/model_sha256` ← `provenance()`；`model_version = "jina-embeddings-v2-small-en"`；`vector_dim=512`；`engine="candle"`；`dtype="f16"`。⚠️ embedder.rs 的 `EmbedderSpec`（3字段）与 manifest.rs 的 `EmbedderSpec`（7字段）**同名不同构** — 映射在 ingest.rs 做，勿混淆。
+- **D-2c-2 manifest 落盘 + cache 扩展**：cache.rs 加 `pub fn manifest_path(docset: &str) -> PathBuf { cache_root().join("db").join(format!("{docset}.manifest.json")) }`（与 `<docset>.lance` 平级）。ingest_dir 结尾写 manifest（`serde_json::to_string_pretty` + `fs::write`），落盘前 `manifest::validate(&m)?` 自校验。
+- **D-2c-3 source_url 填充**：chunker 产出 `source_url=空`。ingest_dir 填充为 md 文件相对 dir 的路径（`entry.strip_prefix(dir).unwrap_or(&entry).to_string_lossy()`），让 `SearchHit.source_url` 指回源文件。
+- **D-2c-4 全局 idx 重编号**：chunker 的 `idx` per-file 从0起，跨文件冲突。ingest_dir 收集所有文件 chunk 后，遍历重新赋 `idx = 0..N` 全局递增，保证 store 内 idx 唯一。
+- **D-2c-5 api_version**：v1 保持 `None`（chunker 默认）。从 frontmatter/路径推断属 v2。
+- **D-2c-6 gate 测试用真 embedder（#[ignore]）**：端到端 ingest→search 是 2c 核心价值，必须验真路径。但真 embedder 首次下载 ~66MB + embed 多 chunk 慢，标 `#[ignore]`（同 2a E3 模式），CI 单独触发。边界测试（非法 docset / 空目录）不触发 embedder load，快。
+- **D-2c-7 fixture 自包含**：测试用 tempdir 动态写 md 文件，不依赖外部 fixture 目录。
+- **D-2c-8 Cargo.toml 不改**：ingest 用现有依赖（std::fs + serde_json + chunker/embedder/store/manifest/cache/input 已有）。dispatch §8：仅 1a/2b 可改 Cargo.toml，2c 不在其中。
+- **D-2c-9 license 默认 "MIT"**：ingest_dir 锁定签名不含 license 参数，build_manifest 默认 `license="MIT"`（本地导入，用户自担许可责任，spec §11.4）。4d CLI 接线时加 `--license` 覆盖。CC-BY-4.0 文档需 attribution 非空 — v1 不处理，记 deferred。
+
+**Main 已核实的事实**:
+- `chunk_markdown(md, &ChunkConfig) -> Vec<Chunk>`（chunker.rs:90）；`Chunk` 字段见 chunker.rs:22-30；产出 `source_url=空`(L170)/`api_version=None`(L171)/`idx` per-file(L164)。
+- `Manifest` 7 struct（manifest.rs:3-47），serde derive `Serialize` → `serde_json::to_string_pretty(&m)` 直接序列化。`validate(&Manifest)` 校验 schema_version==1 + model 锁 + license 白名单（manifest.rs:59-94）；`parse_manifest(json)` 反序列化。
+- `Store::open` + `insert`（store.rs，2b 锁定）。`Store::open` 内部已调 `cache::db_path` + 建 FTS 索引；空表可 open + 查询返回空（2b test_open_empty_docset_creates_table 验证）。
+- `validate_docset(s)` 拒 `..` + 正则 `^[a-z0-9._-]{1,64}$`（input.rs:28）— 大写 docset 名也会被拒。
+- `cache::ensure_layout()` 门控 `CACHE_LAYOUT_VERSION`（cache.rs:42）。
+- embedder `Embedder::load()` 下载+校验 sha256（embedder.rs，2a）；`.embed(text) -> Vec<f32>` 512维（embedder.rs:123）。
+
+**TDD 步骤**:
+
+- [ ] **Step 1: 加 cache::manifest_path + embedder::provenance 导出 + 写失败测试**
+
+`src/cache.rs` 末尾加：
+```rust
+/// `<cache>/nowdocs/db/<docset>.manifest.json` — manifest alongside the lance table.
+pub fn manifest_path(docset: &str) -> PathBuf {
+    cache_root().join("db").join(format!("{docset}.manifest.json"))
+}
+```
+
+`src/embedder.rs`（在 `VECTOR_DIM` const 后）加：
+```rust
+/// Pinned provenance for manifest generation (model_id, revision, sha256).
+pub fn provenance() -> (&'static str, &'static str, &'static str) {
+    (DEFAULT_MODEL_ID, DEFAULT_REVISION, DEFAULT_SHA256)
+}
+```
+
+`tests/ingest_tests.rs`：
+```rust
+use nowdocs::cache;
+use nowdocs::embedder::Embedder;
+use nowdocs::ingest::ingest_dir;
+use nowdocs::manifest;
+use nowdocs::store::Store;
+use std::fs;
+
+#[test]
+#[ignore = "needs real embedder (~66MB download, ~30s)"]
+fn test_ingest_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    fs::write(dir.path().join("intro.md"), "# Intro\n\nGeneral setup notes.\n").unwrap();
+    fs::write(dir.path().join("api.md"),
+        "# API\n\n## Auth\n\nAuthentication uses zzzunique_ingest_token for bearer flow.\n").unwrap();
+
+    let stats = ingest_dir(dir.path(), "test_ingest").unwrap();
+    assert_eq!(stats.files, 2);
+    assert!(stats.chunks >= 2);
+
+    // manifest written + validates
+    let m = manifest::parse_manifest(&fs::read_to_string(cache::manifest_path("test_ingest")).unwrap()).unwrap();
+    manifest::validate(&m).unwrap();
+    assert_eq!(m.source.chunk_count, stats.chunks);
+    assert_eq!(m.embedder.model_id, "jinaai/jina-embeddings-v2-small-en");
+
+    // search recalls the unique-keyword chunk (real embed query vector + FTS BM25)
+    let emb = Embedder::load().unwrap();
+    let qv = emb.embed("zzzunique_ingest_token").unwrap();
+    let store = Store::open("test_ingest").unwrap();
+    let hits = store.hybrid_search(&qv, "zzzunique_ingest_token", 5).unwrap();
+    assert!(hits.iter().any(|h| h.text.contains("zzzunique_ingest_token")),
+        "unique-keyword chunk should be recalled");
+}
+```
+
+- [ ] **Step 2: 验证测试失败**
+
+Run: `cargo test --test ingest_tests > 2c-test.log 2>&1`（tail 看）
+Expected: 编译失败 — `unresolved module ingest` / `ingest_dir` 未定义。
+
+- [ ] **Step 3: 实现 ingest.rs 主体（ingest_dir 全流程）**
+
+`src/ingest.rs`：
+```rust
+//! Ingest pipeline: markdown directory -> chunks -> embeddings -> store + manifest.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+
+use crate::cache;
+use crate::chunker::{self, Chunk};
+use crate::embedder;
+use crate::input;
+use crate::manifest::{self, EmbedderSpec, LegalSpec, Manifest, RefreshSpec, RetrievalSpec, SourceSpec};
+use crate::store::Store;
+
+pub struct IngestStats {
+    pub files: u32,
+    pub chunks: u32,
+}
+
+/// Ingest a directory of markdown files into a docset store.
+pub fn ingest_dir(dir: &Path, docset: &str) -> Result<IngestStats> {
+    let docset = input::validate_docset(docset)?;
+    cache::ensure_layout()?;
+
+    // Collect chunks across all md files.
+    let mut chunks: Vec<Chunk> = Vec::new();
+    let mut files: u32 = 0;
+    for entry in walk_md(dir)? {
+        files += 1;
+        let md = std::fs::read_to_string(&entry)
+            .with_context(|| format!("read {}", entry.display()))?;
+        let mut file_chunks = chunker::chunk_markdown(&md, &chunker::default_config());
+        let rel = entry.strip_prefix(dir).unwrap_or(&entry).to_string_lossy().to_string();
+        for c in &mut file_chunks {
+            c.source_url = rel.clone();
+        }
+        chunks.extend(file_chunks);
+    }
+
+    // Reassign global idx (chunker's idx is per-file from 0).
+    for (i, c) in chunks.iter_mut().enumerate() {
+        c.idx = i as u32;
+    }
+
+    // Embed + insert. Empty dir skips embedder load but still opens (empty) store.
+    if !chunks.is_empty() {
+        let emb = embedder::Embedder::load()?;
+        let vectors: Vec<Vec<f32>> = chunks
+            .iter()
+            .map(|c| emb.embed(&c.text))
+            .collect::<Result<_>>()?;
+        let store = Store::open(&docset)?;
+        store.insert(&chunks, &vectors)?;
+    } else {
+        let _ = Store::open(&docset)?;
+    }
+
+    // Build + validate + write manifest.
+    let manifest = build_manifest(&docset, chunks.len() as u32);
+    manifest::validate(&manifest)?;
+    std::fs::write(cache::manifest_path(&docset), serde_json::to_string_pretty(&manifest)?)?;
+
+    Ok(IngestStats { files, chunks: chunks.len() as u32 })
+}
+
+/// Recursively collect `*.md` paths under `dir`, sorted for determinism.
+fn walk_md(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in std::fs::read_dir(&d)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().map_or(false, |e| e == "md") {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Build the v1 manifest with locked embedder provenance.
+fn build_manifest(docset: &str, chunk_count: u32) -> Manifest {
+    let (model_id, model_revision, model_sha256) = embedder::provenance();
+    Manifest {
+        docset: docset.to_string(),
+        doc_version: "1.0.0".to_string(),
+        nowdocs_schema_version: 1,
+        embedder: EmbedderSpec {
+            model_id: model_id.to_string(),
+            model_version: "jina-embeddings-v2-small-en".to_string(),
+            model_revision: model_revision.to_string(),
+            model_sha256: model_sha256.to_string(),
+            vector_dim: 512,
+            engine: "candle".to_string(),
+            dtype: "f16".to_string(),
+        },
+        retrieval: RetrievalSpec {
+            tokenizer: "default".to_string(),
+            chunk_size_tokens: 512,
+            window_tokens: 2048,
+        },
+        source: SourceSpec {
+            entry_url: String::new(),
+            source_url: String::new(),
+            scraped_at: String::new(),
+            chunk_count,
+        },
+        legal: LegalSpec {
+            license: "MIT".to_string(),
+            copyright_holder: String::new(),
+            attribution: String::new(),
+        },
+        refresh_strategy: RefreshSpec {
+            tier: "community".to_string(),
+            auto_days: 0,
+        },
+    }
+}
+```
+
+- [ ] **Step 4: 跑 #[ignore] 端到端测试验证通过**
+
+Run: `cargo test --test ingest_tests -- --ignored > 2c-test.log 2>&1`（tail 看；首次下模型 ~30s）
+Expected: `test_ingest_end_to_end ... ok`（manifest 落盘 + validate 过 + search 召回 unique-keyword chunk）。
+
+- [ ] **Step 5: 加边界测试 — 非法 docset + 空目录**
+
+`tests/ingest_tests.rs` 追加：
+```rust
+#[test]
+fn test_ingest_rejects_bad_docset() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+    fs::write(dir.path().join("a.md"), "# A\n\ntext\n").unwrap();
+    assert!(ingest_dir(dir.path(), "../bad").is_err());      // path traversal
+    assert!(ingest_dir(dir.path(), "BadDocset").is_err());  // uppercase
+}
+
+#[test]
+fn test_ingest_empty_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+    let stats = ingest_dir(dir.path(), "empty_ds").unwrap();
+    assert_eq!(stats.files, 0);
+    assert_eq!(stats.chunks, 0);
+    let m = manifest::parse_manifest(
+        &fs::read_to_string(cache::manifest_path("empty_ds")).unwrap()).unwrap();
+    manifest::validate(&m).unwrap();
+    assert_eq!(m.source.chunk_count, 0);
+}
+```
+
+Run: `cargo test --test ingest_tests -- --test-threads=1 > 2c-test.log 2>&1`（非 ignore 测试快，不 load embedder）
+Expected: `test_ingest_rejects_bad_docset ... ok` + `test_ingest_empty_dir ... ok`（空目录不 load embedder，建空表 + manifest chunk_count=0）。
+
+- [ ] **Step 6: lib.rs 注册 + cargo build/test 全绿**
+
+`src/lib.rs` 加 `pub mod ingest;`（在 store 行后）。
+
+Run: `cargo build > 2c-build.log 2>&1` + `cargo test --test ingest_tests -- --test-threads=1 > 2c-test.log 2>&1`
+Expected: build 全绿 + 非 ignore 测试全 PASS（#[ignore] 测试 skipped）。
+
+- [ ] **Step 7: commit + 打勾**
+
+`git add src/ingest.rs tests/ingest_tests.rs src/lib.rs src/cache.rs src/embedder.rs`，commit: `feat(ingest): md dir -> chunks -> embed -> store + manifest (2c)`。
+Edit plan 的 Task 2c 全部 `- [ ]` → `- [x]`（7 步）。
 
 ### Wave 3 — Retrieval + eval
 - **3a retrieval pipeline** (`src/retrieve.rs`): `search(docset, query, max_tokens, top_k)` → hybrid query + neighbor-window assembly (~2048 tokens, stop at `max_tokens`, set `truncated`) + `tokens_returned` via `count_tokens`. `docset` required (D12). Gate: returns ≤ max_tokens.

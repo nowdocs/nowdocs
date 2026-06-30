@@ -395,13 +395,54 @@ impl Store {
 > **依赖**：1c、2a、2b。**派给**：Rust 副手。
 
 ```
-【任务】Task 2c：md 目录→chunker→embedder→store.insert
-【plan】读 Wave 2「2c ingest」contract
-【spec】§5.1 ingest 路径
+【任务】Task 2c：md 目录 → chunker → embedder.embed → store.insert + manifest 落盘
+【前置】先读 AGENTS.md（项目铁律），再读 plan Wave 2「Task 2c 详细 TDD plan」（已展开 7 步 + 锁定签名 + 9 个设计决策 + API 事实）。严格按 plan 的 step 顺序 TDD。
+【spec】§A 方案 b（抓取外置，ingest 只接 md 目录）/ §6.2 D10（本地 ingest 走真 embedder）/ §6.10 legal 白名单（manifest validate 强校验）
 
-【专属契约】
-- 新建 src/ingest.rs：ingest_dir(dir,name)->Result，读 md→chunker::chunk_markdown→embedder.embed 每 chunk→store.insert；写 manifest。
-- 测试：ingest fixture 目录→search 返回期望 chunk。只改 src/ingest.rs + tests/ingest_tests.rs + fixture。
+【分支】Task 2b 已 ff 合回 feat/1a-cargo-skeleton @ b04e723（含 store.rs hybrid+FTS+f16 + .cargo/config.toml protoc pin + 本 2c plan 展开）。
+        从该分支拉：git switch -c feat/2c-ingest。基点已干净含 2b + 2c plan，无需确认。
+        **protoc 已就位**：.cargo/config.toml 已 pin PROTOC（~/.local/protoc35/bin/protoc v35.1），2b 已验证 lance 全链可编译。无需再装。
+
+【Main 已核实的事实——按此为准，勿重复踩坑】
+- **chunker 产出 Chunk 的三个缺口**（chunker.rs L164-175）：① `source_url = String::new()`（空）② `api_version = None` ③ `idx` per-file 从 0 起（跨文件冲突）。
+  → ingest_dir 必须：① 填 source_url（文件相对 dir 路径，`entry.strip_prefix(dir).unwrap_or(&entry).to_string_lossy()`）② api_version 保持 None（v1，D-2c-5）③ 收集所有文件 chunk 后**全局重编 idx = 0..N**（D-2c-4），保证 store 内 idx 唯一。
+- **manifest 无构造/序列化 API**：manifest.rs 只有 `parse_manifest(json)` + `validate(&Manifest)`。2c **手构 Manifest struct**（7 子 struct 全字段），serde 已 derive `Serialize` → `serde_json::to_string_pretty(&m)` 直接序列化落盘。落盘前 `manifest::validate(&m)?` 自校验。
+- **同名 EmbedderSpec 不同构**：embedder.rs 的 `EmbedderSpec`（3字段：model_id/model_revision/model_sha256）vs manifest.rs 的 `EmbedderSpec`（7字段）。**映射在 ingest.rs 做**（调 embedder::provenance() 拿 3 字段 + 补 model_version="jina-embeddings-v2-small-en"/vector_dim=512/engine="candle"/dtype="f16"），勿混淆两 struct。
+- **embedder DEFAULT_* 是私有 const**：embedder.rs 加 `pub fn provenance() -> (&'static str, &'static str, &'static str)` 返回 (DEFAULT_MODEL_ID, DEFAULT_REVISION, DEFAULT_SHA256)（D-2c-1，DRY）。只加 pub 导出，不改 2a 的 load/load_for/embed 逻辑。
+- **Store::open 空表可建**：2b test_open_empty_docset_creates_table 验证过——空目录 ingest 也调 Store::open 建空表 + FTS 索引，不报错。空目录**跳过 embedder load**（D-2c-6，快测试）。
+- **validate_docset 拒大写 + `..`**（input.rs L28）：`../bad` 和 `BadDocset` 都 Err。ingest_dir 第一步 validate，非法 docset 在 embedder load 前 bail（快测试不触发下载）。
+- **manifest validate 强校验 license**：`"MIT"` 通过白名单（attribution 可空）；`"CC-BY-4.0"` 要求 attribution 非空。2c build_manifest 默认 `license="MIT"`（D-2c-9，本地导入用户自担许可）。
+- **cache.rs 加 manifest_path**：`pub fn manifest_path(docset: &str) -> PathBuf { cache_root().join("db").join(format!("{docset}.manifest.json")) }`（与 `<docset>.lance` 平级，D-2c-2）。
+
+【锁定签名（不改）】
+pub struct IngestStats { pub files: u32, pub chunks: u32 }
+pub fn ingest_dir(dir: &std::path::Path, docset: &str) -> anyhow::Result<IngestStats>;
+
+【可改文件范围（仅 2c，AGENTS §4.5）】
+- Create: src/ingest.rs（主体，plan Step 3 有完整代码）
+- Create: tests/ingest_tests.rs（3 测试）
+- Modify: src/lib.rs（加 `pub mod ingest;` 在 store 行后）
+- Modify: src/cache.rs（加 `pub fn manifest_path` —— D-2c-2，只加函数不改现有）
+- Modify: src/embedder.rs（加 `pub fn provenance` —— D-2c-1，只加 pub 导出不改 2a 逻辑）
+  ↑ cache.rs / embedder.rs 是 1e/2a 的文件，2c 串行无并发冲突，加小导出安全。**只加函数，不改现有任何逻辑/签名。**
+
+【Cargo.toml 不改】（D-2c-8）
+ingest 用现有依赖（std::fs + serde_json + chunker/embedder/store/manifest/cache/input 全已就位）。dispatch §8：仅 1a/2b 可改 Cargo.toml，2c 不在其中。
+
+【测试（TDD：先写失败→验证失败→实现→验证通过→commit）——plan 7 步已列全】
+- test_ingest_end_to_end（**#[ignore]**，真 embedder ~66MB 下载）：tempdir 写 2 md（api.md 含 "zzzunique_ingest_token"），ingest_dir → 断言 stats.files==2 + chunks>=2；manifest 落盘 + parse_manifest + validate 过 + chunk_count 匹配 + model_id 锁定；Embedder::load embed 查询词 → Store::open → hybrid_search 召回含 unique-keyword 的 chunk。
+- test_ingest_rejects_bad_docset（快，不 load embedder）：`../bad` + `BadDocset` 都 Err。
+- test_ingest_empty_dir（快，不 load embedder）：空目录 → stats{0,0} + manifest chunk_count=0 + validate 过。
+测试用 tempdir + XDG_CACHE_HOME 隔离，`--test-threads=1`（set_var 全局态，同 2b）。
+
+【命令输出管控】cargo test --test ingest_tests > 2c-test.log 2>&1 后看 tail；#[ignore] 测试用 `-- --ignored` 单独跑（首次下模型 ~30s）。build 日志同理重定向。
+
+【完成后三件事（缺一不可）】
+1. 打勾：Edit plan 的 Task 2c 全部 `- [ ]` → `- [x]`（7 个 step）。
+2. spec 修订：仅「实现核实类」——ingest 实际 API 体验（如 chunker 缺口填充、manifest 手构+validate、同名 EmbedderSpec 映射）写进 spec 附录（§G 后或新 §I）。架构不变（ingest 是胶水层，所有决策已在 plan D-2c-1~9 拍定）。
+3. 报告：① task=2c ② commit sha ③ 测试结果（#[ignore] 端到端手跑通过 + 2 个快测试全绿 + cargo build 全链编译过）④ cache.rs/embedder.rs diff（manifest_path + provenance 两处加函数）⑤ Open Questions。报告完停下，不做 3a。
+
+【铁律】TDD；不擅自 push；子代理遇未明决策基于默认推进或列 Open Question（不交互提问）。
 ```
 
 ---
