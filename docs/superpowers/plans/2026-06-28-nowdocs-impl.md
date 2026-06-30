@@ -1431,7 +1431,7 @@ Edit plan 的 Task 3a 全部 `- [ ]` → `- [x]`（8 步）。
 ### Wave 5 — Distribution + governance
 - **5a cargo-binstall matrix** (5 targets): `aarch64/x86_64-apple-darwin`, `x86_64/aarch64-unknown-linux-musl`, `x86_64-pc-windows-msvc`. `candle-core default-features=false`.
 - **5b Homebrew tap**: unsigned formula (D9).
-- **5c CI rules** (`.github/workflows/`): manifest schema + model-version match + `legal.license` whitelist + `attribution` for CC-BY + registry-domain URL check + CI rebuild-from-text (D10) + golden eval gate. DCO check on PRs.
+- **5c CI rules** (`.github/workflows/`): manifest schema + model-version match + `legal.license` whitelist + `attribution` for CC-BY + registry-domain URL check + CI rebuild-from-text (D10) + golden eval gate. DCO check on PRs. **DONE**: `.github/workflows/ci.yml` (4 jobs), `scripts/ci-{check-manifest,no-vectors,check-dco}.sh`, `docs/THREAT_MODEL.md`, `tests/ci/`. 17/17 local tests pass. Golden eval gate deferred (tracks 01/3b wiring).
 - **5d seed crates**: Next.js(MIT) / React(CC-BY-4.0) / Vue(CC-BY-4.0) — verify license per §6.10 before publish; Astro(MIT) reserve.
 - **5e L1-L4 gates**: pre-commit (`fmt`+`clippy -D warnings`+`cargo-deny`+`cargo-audit`); pre-push (`cargo test`+`build --release`); CI (cross-build); weekly (`cargo udeps`+`cargo audit`).
 

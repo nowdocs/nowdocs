@@ -235,7 +235,7 @@ nowdocs 把任意第三方文档块喂给有 shell 权限的 agent——正是 C
 `manifest.json` 可注入恶意下载 URL。CI 必须对每个提交包强制：
 - 拒绝绝对路径 / `../` / 符号链接（解析到缓存根外）
 - 下载 URL **必须指向 `nowdocs-registry` 自己的 GitHub Releases 域**，拒绝任何外部 URL
-- **CI 重建表（D10 拍定）**：`share` 只发布**分块文本 + manifest + config**，CI 用固定标准模型重新 embed 出表——不发布 contributor 本地预构建向量。一石三鸟：① 消解原 spec §3.3"打包本地 LanceDB 目录（含向量）"与 CI 重建原则的矛盾 ② **关闭对抗性向量注入**（向量是不透明浮点，contributor 直发可伪造向量让恶意 chunk 命中特定查询、无法审计；CI 从可审计文本重算则投毒路径关死）③ 关闭模型版本漂移（contributor 用异版模型 → 垃圾 cosine）。附带：contributor 无需本地有模型即可贡献、文本包比向量包小。
+- **CI 重建表（D10 拍定）**：`share` 只发布**分块文本 + manifest + config**，CI 用固定标准模型重新 embed 出表——不发布 contributor 本地预构建向量。一石三鸟：① 消解原 spec §3.3"打包本地 LanceDB 目录（含向量）"与 CI 重建原则的矛盾 ② **关闭对抗性向量注入**（向量是不透明浮点，contributor 直发可伪造向量让恶意 chunk 命中特定查询、无法审计；CI 从可审计文本重算则投毒路径关死）③ 关闭模型版本漂移（contributor 用异版模型 → 垃圾 cosine）。附带：contributor 无需本地有模型即可贡献、文本包比向量包小。**威胁模型文档**：`docs/THREAT_MODEL.md`（Task 5c 产出）。
 - 拒绝 `next`/不稳定格式版本。FTS 索引约束 `use_tantivy=True` 拒绝项在 lancedb 0.30 已自动满足（旧 tantivy backend 移除，`Index::FTS` 只剩原生 Lance inverted index，无 `use_tantivy` 字段——见附录 §G）。
 - pin 嵌入器 `model_id + model_version + model_sha256`，不匹配拒绝
 - 发布这些 CI 规则作为威胁模型，contributor 事先知晓
@@ -307,14 +307,14 @@ candle 跑 jina-v2-small 是推断。pin 一个参考查询（如 "how to use cl
 **registry 是公开再分发**——能否把某库文档放进 registry，取决于**文档站本身的许可**，而非框架代码库许可（Tailwind 框架 MIT，但其文档站专有 → 这正是坑）。
 
 **铁律**：每个 doc crate 入 registry 前，逐个核实文档站许可并记入 `manifest.legal`（见 §5.3 schema）：
-- CI 校验 `license` ∈ 白名单（MIT / Apache-2.0 / CC-BY-4.0）+ `attribution` 非空（CC-BY 强制署名）；crate 内附 `LICENSE`/`NOTICES`。
+- CI 校验 `license` ∈ 白名单（MIT / Apache-2.0 / CC-BY-4.0）+ `attribution` 非空（CC-BY 强制署名）；crate 内附 `LICENSE`/`NOTICES`。**CI 强制执行**：`scripts/ci-check-manifest.sh`（Task 5c）。**威胁模型文档**：`docs/THREAT_MODEL.md`。
 - **首发 canonical 已核实**：Next.js `MIT`（vercel/next.js docs）/ React `CC-BY-4.0`（reactjs/react.dev，`LICENSE-DOCS.md`）/ Vue `CC-BY-4.0`（vuejs/docs，**图片内容除外**——nowdocs 只再分发文本/Markdown，不抓图片）。
 - **不入 registry**：Clerk（ToS §3 禁复制/下载/存储/传输 + §5 禁爬虫）、Tailwind（文档站"非开源许可、Tailwind Labs 知识产权"）。二者只能 `ingest` 本地用，绝不进 registry。
 - Astro(MIT) 作备选第四库。
 - `ingest`（本地导入）是通用能力，用户自担所用文档许可责任；私有文档从不触 registry（§11.4）。
 
 ### 6.11 A5 贡献治理 + 分发（D8 + D9，P0）
-- **贡献协议 = DCO（Developer Certificate of Origin）而非 CLA**（D8）：Rust 生态惯例；CLA 对第三方文档内容无效、给假安全感。contributor PR 须 `Signed-off-by`。DCO 声明 contributor 对所提交文档有再分发权（对齐 §6.10 许可闸门）。
+- **贡献协议 = DCO（Developer Certificate of Origin）而非 CLA**（D8）：Rust 生态惯例；CLA 对第三方文档内容无效、给假安全感。contributor PR 须 `Signed-off-by`。DCO 声明 contributor 对所提交文档有再分发权（对齐 §6.10 许可闸门）。**CI 强制执行**：`scripts/ci-check-dco.sh`（Task 5c）。
 - **代码签名 = 不签名（D9）**：cargo-binstall + Homebrew 无签名分发（ripgrep / fd / uv / ruff 社区常态，CLI 不签名不影响可用性）。
   - 理由：① 零成本 ② **避开 F-1/OPT 签证风险**——需商业实体验证的签名证书（Windows EV / Azure Trusted Signing）可能被读成"经营商业实体"，触及 F-1 红线；macOS 个人 Apple 账号($99)是灰色地带，未来若 nowdocs 商业化仍模糊。
   - 将来要正式签名安装包（GUI `.app`/`.dmg`/`.pkg`）→ **先咨询移民律师**再动。
