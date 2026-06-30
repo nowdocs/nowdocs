@@ -453,13 +453,52 @@ ingest 用现有依赖（std::fs + serde_json + chunker/embedder/store/manifest/
 > **依赖**：2b、1c、1d。**派给**：Rust 主力 / Designer（窗口 UX）。
 
 ```
-【任务】Task 3a：search(docset,query,max_tokens,top_k)->结果（hybrid+邻窗口+token 预算）
-【plan】读 Wave 3「3a retrieval pipeline」contract
-【spec】§5.4 max_tokens vs 窗口、D12 docset 必填
+【任务】Task 3a：search(docset,query,max_tokens,top_k)->SearchResult（hybrid+邻窗口+token 预算）
+【前置】先读 AGENTS.md（项目铁律），再读 plan Wave 3「Task 3a: Retrieval Pipeline」（已展开 8 步 TDD + 6 个设计决策 + API 事实）。严格按 plan 的 step 顺序 TDD。
+【spec】§5.4 max_tokens vs 窗口、D12 docset 必填、§6.5 检索流程
 
-【专属契约】
-- 新建 src/retrieve.rs：search(docset,query,max_tokens,top_k)->SearchResult。hybrid 查询→取 top_k chunk→拼邻窗口（~2048 token）→按 max_tokens 预算迭代填充，触上限停并置 truncated；返回 tokens_returned（用 count_tokens）。docset 必填（D12）。
-- 测试：返回 token 数 ≤ max_tokens；truncated 正确置位。只改 src/retrieve.rs + tests/retrieve_tests.rs。
+【分支】Task 2c 已 ff 合回 feat/1a-cargo-skeleton @ 93d7497（含 ingest.rs + manifest 落盘 + 2c plan 勾选 + 3a plan 展开）。
+        从该分支拉：git switch -c feat/3a-retrieve。基点已干净，无需确认。
+
+【Main 已核实的事实——按此为准，勿重复踩坑】
+- **search 必须读 manifest 并从中构造 embedder spec**：2c 把 manifest 写到 cache::manifest_path(docset)。search 第一步 `std::fs::read_to_string(cache::manifest_path(&docset))` → `manifest::parse_manifest` → `manifest::validate`。然后用 `manifest.embedder` 的 model_id/model_revision/model_sha256 构造 `embedder::EmbedderSpec`（注意字段名：embedder.rs 的 EmbedderSpec 是 {model_id, model_revision, model_sha256}），调用 `Embedder::load_for(&spec)`。这样查询侧模型版本与 ingest 时锁定的一致。
+- **相邻窗口定义**：对每个 hybrid hit 的 `chunk_idx`，取自身及 `idx-1`、`idx+1`（边界 `[0, chunk_count)` 内）。去重后按 `chunk_idx` 升序组装，保证上下文连续。
+- **fetch_by_idx 必须加在 Store 上**：lancedb 0.30 scalar filter API 为 `table.query().only_if("chunk_idx IN (1,2,3)").execute()`，返回 `SendableRecordBatchStream`。请勿在 retrieve.rs 里直接操作 lancedb runtime/conn；在 `src/store.rs` 加 `pub fn fetch_by_idx(&self, ids: &[u32]) -> Result<Vec<SearchHit>>`，让 retrieve.rs 只调 `store.fetch_by_idx(&window_ids)`。
+- **max_tokens 截断语义**：`resolve_max_tokens(None|Some(0)) -> 4000`，`resolve_top_k(None) -> 5` 且已 clamp 到 [1,20]。从排序后的 window chunks 开始累加 `count_tokens(text)`，下一个 chunk 会超预算则停止并设 `truncated=true`；否则 `truncated=false`。`tokens_returned` 是实际返回的 token 总和，保证 ≤ max_tokens。空结果返回 `{chunks:[], tokens_returned:0, truncated:false}`。
+- **返回类型锁定**：
+  `pub struct SearchResult { pub chunks: Vec<ResultChunk>, pub tokens_returned: u32, pub truncated: bool }`
+  `pub struct ResultChunk { pub chunk_idx: u32, pub heading_path: String, pub source_url: String, pub api_version: Option<String>, pub chunk_type: ChunkType, pub text: String }`
+- **非法输入在 embedder load 前 bail**：`validate_docset` 拒 `../bad` / `BadDocset`；`validate_query` 拒空串 / >4096 字符。这些测试不触发模型下载。
+- **Store::open 会复用/创建空表**：2b 保证。search 时若 docset 无 chunk（chunk_count=0）或 hybrid_search 无 hit，直接返回空结果，不报错。
+- **测试隔离**：端到端测试用 tempdir + `unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) }`；`--test-threads=1`（set_var 全局态）。
+
+【锁定签名（不改）】
+pub fn search(docset: &str, query: &str, max_tokens: Option<u32>, top_k: Option<u32>) -> anyhow::Result<SearchResult>;
+
+【可改文件范围（仅 3a，AGENTS §4.5）】
+- Create: src/retrieve.rs（主体，plan Step 3/5 有完整代码）
+- Create: tests/retrieve_tests.rs（3 测试：smoke / invalid inputs / end-to-end #[ignore]）
+- Modify: src/lib.rs（加 `pub mod retrieve;` 在 store/ingest 行后）
+- Modify: src/store.rs（加 `pub fn fetch_by_idx` —— 只加函数，不改现有 hybrid_search/insert/open 逻辑）
+  ↑ store.rs 是 2b 的文件，3a 串行无并发冲突，加小导出安全。
+
+【Cargo.toml 不改】（D-3a-7）
+retrieve 用现有依赖（anyhow + chunker/embedder/store/manifest/cache/input/token 全已就位）。dispatch §8：仅 1a/2b 可改 Cargo.toml，3a 不在其中。
+
+【测试（TDD：先写失败→验证失败→实现→验证通过→commit）——plan 8 步已列全】
+- test_search_smoke（快，编译检查）：black_box 使用 ResultChunk + SearchResult，验证 public API 存在。
+- test_search_rejects_invalid_inputs（快，不 load embedder）：`../bad`、空 query 都 Err。
+- test_search_end_to_end（**#[ignore]**，真 embedder ~66MB 下载）：tempdir 写 2 md（api.md 含 "zzzretrieve_xyz"），ingest_dir → search("retrieve_e2e", "zzzretrieve_xyz", Some(4000), Some(5))；断言返回非空、至少一个 chunk 含 unique keyword、tokens_returned ≤ 4000、chunks 按 chunk_idx 升序。
+- 额外手动验证截断：构造总 token > 100 的 docset，search(..., Some(50), Some(5)) 断言 truncated==true 且 tokens_returned ≤ 50（可写进测试或手跑，不强求 commit 入 fast suite）。
+
+【命令输出管控】cargo test --test retrieve_tests > 3a-test.log 2>&1 后看 tail；#[ignore] 测试用 `-- --ignored --test-threads=1` 单独跑（首次下模型 ~30s）。build 日志同理重定向。
+
+【完成后三件事（缺一不可）】
+1. 打勾：Edit plan 的 Task 3a 全部 `- [ ]` → `- [x]`（8 个 step）。
+2. spec 修订：仅「实现核实类」——fetch_by_idx  scalar filter API、manifest 驱动 embedder 版本锁定、相邻窗口语义写进 spec 附录（§G/I 后或新 §J）。架构不变（所有决策已在 plan D-3a-1~6 拍定）。
+3. 报告：① task=3a ② commit sha ③ 测试结果（#[ignore] 端到端手跑通过 + 2 个快测试全绿 + cargo build 全链编译过）④ store.rs diff（fetch_by_idx 一处加函数）⑤ Open Questions。报告完停下，不做 3b。
+
+【铁律】TDD；不擅自 push；子代理遇未明决策基于默认推进或列 Open Question（不交互提问）。
 ```
 
 ### Task 3b：golden eval
@@ -628,8 +667,8 @@ ingest 用现有依赖（std::fs + serde_json + chunker/embedder/store/manifest/
 | 1h | 1 | ⬜ 待派 | — | — | |
 | 2a | 2 | ⬜ 待派 | — | — | |
 | 2b | 2 | ⬜ 待派 | — | — | |
-| 2c | 2 | ⬜ 待派 | — | — | |
-| 3a | 3 | ⬜ 待派 | — | — | |
+| 2c | 2 | ✅ 完成 | 622bc22 | mimo | ingest + manifest |
+| 3a | 3 | 📝 待派（plan+prompt ready） | — | — | 基点 feat/1a @ 93d7497 |
 | 3b | 3 | ⬜ 待派 | — | — | |
 | 4b | 4 | ⬜ 待派 | — | — | |
 | 4c | 4 | ⬜ 待派 | — | — | |
