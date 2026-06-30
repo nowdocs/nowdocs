@@ -127,11 +127,11 @@ fn tools_call_search_returns_structured_error_not_crash() {
         "jsonrpc":"2.0","id":2,"method":"tools/call",
         "params":{"name":"nowdocs_search","arguments":{"query":"how to use middleware","docset":"nextjs"}}
     }));
-    // Handler is not wired in Wave 1 — must be a structured JSON-RPC error,
-    // never a crash / dropped connection.
+    // Search is wired (Wave 4) but docset doesn't exist — must be a structured
+    // JSON-RPC error, never a crash / dropped connection.
     assert!(resp.get("error").is_some(), "expected error result, got: {}", resp);
     let code = resp["error"]["code"].as_i64().expect("error code");
-    assert!(code == -32601, "expected -32601 not-implemented, got {}", code);
+    assert!(code == -32602, "expected -32602 search-failed, got {}", code);
 
     // Server must still be alive (not crashed).
     let alive = s.round_trip(&serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/list"}));
