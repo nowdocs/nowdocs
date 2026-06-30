@@ -34,6 +34,11 @@ pub fn model_path(model_id: &str) -> PathBuf {
     cache_root().join("models").join(model_id)
 }
 
+/// `<cache>/nowdocs/db/<docset>.manifest.json` — manifest alongside the lance table.
+pub fn manifest_path(docset: &str) -> PathBuf {
+    cache_root().join("db").join(format!("{docset}.manifest.json"))
+}
+
 /// Create the cache tree if absent and gate on the layout version.
 ///
 /// - First run (no `.layout_version`): create `db/` + `models/`, write version.

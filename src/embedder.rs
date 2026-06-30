@@ -12,6 +12,11 @@ const DEFAULT_REVISION: &str = "44e7d1d6caec8c883c2d4b207588504d519788d0";
 const DEFAULT_SHA256: &str = "c9a9a7ec012d01efd780474fbb65e25917f3a2aebdff84b5f87daa00f7e90b27";
 const VECTOR_DIM: usize = 512;
 
+/// Pinned provenance for manifest generation (model_id, revision, sha256).
+pub fn provenance() -> (&'static str, &'static str, &'static str) {
+    (DEFAULT_MODEL_ID, DEFAULT_REVISION, DEFAULT_SHA256)
+}
+
 /// Spec for loading an embedder with pinned provenance.
 pub struct EmbedderSpec {
     pub model_id: String,
