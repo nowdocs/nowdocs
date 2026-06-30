@@ -1,0 +1,270 @@
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use arrow_array::{
+    FixedSizeListArray, Float16Array, RecordBatch, StringArray, UInt32Array,
+};
+use arrow_schema::{DataType, Field, Schema};
+use futures::TryStreamExt;
+use half::f16;
+use lance_arrow::FixedSizeListArrayExt;
+use lancedb::index::Index;
+use lancedb::index::scalar::{FtsIndexBuilder, FullTextSearchQuery};
+use lancedb::query::{QueryBase, QueryExecutionOptions};
+use lancedb::Session;
+
+use crate::cache;
+use crate::chunker::{Chunk, ChunkType};
+
+pub struct SearchHit {
+    pub score: f32,
+    pub chunk_idx: u32,
+    pub heading_path: String,
+    pub source_url: String,
+    pub api_version: Option<String>,
+    pub chunk_type: ChunkType,
+    pub text: String,
+}
+
+pub struct Store {
+    #[allow(dead_code)]
+    docset: String,
+    conn: lancedb::Connection,
+    runtime: tokio::runtime::Runtime,
+    table_name: String,
+}
+
+const TABLE_NAME: &str = "chunks";
+const VECTOR_DIM: usize = 512;
+
+impl Store {
+    pub fn open(docset: &str) -> Result<Self> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("failed to build tokio runtime")?;
+
+        let db_path = cache::db_path(docset);
+        let db_path_str = db_path.to_string_lossy().to_string();
+
+        // Shared session for LRU + metadata cache (spec §6.5 C1).
+        let session = Arc::new(Session::new(256, 256, Default::default()));
+
+        let conn = runtime
+            .block_on(
+                lancedb::connect(&db_path_str)
+                    .session(session)
+                    .execute(),
+            )
+            .context("failed to connect to lancedb")?;
+
+        let table_name = TABLE_NAME.to_string();
+
+        // Try to open existing table; if not found, create with schema + FTS index.
+        let exists = runtime.block_on(conn.open_table(&table_name).execute());
+        if exists.is_err() {
+            let schema = table_schema();
+            runtime
+                .block_on(conn.create_empty_table(&table_name, schema).execute())
+                .context("failed to create table")?;
+
+            // Build FTS index on "text" column.
+            let table = runtime
+                .block_on(conn.open_table(&table_name).execute())
+                .context("failed to open newly created table")?;
+            runtime
+                .block_on(
+                    table
+                        .create_index(&["text"], Index::FTS(FtsIndexBuilder::default()))
+                        .execute(),
+                )
+                .context("failed to create FTS index")?;
+        }
+
+        Ok(Self {
+            docset: docset.to_string(),
+            conn,
+            runtime,
+            table_name,
+        })
+    }
+
+    pub fn insert(&self, chunks: &[Chunk], vectors: &[Vec<f32>]) -> Result<()> {
+        if chunks.len() != vectors.len() {
+            anyhow::bail!(
+                "chunks ({}) and vectors ({}) length mismatch",
+                chunks.len(),
+                vectors.len()
+            );
+        }
+
+        if chunks.is_empty() {
+            return Ok(());
+        }
+
+        let batch = chunks_to_batch(chunks, vectors)?;
+        let table = self
+            .runtime
+            .block_on(self.conn.open_table(&self.table_name).execute())
+            .context("failed to open table for insert")?;
+
+        self.runtime
+            .block_on(table.add(vec![batch]).execute())
+            .context("failed to insert rows")?;
+
+        Ok(())
+    }
+
+    pub fn hybrid_search(
+        &self,
+        query_vector: &[f32],
+        query_text: &str,
+        top_k: usize,
+    ) -> Result<Vec<SearchHit>> {
+        let table = self
+            .runtime
+            .block_on(self.conn.open_table(&self.table_name).execute())
+            .context("failed to open table for search")?;
+
+        let qv_f16: Vec<f16> = query_vector.iter().map(|&v| f16::from_f32(v)).collect();
+        let fts_query = FullTextSearchQuery::new(query_text.to_string());
+
+        let batches: Vec<RecordBatch> = self.runtime.block_on(async {
+            let stream = table
+                .query()
+                .full_text_search(fts_query)
+                .nearest_to(&*qv_f16)?
+                .rerank(Arc::new(lancedb::rerankers::rrf::RRFReranker::new(1.0)))
+                .execute_hybrid(QueryExecutionOptions::default())
+                .await
+                .context("hybrid search execution failed")?;
+            stream
+                .try_collect::<Vec<RecordBatch>>()
+                .await
+                .context("failed to collect hybrid search results")
+        })?;
+
+        let mut hits = Vec::new();
+        for batch in &batches {
+            // Empty table returns batches without data columns.
+            if batch.column_by_name("chunk_idx").is_none() {
+                continue;
+            }
+
+            let score_col = batch
+                .column_by_name("_score")
+                .and_then(|c| c.as_any().downcast_ref::<arrow_array::Float32Array>())
+                .context("missing _score column")?;
+            let idx_col = batch
+                .column_by_name("chunk_idx")
+                .and_then(|c| c.as_any().downcast_ref::<UInt32Array>())
+                .context("missing chunk_idx column")?;
+            let heading_col = batch
+                .column_by_name("heading_path")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .context("missing heading_path column")?;
+            let url_col = batch
+                .column_by_name("source_url")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .context("missing source_url column")?;
+            let api_col = batch
+                .column_by_name("api_version")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+            let ctype_col = batch
+                .column_by_name("chunk_type")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .context("missing chunk_type column")?;
+            let text_col = batch
+                .column_by_name("text")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .context("missing text column")?;
+
+            for row in 0..batch.num_rows() {
+                let chunk_type = match ctype_col.value(row) {
+                    "Code" => ChunkType::Code,
+                    _ => ChunkType::Info,
+                };
+                hits.push(SearchHit {
+                    score: score_col.value(row),
+                    chunk_idx: idx_col.value(row),
+                    heading_path: heading_col.value(row).to_string(),
+                    source_url: url_col.value(row).to_string(),
+                    api_version: api_col.map(|c| c.value(row).to_string()),
+                    chunk_type,
+                    text: text_col.value(row).to_string(),
+                });
+            }
+        }
+
+        // Sort by score descending, take top_k.
+        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.truncate(top_k);
+        Ok(hits)
+    }
+}
+
+/// Build the table schema: id, vector(FixedSizeList<f16,512>), heading_path,
+/// source_url, api_version, chunk_type, chunk_idx, text.
+fn table_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("id", DataType::UInt32, false),
+        Field::new(
+            "vector",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float16, true)),
+                VECTOR_DIM as i32,
+            ),
+            false,
+        ),
+        Field::new("heading_path", DataType::Utf8, false),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("api_version", DataType::Utf8, true),
+        Field::new("chunk_type", DataType::Utf8, false),
+        Field::new("chunk_idx", DataType::UInt32, false),
+        Field::new("text", DataType::Utf8, false),
+    ]))
+}
+
+/// Convert chunks + f32 vectors into an arrow RecordBatch (vector column as f16).
+fn chunks_to_batch(chunks: &[Chunk], vectors: &[Vec<f32>]) -> Result<RecordBatch> {
+    let n = chunks.len();
+
+    let ids: UInt32Array = (0..n as u32).collect();
+    let heading_paths = StringArray::from(chunks.iter().map(|c| c.heading_path.as_str()).collect::<Vec<_>>());
+    let source_urls = StringArray::from(chunks.iter().map(|c| c.source_url.as_str()).collect::<Vec<_>>());
+    let api_versions = StringArray::from(chunks.iter().map(|c| c.api_version.as_deref()).collect::<Vec<_>>());
+    let chunk_types = StringArray::from(
+        chunks
+            .iter()
+            .map(|c| match c.chunk_type {
+                ChunkType::Code => "Code",
+                ChunkType::Info => "Info",
+            })
+            .collect::<Vec<_>>(),
+    );
+    let chunk_idxs: UInt32Array = chunks.iter().map(|c| c.idx).collect();
+    let texts = StringArray::from(chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>());
+
+    // Build FixedSizeList<f16, 512> from f32 vectors.
+    let flat_f16: Vec<f16> = vectors
+        .iter()
+        .flat_map(|v| v.iter().map(|&x| f16::from_f32(x)))
+        .collect();
+    let values = Float16Array::from(flat_f16);
+    let vector_array = FixedSizeListArray::try_new_from_values(values, VECTOR_DIM as i32)?;
+
+    let batch = RecordBatch::try_new(
+        table_schema(),
+        vec![
+            Arc::new(ids),
+            Arc::new(vector_array),
+            Arc::new(heading_paths),
+            Arc::new(source_urls),
+            Arc::new(api_versions),
+            Arc::new(chunk_types),
+            Arc::new(chunk_idxs),
+            Arc::new(texts),
+        ],
+    )?;
+    Ok(batch)
+}

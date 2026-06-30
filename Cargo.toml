@@ -28,8 +28,15 @@ candle-nn = "0.11"
 candle-transformers = "0.11"
 tokenizers = "0.23"
 hf-hub = "0.4"
-# store (Wave 2 — stubbed in 1a; only the store task may touch this line later)
+# store (Wave 2 — only task 2b may touch these lines, AGENTS §4.5)
 lancedb = "0.30"
+tokio = { version = "1", features = ["rt", "macros", "fs"] }
+arrow = "58"
+arrow-array = "58"
+arrow-schema = "58"
+half = "2"
+futures = "0.3"
+lance-arrow = "7"
 
 [dev-dependencies]
 tempfile = "3.10"
