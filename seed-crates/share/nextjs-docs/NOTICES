@@ -1,0 +1,12 @@
+Next.js Documentation
+=====================
+
+Source: https://github.com/vercel/next.js (docs/ directory)
+Upstream license: MIT (Copyright (c) 2024 Vercel, Inc.)
+Documentation site: https://nextjs.org/docs
+
+This docset contains text excerpts from the Next.js documentation,
+reformatted and chunked for local hybrid retrieval. Image content has
+been excluded from redistribution.
+
+nowdocs is a community project and is not affiliated with Vercel, Inc.

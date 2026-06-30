@@ -1,0 +1,34 @@
+{
+  "docset": "react-docs",
+  "doc_version": "1.0.0",
+  "nowdocs_schema_version": 1,
+  "embedder": {
+    "model_id": "jinaai/jina-embeddings-v2-small-en",
+    "model_version": "jina-embeddings-v2-small-en",
+    "model_revision": "44e7d1d6caec8c883c2d4b207588504d519788d0",
+    "model_sha256": "c9a9a7ec012d01efd780474fbb65e25917f3a2aebdff84b5f87daa00f7e90b27",
+    "vector_dim": 512,
+    "engine": "candle",
+    "dtype": "f16"
+  },
+  "retrieval": {
+    "tokenizer": "default",
+    "chunk_size_tokens": 512,
+    "window_tokens": 2048
+  },
+  "source": {
+    "entry_url": "https://react.dev/learn",
+    "source_url": "https://github.com/reactjs/react.dev",
+    "scraped_at": "2026-06-30",
+    "chunk_count": 4360
+  },
+  "legal": {
+    "license": "CC-BY-4.0",
+    "copyright_holder": "Meta Platforms, Inc. and React documentation contributors",
+    "attribution": "React documentation by Meta Platforms, Inc. and React documentation contributors, licensed under CC BY 4.0. Source: https://github.com/reactjs/react.dev (LICENSE-DOCS.md)."
+  },
+  "refresh_strategy": {
+    "tier": "community",
+    "auto_days": 0
+  }
+}

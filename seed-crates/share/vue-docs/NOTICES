@@ -1,0 +1,37 @@
+Vue.js Documentation
+====================
+
+Source: https://github.com/vuejs/docs
+Upstream license: Creative Commons Attribution 4.0 International (CC BY 4.0),
+                  image content EXCLUDED (see upstream LICENSE)
+Documentation site: https://vuejs.org
+
+This docset contains text excerpts from the Vue.js documentation,
+reformatted and chunked for local hybrid retrieval. Per the upstream
+license, image content is excluded from redistribution — only text and
+code samples are included in this crate.
+
+Attribution
+-----------
+Vue documentation by Yuxi (Evan) You and the Vue documentation
+contributors, licensed under CC BY 4.0.
+
+The full license text is available in the LICENSE file accompanying this
+docset and at: https://creativecommons.org/licenses/by/4.0/legalcode
+
+When redistributing or displaying this content, you must:
+  - Provide attribution to "Yuxi (Evan) You and Vue documentation
+    contributors" (or the user-supplied manifest legal.attribution).
+  - Indicate any changes made.
+  - Not apply legal terms or technological measures that restrict others
+    from doing anything the license permits.
+
+Image Exclusion Clause
+----------------------
+Per the upstream LICENSE in vuejs/docs: "The contents of this repository,
+except for all image files, are licensed under CC BY 4.0. Images in this
+repository retain the copyright and licensing terms of their respective
+authors and owners." This nowdocs crate respects that exclusion — no
+image files are bundled, only text and code excerpts.
+
+nowdocs is a community project and is not affiliated with Yuxi (Evan) You.

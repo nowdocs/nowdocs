@@ -35,3 +35,8 @@ secrets/
 .claude/worktrees/
 .worktrees/
 implementation/worktrees/
+
+# 种子 crate 工作区 — 临时 cloned repos + 调试日志不入库
+seed-crates/tmp/*-docs/
+seed-crates/tmp/ingest-*.log
+seed-crates/tmp/share-*.log

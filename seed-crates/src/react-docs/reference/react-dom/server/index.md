@@ -1,0 +1,32 @@
+---
+title: Server React DOM APIs
+---
+
+---
+
+## Server APIs for Web Streams 
+
+These methods are only available in the environments with [Web Streams](https://developer.mozilla.org/en-US/docs/Web/API/Streams_API), which includes browsers, Deno, and some modern edge runtimes:
+
+* [`renderToReadableStream`](/reference/react-dom/server/renderToReadableStream) renders a React tree to a [Readable Web Stream.](https://developer.mozilla.org/en-US/docs/Web/API/ReadableStream)
+* [`resume`](/reference/react-dom/server/renderToPipeableStream) resumes [`prerender`](/reference/react-dom/static/prerender) to a [Readable Web Stream](https://developer.mozilla.org/en-US/docs/Web/API/ReadableStream).
+
+---
+
+## Server APIs for Node.js Streams 
+
+These methods are only available in the environments with [Node.js Streams:](https://nodejs.org/api/stream.html)
+
+* [`renderToPipeableStream`](/reference/react-dom/server/renderToPipeableStream) renders a React tree to a pipeable [Node.js Stream.](https://nodejs.org/api/stream.html)
+* [`resumeToPipeableStream`](/reference/react-dom/server/renderToPipeableStream) resumes [`prerenderToNodeStream`](/reference/react-dom/static/prerenderToNodeStream) to a pipeable [Node.js Stream.](https://nodejs.org/api/stream.html)
+
+---
+
+## Legacy Server APIs for non-streaming environments 
+
+These methods can be used in the environments that don't support streams:
+
+* [`renderToString`](/reference/react-dom/server/renderToString) renders a React tree to a string.
+* [`renderToStaticMarkup`](/reference/react-dom/server/renderToStaticMarkup) renders a non-interactive React tree to a string.
+
+They have limited functionality compared to the streaming APIs.
