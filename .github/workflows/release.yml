@@ -64,7 +64,9 @@ jobs:
         shell: bash
         run: |
           echo "Verifying static linking via ldd (should report 'not a dynamic executable')..."
-          ldd target/${{ matrix.target }}/release/nowdocs
+          # ldd exits non-zero on a correctly static binary; guard with || true
+          # so `set -e` doesn't abort the step before the grep check below.
+          ldd target/${{ matrix.target }}/release/nowdocs || true
           # Verify the binary is statically linked
           if ldd target/${{ matrix.target }}/release/nowdocs 2>&1 | grep -q "not a dynamic executable"; then
             echo "OK: Binary is statically linked"

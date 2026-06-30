@@ -33,3 +33,5 @@ secrets/
 
 # 子代理隔离 worktree（临时，勿入库）
 .claude/worktrees/
+.worktrees/
+implementation/worktrees/

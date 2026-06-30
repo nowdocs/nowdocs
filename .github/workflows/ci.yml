@@ -79,7 +79,7 @@ jobs:
       - name: Cargo build
         run: cargo build 2>&1 | tail -5
       - name: Cargo test
-        run: cargo test --test-threads=1 2>&1 | tail -20
+        run: cargo test -- --test-threads=1 2>&1 | tail -20
 
   # --- Golden eval gate (deferred: depends on 01/3b eval integration) ---
   # TODO(5c): uncomment when evaluate subcommand is wired into the binary.

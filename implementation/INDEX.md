@@ -14,7 +14,7 @@
 4. **agent 汇报后**：编排者（你/Main）回填下方进度看板的 commit sha + 状态，并把该块分支合回集成分支 `feat/4-wave-assembly-stubs`。
 5. **agent 不写本看板**（避免并发表冲突）；agent 只打勾它自己 plan 里的 step。
 
-**集成分支**：`feat/4-wave-assembly-stubs` @ `b159784`（含全部 W0/W1/W2 + 3a + **已合入 3b/4bc/4efg**）。所有剩余工作块从这里拉分支。组合态已验证：`cargo build --all-targets` ✅ + `cargo test --test-threads=1` ✅（全 suite 0 failed）。
+**集成分支**：`feat/4-wave-assembly-stubs` @ `ba372c4`（含全部 W0/W1/W2 + 3a + 已合入 **3b/4bc/4efg/4d/5a/5c/5e**）。所有剩余工作块从这里拉分支。组合态已验证：`cargo build --all-targets` ✅ + `cargo test --test-threads=1` ✅（全 suite 0 failed）。
 > ⚠️ 本机无 rustfmt/clippy（源码装 Rust 无 rustup），fmt/clippy 只能在 CI 跑；pre-push hook 默认并行跑 registry 测试会 flake，须 `--test-threads=1`。
 
 ---
@@ -40,25 +40,28 @@
 | 3b | golden eval + recall@5/MRR 门禁（合入 `c35ecaa`） | `f65dc0e` |
 | 4b+4c | nowdocs_search + nowdocs_list 工具（合入 `1a1ba6b`） | `72bc53a` |
 | 4e+4f+4g | registry install/share/update/uninstall（合入 `b159784`） | `35a4e65` |
+| 4d | CLI subcommand 真实接线（合入 `7afe9d1`） | `41aa874` |
+| 5a | cargo-binstall 矩阵 + release workflow（合入 `a7314aa`） | `e71fede` |
+| 5c | CI 安全闸门 + 威胁模型（合入 `8474f8c`） | `2f62578` |
+| 5e | L1-L4 质量门禁（合入 `785d031`） | `88292f7` |
 
 ---
 
-## 2. 分发就绪表（剩余 9 块）
+## 2. 分发就绪表（剩余 3 块）
 
 | # | 块 | Task | 依赖（均已满足？） | 可并行？ | 状态 |
 |---|---|---|---|---|---|
 | 01 | golden eval | 3b | 3a ✅ | — | ✅ 已合入 |
 | 02 | MCP tools | 4b+4c | 3a ✅ 1f ✅ 1g ✅ 1h ✅ 1e ✅ | — | ✅ 已合入 |
 | 03 | registry 生命周期 | 4e+4f+4g | 1b ✅ 1e ✅ 1c ✅ 2b ✅ | — | ✅ 已合入 |
-| 04 | CLI 集成 | 4d | **02 ✅、03 ✅**（接线点） | — | ✅ **可派**（已解锁）|
-| 05 | binstall 矩阵 | 5a | 1a ✅ | 与 06-09 并行 | ✅ 可派 |
-| 06 | Homebrew tap | 5b | 5a（产物 URL） | 软依赖 05 | ⚠ 建议等 05 |
-| 07 | CI 安全闸门 | 5c | 1b ✅ 3b ✅（golden 门禁） | 独立 | ✅ 可派 |
-| 08 | 种子 crate | 5d | 2c ✅ 07（CI 校验后发布） | 软依赖 07 | ⚠ 建议等 07 |
-| 09 | L1-L4 门禁 | 5e | 1a ✅ | 与 05-08 并行 | ✅ 可派 |
+| 04 | CLI 集成 | 4d | 02 ✅ 03 ✅ | — | ✅ 已合入 |
+| 05 | binstall 矩阵 | 5a | 1a ✅ | — | ✅ 已合入 |
+| 06 | Homebrew tap | 5b | 5a ✅（产物 URL） | 独立 | ✅ **可派** |
+| 07 | CI 安全闸门 | 5c | 1b ✅ 3b ✅ | — | ✅ 已合入 |
+| 08 | 种子 crate | 5d | 2c ✅ 5c ✅（CI 校验就位） | 独立 | ✅ **可派** |
+| 09 | L1-L4 门禁 | 5e | 1a ✅ | — | ✅ 已合入 |
 
-**现在能立刻并行**：`04`（CLI 集成，已解锁）/ `05`（binstall）/ `07`（CI 闸门，3b 已就位）/ `09`（门禁）—— 互不碰文件，各自独立 worktree。
-06 软依赖 05、08 软依赖 07。
+**现在能立刻并行**：`06`（Homebrew tap，5a 已合入）/ `08`（种子 crate，5c 已合入）—— 互不碰文件，各自独立 worktree。
 
 ---
 
