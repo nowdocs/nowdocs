@@ -282,6 +282,20 @@ spec 只有 install/crawl/ingest/share，**漏了** `nowdocs uninstall <docset>`
 spec 有 chunking/cosine 单测，但**没有检索质量测试**——而产品 = 检索质量。
 **方案**：每 docset 一组 golden eval set（10-30 查询 + 期望 chunk ID/URL，recall@5 + MRR），CI 跑质量门禁；每次 embedder 或 chunking 改动必须通过。
 
+**实现**（`src/eval.rs` + `tests/eval_tests.rs`，task 3b）：
+- `GoldenQuery { query: String, expected_source_url: String }`��一条 ground-truth 查询。
+- `EvalReport { recall_at_5: f32, mrr: f32, n: usize }`：聚合指标。
+- `evaluate(docset, golden) -> Result<EvalReport>`：对每个 golden query 调用 `retrieve::search(docset, &q.query, Some(4000), Some(5))`，在返回 chunks 中查 `expected_source_url` 出现位置作为 rank。
+- `compute_metrics(ranks) -> (recall_at_5, mrr)`：纯函数，单测覆盖。无 embedder 依赖。
+
+**定义**：
+- `recall@K = (# hits) / n`，其中 hit = expected source_url 出现在 `search(..., top_k=K)` 返回 chunks 中（已包含 ±1 neighbor-window 展开）。
+- `MRR = mean(1 / rank_i)`，rank 1-indexed；miss 记 0；空集返回 (0, 0)。
+
+**门禁阈值**（v1）：`recall@5 >= 0.8 && mrr >= 0.6`。CI（5c）跑 canonical fixture（`tests/fixtures/golden/`），embedder/chunking 改动必须通过。
+
+**已知约束**：v1 中 `retrieve.rs` 在 hybrid 命中后用 `chunk_idx` 排序窗口扩展结果（保持 chunks 单调），rank 顺序由 ingest 顺序决定。golden fixture 因此控制在 3 文件（每文件 1 chunk），使 MRR 上限落在门禁之上。修复 `retrieve.rs` 保序后可扩到 4-5 文件做更严门禁。
+
 ### 6.9 E2 嵌入正确性（合并 jina spike）
 candle 跑 jina-v2-small 是推断。pin 一个参考查询（如 "how to use clerkMiddleware"）+ 对照引用嵌入器（HF jina API 或 Python sentence-transformers）预算的 512-dim 向量，CI 断言**余弦 > 0.99**。与 §5.2 的 spike 合并。
 
