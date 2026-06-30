@@ -7,37 +7,45 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::cache;
+use crate::chunker::{Chunk, ChunkType};
+use crate::input;
 use crate::manifest;
 use crate::store::Store;
 
-const ALLOWED_REGISTRY_DOMAINS: &[&str] = &["github.com/nowdocs-registry", "registry.nowdocs.rs"];
-
 fn is_test_file_url(url: &str) -> bool {
     url.starts_with("file://")
+}
+
+/// Extract the host portion from a URL like "https://github.com/path".
+fn url_host(url: &str) -> &str {
+    let after_scheme = url.split("://").nth(1).unwrap_or(url);
+    after_scheme.split('/').next().unwrap_or("")
 }
 
 fn is_allowed_registry_url(url: &str) -> bool {
     if is_test_file_url(url) {
         return true;
     }
-    // Extract host+path prefix from URL and check against allowed domains.
-    // e.g. "https://github.com/nowdocs-registry/foo" → "github.com/nowdocs-registry"
-    let after_scheme = url
-        .split("://")
-        .nth(1)
-        .unwrap_or(url);
-    let host_path = after_scheme.split('/').take(2).collect::<Vec<_>>().join("/");
-    ALLOWED_REGISTRY_DOMAINS
-        .iter()
-        .any(|d| host_path == *d || after_scheme.starts_with(d))
+    let host = url_host(url);
+    match host {
+        // github.com requires path prefix /nowdocs-registry/ to prevent
+        // lookalike domains like github.com/nowdocs-registry.evil.com
+        "github.com" => {
+            let after_scheme = url.split("://").nth(1).unwrap_or(url);
+            let path = after_scheme.strip_prefix(host).unwrap_or(after_scheme);
+            path.starts_with("/nowdocs-registry/")
+                || path == "/nowdocs-registry"
+        }
+        "registry.nowdocs.rs" => true,
+        _ => false,
+    }
 }
 
 fn download_to_temp(url: &str) -> Result<PathBuf> {
     if !is_allowed_registry_url(url) {
         anyhow::bail!(
-            "registry URL not in allowed domains: {} (allowed: {:?})",
-            url,
-            ALLOWED_REGISTRY_DOMAINS
+            "registry URL not in allowed domains: {} (allowed: github.com/nowdocs-registry, registry.nowdocs.rs)",
+            url
         );
     }
     let tmp = std::env::temp_dir().join(format!("nowdocs_dl_{}", std::process::id()));
@@ -126,6 +134,7 @@ fn parse_octal(s: &[u8]) -> Option<u64> {
 /// **Security**: production URLs must be on `nowdocs-registry` domains.
 /// Test `file://` URLs are allowed (test fixture bypass).
 pub fn install(docset: &str, url: &str) -> Result<()> {
+    let docset = input::validate_docset(docset)?;
     cache::ensure_layout()?;
 
     let (archive_path, is_temp) = if is_test_file_url(url) {
@@ -151,15 +160,41 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
     let m = manifest::parse_manifest(manifest_json)?;
     manifest::validate(&m)?;
 
-    let db_dir = cache::db_path(docset).parent().unwrap().to_path_buf();
+    let db_dir = cache::db_path(&docset).parent().unwrap().to_path_buf();
     std::fs::create_dir_all(&db_dir)?;
 
-    std::fs::write(cache::manifest_path(docset), &manifest_entry.1)?;
+    std::fs::write(cache::manifest_path(&docset), &manifest_entry.1)?;
 
+    // Materialize chunks into the LanceDB store so retrieve::search works.
+    // Uses zero vectors as placeholders; real vectors are rebuilt by CI (D10).
     let chunks_entry = entries.iter().find(|(name, _)| name.ends_with("chunks.jsonl"));
     if let Some((_, data)) = chunks_entry {
-        let chunks_path = db_dir.join(format!("{docset}.chunks.jsonl"));
-        std::fs::write(chunks_path, data)?;
+        let jsonl = std::str::from_utf8(data).context("chunks.jsonl utf8")?;
+        let parsed: Vec<JsonlChunk> = jsonl
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str::<JsonlChunk>(l))
+            .collect::<Result<Vec<_>, _>>()
+            .context("parse chunks.jsonl")?;
+
+        let chunks: Vec<Chunk> = parsed
+            .into_iter()
+            .map(|c| Chunk {
+                idx: c.idx,
+                heading_path: c.heading_path,
+                source_url: c.source_url,
+                api_version: c.api_version,
+                chunk_type: match c.chunk_type.as_deref() {
+                    Some("Code") => ChunkType::Code,
+                    _ => ChunkType::Info,
+                },
+                text: c.text,
+            })
+            .collect();
+
+        let zero_vectors: Vec<Vec<f32>> = vec![vec![0.0f32; 512]; chunks.len()];
+        let store = Store::open(&docset)?;
+        store.insert(&chunks, &zero_vectors)?;
     }
 
     Ok(())
@@ -167,18 +202,19 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
 
 /// Share a docset: write manifest + text chunks (NO vectors, D10) to `out_dir`.
 pub fn share(docset: &str, out_dir: &Path) -> Result<PathBuf> {
-    let mp = cache::manifest_path(docset);
+    let docset = input::validate_docset(docset)?;
+    let mp = cache::manifest_path(&docset);
     if !mp.is_file() {
-        anyhow::bail!("docset not installed: {}", docset);
+        anyhow::bail!("docset not installed: {}", &docset);
     }
     let raw = std::fs::read_to_string(&mp)?;
     let m = manifest::parse_manifest(&raw)?;
     manifest::validate(&m)?;
 
-    let store = Store::open(docset)?;
+    let store = Store::open(&docset)?;
     let chunks = store.dump_chunks()?;
 
-    let share_dir = out_dir.join(docset);
+    let share_dir = out_dir.join(&docset);
     std::fs::create_dir_all(&share_dir)?;
 
     std::fs::write(share_dir.join("manifest.json"), &raw)?;
@@ -204,6 +240,16 @@ pub fn share(docset: &str, out_dir: &Path) -> Result<PathBuf> {
     Ok(share_dir)
 }
 
+#[derive(serde::Deserialize)]
+struct JsonlChunk {
+    idx: u32,
+    heading_path: String,
+    source_url: String,
+    api_version: Option<String>,
+    chunk_type: Option<String>,
+    text: String,
+}
+
 #[derive(Serialize)]
 struct ChunkRow<'a> {
     idx: u32,
@@ -219,21 +265,23 @@ struct ChunkRow<'a> {
 /// In tests (file:// URL), `url` is passed directly.
 /// In production, constructs the canonical registry URL.
 pub fn update(docset: &str) -> Result<()> {
+    let docset = input::validate_docset(docset)?;
     if is_test_file_url(&std::env::var("NOWDOCS_TEST_URL").unwrap_or_default()) {
         let url = std::env::var("NOWDOCS_TEST_URL")?;
-        return install(docset, &url);
+        return install(&docset, &url);
     }
 
     let url = format!(
         "https://github.com/nowdocs-registry/releases/latest/download/{docset}.tar"
     );
-    install(docset, &url)
+    install(&docset, &url)
 }
 
 /// Uninstall a docset: remove its db and manifest from the cache.
 pub fn uninstall(docset: &str) -> Result<()> {
-    let db = cache::db_path(docset);
-    let mp = cache::manifest_path(docset);
+    let docset = input::validate_docset(docset)?;
+    let db = cache::db_path(&docset);
+    let mp = cache::manifest_path(&docset);
     if db.exists() {
         std::fs::remove_dir_all(&db).context("remove db")?;
     }

@@ -43,9 +43,15 @@ fn test_manifest_json() -> &'static str {
     }"#
 }
 
+fn test_chunks_jsonl() -> &'static str {
+    r#"{"idx":0,"heading_path":"Intro","source_url":"https://example.com/0","api_version":null,"chunk_type":"Info","text":"hello"}
+{"idx":1,"heading_path":"API","source_url":"https://example.com/1","api_version":null,"chunk_type":"Info","text":"world"}
+"#
+}
+
 fn make_tar_archive(_dir: &std::path::Path) -> Vec<u8> {
     let manifest_data = test_manifest_json().as_bytes();
-    let chunks_data = b"hello\nworld\n";
+    let chunks_data = test_chunks_jsonl().as_bytes();
 
     let files: Vec<(&str, &[u8])> = vec![
         ("manifest.json", manifest_data),
@@ -161,7 +167,7 @@ fn test_uninstall_removes_db_and_manifest() {
 
 #[test]
 fn test_install_rejects_external_url() {
-    let result = nowdocs::registry::install("evil", "https://evil.com/x.tar");
+    let result = nowdocs::registry::install("test-evil", "https://evil.com/x.tar");
     assert!(result.is_err(), "external URL should be rejected");
     let msg = format!("{}", result.unwrap_err());
     assert!(
@@ -169,6 +175,22 @@ fn test_install_rejects_external_url() {
         "error should mention domain restriction, got: {}",
         msg
     );
+}
+
+#[test]
+fn test_install_rejects_lookalike_domain() {
+    // github.com/nowdocs-registry.evil.com should NOT match github.com/nowdocs-registry
+    let result = nowdocs::registry::install(
+        "test-lookalike",
+        "https://github.com/nowdocs-registry.evil.com/x.tar",
+    );
+    assert!(result.is_err(), "lookalike domain should be rejected");
+}
+
+#[test]
+fn test_install_rejects_path_traversal_docset() {
+    let result = nowdocs::registry::install("../../tmp/victim", "file:///dev/null");
+    assert!(result.is_err(), "path traversal docset should be rejected");
 }
 
 // --- Test: install from file:// URL ---
@@ -193,6 +215,13 @@ fn test_install_from_file_url() {
     let raw = std::fs::read_to_string(&mp).unwrap();
     let m = manifest::parse_manifest(&raw).unwrap();
     assert_eq!(m.docset, "test-docset");
+
+    // Store should be materialized — chunks are searchable.
+    let store = Store::open(docset).unwrap();
+    let chunks = store.dump_chunks().unwrap();
+    assert_eq!(chunks.len(), 2, "store should have 2 chunks after install");
+    assert_eq!(chunks[0].text, "hello");
+    assert_eq!(chunks[1].text, "world");
 }
 
 // --- Test: share produces no vectors ---
@@ -261,10 +290,12 @@ fn test_update_refreshes_manifest() {
 
     // Create a v2 archive with updated doc_version.
     let v2_json = test_manifest_json().replace("1.0.0", "2.0.0");
+    let v2_chunks = r#"{"idx":0,"heading_path":"Updated","source_url":"https://example.com/v2","api_version":null,"chunk_type":"Info","text":"updated content"}
+"#;
     let v2_archive = {
         let files: Vec<(&str, &[u8])> = vec![
             ("manifest.json", v2_json.as_bytes()),
-            ("chunks.jsonl", b"updated\n"),
+            ("chunks.jsonl", v2_chunks.as_bytes()),
         ];
         let mut archive = Vec::new();
         for (name, data) in &files {
