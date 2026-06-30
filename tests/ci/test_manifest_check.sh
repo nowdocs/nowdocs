@@ -190,28 +190,6 @@ cat > "$TMPDIR/bad_ccby.json" <<'EOF'
 }
 EOF
 
-cat > "$TMPDIR/bad_url.json" <<'EOF'
-{
-  "docset": "nextjs", "doc_version": "1.0.0", "nowdocs_schema_version": 1,
-  "embedder": {"model_id":"jinaai/jina-embeddings-v2-small-en","model_version":"512","model_revision":"abc","model_sha256":"def","vector_dim":512,"engine":"candle","dtype":"f16"},
-  "retrieval": {"tokenizer":"default","chunk_size_tokens":384,"window_tokens":2048},
-  "source": {"entry_url":"https://x.com","source_url":"https://evil.com/malicious.tar","scraped_at":"2026-01-01","chunk_count":1},
-  "legal": {"license":"MIT","copyright_holder":"X","attribution":""},
-  "refresh_strategy": {"tier":"hot","auto_days":7}
-}
-EOF
-
-cat > "$TMPDIR/bad_url_lookalike.json" <<'EOF'
-{
-  "docset": "nextjs", "doc_version": "1.0.0", "nowdocs_schema_version": 1,
-  "embedder": {"model_id":"jinaai/jina-embeddings-v2-small-en","model_version":"512","model_revision":"abc","model_sha256":"def","vector_dim":512,"engine":"candle","dtype":"f16"},
-  "retrieval": {"tokenizer":"default","chunk_size_tokens":384,"window_tokens":2048},
-  "source": {"entry_url":"https://x.com","source_url":"https://github.com/nowdocs-registry.evil.com/path.tar","scraped_at":"2026-01-01","chunk_count":1},
-  "legal": {"license":"MIT","copyright_holder":"X","attribution":""},
-  "refresh_strategy": {"tier":"hot","auto_days":7}
-}
-EOF
-
 echo "=== manifest-check tests ==="
 
 echo "Valid manifest:"
@@ -246,12 +224,6 @@ assert_fail "Proprietary license rejected" run_check "$TMPDIR/bad_license.json"
 
 echo "CC-BY attribution:"
 assert_fail "CC-BY-4.0 without attribution rejected" run_check "$TMPDIR/bad_ccby.json"
-
-echo "URL domain:"
-assert_fail "evil.com URL rejected" run_check "$TMPDIR/bad_url.json"
-
-echo "URL lookalike:"
-assert_fail "lookalike domain rejected" run_check "$TMPDIR/bad_url_lookalike.json"
 
 echo ""
 echo "Results: $pass passed, $fail failed"

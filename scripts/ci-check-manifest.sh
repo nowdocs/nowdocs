@@ -70,32 +70,11 @@ if [ "$license" = "CC-BY-4.0" ]; then
     check "CC-BY-4.0 requires non-empty attribution" '[ -n "$attribution" ]'
 fi
 
-# 11. source_url domain must be on allowlist (A2 — prevent SSRF/malicious source)
-ALLOWED_GITHUB_PREFIX="github.com/nowdocs-registry"
-ALLOWED_REGISTRY="registry.nowdocs.rs"
-source_url=$(jq -r '.source.source_url // ""' "$MANIFEST")
-
-# Skip domain check for test file:// URLs
-if [[ "$source_url" != file://* ]]; then
-    url_after_scheme="${source_url#*://}"
-    url_host="${url_after_scheme%%/*}"
-
-    case "$url_host" in
-        github.com)
-            # Must have /nowdocs-registry/ path prefix (prevent lookalike domains)
-            url_path="${url_after_scheme#github.com}"
-            if [[ "$url_path" != /nowdocs-registry/* ]]; then
-                errors+=("source_url host github.com must have /nowdocs-registry/ path prefix (got '$url_path')")
-            fi
-            ;;
-        registry.nowdocs.rs)
-            # Allowed
-            ;;
-        *)
-            errors+=("source_url domain not allowed: '$url_host' (allowed: github.com/nowdocs-registry, registry.nowdocs.rs)")
-            ;;
-    esac
-fi
+# Note: source_url is provenance metadata (upstream doc source, e.g.
+# github.com/vercel/next.js), NOT the registry download URL. The A2
+# download-URL allowlist is enforced at runtime in registry.rs::download_to_temp.
+# We deliberately do NOT domain-check source_url here — legal review (§6.10)
+# needs the real upstream URL, and the download path is already gated elsewhere.
 
 # Report
 if [ ${#errors[@]} -eq 0 ]; then

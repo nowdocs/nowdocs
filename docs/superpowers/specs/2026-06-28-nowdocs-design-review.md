@@ -234,13 +234,13 @@ nowdocs 把任意第三方文档块喂给有 shell 权限的 agent——正是 C
 ### 6.2 A2 恶意 doc crate（registry 是社区 PR，零容忍）
 `manifest.json` 可注入恶意下载 URL。CI 必须对每个提交包强制：
 - 拒绝绝对路径 / `../` / 符号链接（解析到缓存根外）
-- 下载 URL **必须指向 `nowdocs-registry` 自己的 GitHub Releases 域**，拒绝任何外部 URL
+- 下载 URL **必须指向 `nowdocs-registry` 自己的 GitHub Releases 域**，拒绝任何外部 URL（运行时由 `registry.rs::download_to_temp` allowlist 强制；注意 `source.source_url` 是上游文档源的 provenance 字段，如 `github.com/vercel/next.js`，**不是**下载 URL，CI 不对其做域校验）
 - **CI 重建表（D10 拍定）**：`share` 只发布**分块文本 + manifest + config**，CI 用固定标准模型重新 embed 出表——不发布 contributor 本地预构建向量。一石三鸟：① 消解原 spec §3.3"打包本地 LanceDB 目录（含向量）"与 CI 重建原则的矛盾 ② **关闭对抗性向量注入**（向量是不透明浮点，contributor 直发可伪造向量让恶意 chunk 命中特定查询、无法审计；CI 从可审计文本重算则投毒路径关死）③ 关闭模型版本漂移（contributor 用异版模型 → 垃圾 cosine）。附带：contributor 无需本地有模型即可贡献、文本包比向量包小。**威胁模型文档**：`docs/THREAT_MODEL.md`（Task 5c 产出）。
 - 拒绝 `next`/不稳定格式版本。FTS 索引约束 `use_tantivy=True` 拒绝项在 lancedb 0.30 已自动满足（旧 tantivy backend 移除，`Index::FTS` 只剩原生 Lance inverted index，无 `use_tantivy` 字段——见附录 §G）。
 - pin 嵌入器 `model_id + model_version + model_sha256`，不匹配拒绝
 - 发布这些 CI 规则作为威胁模型，contributor 事先知晓
 
-> **实现核实（2026-06-29，registry.rs）**：`install(docset, url)` 域白名单硬编码 `github.com/nowdocs-registry` + `registry.nowdocs.rs`，其它域拒绝报错；`file://` scheme 特判放行供测试用。`share(docset, out_dir)` 产物 = `manifest.json` + `chunks.jsonl`（每行一 chunk 的 text+metadata JSON），**绝不含向量/`.lance` 文件**（D10）。`update(docset)` 用 `NOWDOCS_TEST_URL` 环境变量做测试 fixture，生产构造 `https://github.com/nowdocs-registry/releases/latest/download/{docset}.tar`。`uninstall(docset)` 删 `db_path` + `manifest_path`（存在才删）。
+> **实现核实（2026-06-29，registry.rs）**：`install(docset, url)` 域白名单硬编码 `github.com/nowdocs-registry` + `registry.nowdocs.rs`，其它域拒绝报错；`file://` scheme 特判放行供测试用。`share(docset, out_dir)` 产物 = `manifest.json` + `chunks.jsonl`（每行一 chunk 的 text+metadata JSON），**绝不含向量/`.lance` 文件**（D10）。`update(docset)` 用 `NOWDOCS_TEST_URL` 环境变量做测试 fixture，生产构造 `https://github.com/nowdocs-registry/{docset}/releases/latest/download/{docset}.tar`（每 docset 一 repo，owner=nowdocs-registry）。`uninstall(docset)` 删 `db_path` + `manifest_path`（存在才删）。
 
 ### 6.3 A3 模型完整性（供应链护城河）
 spec 写"首次运行下载"但**无完整性校验**。`hf-hub` crate 默认不下完不验 SHA。

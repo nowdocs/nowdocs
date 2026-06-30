@@ -34,8 +34,8 @@ jobs:
             archive_format: tgz
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            archive_suffix: '.zip'
-            archive_format: zip
+            archive_suffix: '.tar.gz'
+            archive_format: tgz
 
     steps:
       - name: Checkout source
@@ -79,17 +79,17 @@ jobs:
       - name: Package binary
         shell: bash
         run: |
-          mkdir -p nowdocs-${{ github.ref_name }}-${{ matrix.target }}
-          if [ "${{ matrix.archive_format }}" = "tgz" ]; then
-            cp target/${{ matrix.target }}/release/nowdocs nowdocs-${{ github.ref_name }}-${{ matrix.target }}/
-            tar -czf nowdocs-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.archive_suffix }} \
-              -C nowdocs-${{ github.ref_name }}-${{ matrix.target }} nowdocs
-          else
-            # Windows: zip the binary
-            cd target/${{ matrix.target }}/release
-            zip ../../../nowdocs-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.archive_suffix }} nowdocs.exe
-          fi
-          ls -la nowdocs-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.archive_suffix }}
+          # Unified layout for every target: archive root contains a single
+          # directory nowdocs-v{version}-{target}/ holding the binary, matching
+          # the binstall bin-dir template. All targets use .tar.gz (binstall
+          # bundles its own decompressor, so Windows needs no system tar).
+          BIN_NAME=nowdocs
+          [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ] && BIN_NAME=nowdocs.exe
+          STAGE="nowdocs-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "$STAGE"
+          cp "target/${{ matrix.target }}/release/$BIN_NAME" "$STAGE/"
+          tar -czf "${STAGE}${{ matrix.archive_suffix }}" "$STAGE"
+          ls -la "${STAGE}${{ matrix.archive_suffix }}"
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2

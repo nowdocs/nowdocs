@@ -86,5 +86,5 @@ fn registry_url_for(docset: &str) -> String {
             return url;
         }
     }
-    format!("https://github.com/nowdocs-registry/releases/latest/download/{docset}.tar")
+    format!("https://github.com/nowdocs-registry/{docset}/releases/latest/download/{docset}.tar")
 }

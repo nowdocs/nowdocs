@@ -272,7 +272,7 @@ pub fn update(docset: &str) -> Result<()> {
     }
 
     let url = format!(
-        "https://github.com/nowdocs-registry/releases/latest/download/{docset}.tar"
+        "https://github.com/nowdocs-registry/{docset}/releases/latest/download/{docset}.tar"
     );
     install(&docset, &url)
 }
