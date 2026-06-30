@@ -143,6 +143,39 @@ impl Store {
         parse_search_hits(&batches, 0.0)
     }
 
+    /// Dump all chunks (text + metadata only, no vectors) from the store.
+    pub fn dump_chunks(&self) -> Result<Vec<Chunk>> {
+        let table = self
+            .runtime
+            .block_on(self.conn.open_table(&self.table_name).execute())
+            .context("failed to open table for dump_chunks")?;
+
+        let batches: Vec<RecordBatch> = self.runtime.block_on(async {
+            let stream = table
+                .query()
+                .execute()
+                .await
+                .context("dump_chunks query failed")?;
+            stream
+                .try_collect::<Vec<RecordBatch>>()
+                .await
+                .context("failed to collect dump_chunks results")
+        })?;
+
+        let hits = parse_search_hits(&batches, 0.0)?;
+        Ok(hits
+            .into_iter()
+            .map(|h| Chunk {
+                idx: h.chunk_idx,
+                heading_path: h.heading_path,
+                source_url: h.source_url,
+                api_version: h.api_version,
+                chunk_type: h.chunk_type,
+                text: h.text,
+            })
+            .collect())
+    }
+
     pub fn hybrid_search(
         &self,
         query_vector: &[f32],

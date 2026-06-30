@@ -75,6 +75,12 @@ pub fn validate(m: &Manifest) -> anyhow::Result<()> {
     if m.embedder.dtype != "f16" {
         anyhow::bail!("embedder.dtype must be \"f16\", got {}", m.embedder.dtype);
     }
+    if m.embedder.model_revision.trim().is_empty() {
+        anyhow::bail!("embedder.model_revision must not be empty");
+    }
+    if m.embedder.model_sha256.trim().is_empty() {
+        anyhow::bail!("embedder.model_sha256 must not be empty");
+    }
     if m.retrieval.tokenizer != "default" {
         anyhow::bail!(
             "retrieval.tokenizer must be \"default\" (v1), got {}",
