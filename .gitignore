@@ -25,3 +25,4 @@ secrets/
 2b-test.log
 2b-test-full.log
 2b-build.log
+2c-*.log

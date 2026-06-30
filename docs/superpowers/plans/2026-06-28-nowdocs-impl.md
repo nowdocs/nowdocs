@@ -813,7 +813,7 @@ pub fn ingest_dir(dir: &std::path::Path, docset: &str) -> anyhow::Result<IngestS
 
 **TDD 步骤**:
 
-- [ ] **Step 1: 加 cache::manifest_path + embedder::provenance 导出 + 写失败测试**
+- [x] **Step 1: 加 cache::manifest_path + embedder::provenance 导出 + 写失败测试**
 
 `src/cache.rs` 末尾加：
 ```rust
@@ -870,12 +870,12 @@ fn test_ingest_end_to_end() {
 }
 ```
 
-- [ ] **Step 2: 验证测试失败**
+- [x] **Step 2: 验证测试失败**
 
 Run: `cargo test --test ingest_tests > 2c-test.log 2>&1`（tail 看）
 Expected: 编译失败 — `unresolved module ingest` / `ingest_dir` 未定义。
 
-- [ ] **Step 3: 实现 ingest.rs 主体（ingest_dir 全流程）**
+- [x] **Step 3: 实现 ingest.rs 主体（ingest_dir 全流程）**
 
 `src/ingest.rs`：
 ```rust
@@ -1001,12 +1001,12 @@ fn build_manifest(docset: &str, chunk_count: u32) -> Manifest {
 }
 ```
 
-- [ ] **Step 4: 跑 #[ignore] 端到端测试验证通过**
+- [x] **Step 4: 跑 #[ignore] 端到端测试验证通过**
 
 Run: `cargo test --test ingest_tests -- --ignored > 2c-test.log 2>&1`（tail 看；首次下模型 ~30s）
 Expected: `test_ingest_end_to_end ... ok`（manifest 落盘 + validate 过 + search 召回 unique-keyword chunk）。
 
-- [ ] **Step 5: 加边界测试 — 非法 docset + 空目录**
+- [x] **Step 5: 加边界测试 — 非法 docset + 空目录**
 
 `tests/ingest_tests.rs` 追加：
 ```rust
@@ -1036,14 +1036,14 @@ fn test_ingest_empty_dir() {
 Run: `cargo test --test ingest_tests -- --test-threads=1 > 2c-test.log 2>&1`（非 ignore 测试快，不 load embedder）
 Expected: `test_ingest_rejects_bad_docset ... ok` + `test_ingest_empty_dir ... ok`（空目录不 load embedder，建空表 + manifest chunk_count=0）。
 
-- [ ] **Step 6: lib.rs 注册 + cargo build/test 全绿**
+- [x] **Step 6: lib.rs 注册 + cargo build/test 全绿**
 
 `src/lib.rs` 加 `pub mod ingest;`（在 store 行后）。
 
 Run: `cargo build > 2c-build.log 2>&1` + `cargo test --test ingest_tests -- --test-threads=1 > 2c-test.log 2>&1`
 Expected: build 全绿 + 非 ignore 测试全 PASS（#[ignore] 测试 skipped）。
 
-- [ ] **Step 7: commit + 打勾**
+- [x] **Step 7: commit + 打勾**
 
 `git add src/ingest.rs tests/ingest_tests.rs src/lib.rs src/cache.rs src/embedder.rs`，commit: `feat(ingest): md dir -> chunks -> embed -> store + manifest (2c)`。
 Edit plan 的 Task 2c 全部 `- [ ]` → `- [x]`（7 步）。
