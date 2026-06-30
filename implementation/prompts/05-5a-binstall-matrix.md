@@ -39,3 +39,24 @@
 2. spec：§8.3 附录写 macOS Accelerate / Linux musl 静态核实结论 + binstall 资产命名约定。
 3. 汇报：① task=5a ② commit sha ③ 本地 release build 结果 ④ Cargo.toml diff（仅 binstall 段）⑤ Open Questions。
 commit message：`build(dist): cargo-binstall matrix + release workflow (5a)`。
+
+
+---
+
+## 完成状态（2026-06-30）
+
+- [x] **Cargo.toml** 加 `[package.metadata.binstall]` 段（pkg-url / bin-dir / pkg-fmt=tgz）
+- [x] **确认 `candle-core default-features=false`** 已在原 [dependencies] 中（未改动）
+- [x] **`.github/workflows/release.yml`** 创建：tag push 触发，5 目标 matrix，musl 静态 `ldd` 校验
+- [x] **本地 release build**：`cargo build --release` ✅（5m 41s）+ `./target/release/nowdocs --version` ✅
+- [x] **spec §8.3 附录** 已写入 docs/superpowers/specs/2026-06-28-nowdocs-design-review.md
+  - 8.3.1 macOS Accelerate 动态链接（系统自带，零部署成本）
+  - 8.3.2 Linux musl 真·全静态（`ldd` 验证 not a dynamic executable）
+  - 8.3.3 cargo-binstall 资产命名约��
+  - 8.3.4 构建矩阵覆盖（5 目标）
+  - 8.3.5 不签名分发（D9）
+- [x] **commit message**：`build(dist): cargo-binstall matrix + release workflow (5a)`
+
+**未触碰文件**：
+- ✅ `ci.yml` 未修改（prompt 07 territory）
+- ✅ [dependencies] 段未改动
