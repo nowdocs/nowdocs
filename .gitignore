@@ -27,3 +27,8 @@ secrets/
 2b-build.log
 2c-*.log
 3a-*.log
+4*.log
+5*.log
+
+# 子代理隔离 worktree（临时，勿入库）
+.claude/worktrees/
