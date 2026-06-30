@@ -240,6 +240,8 @@ nowdocs 把任意第三方文档块喂给有 shell 权限的 agent——正是 C
 - pin 嵌入器 `model_id + model_version + model_sha256`，不匹配拒绝
 - 发布这些 CI 规则作为威胁模型，contributor 事先知晓
 
+> **实现核实（2026-06-29，registry.rs）**：`install(docset, url)` 域白名单硬编码 `github.com/nowdocs-registry` + `registry.nowdocs.rs`，其它域拒绝报错；`file://` scheme 特判放行供测试用。`share(docset, out_dir)` 产物 = `manifest.json` + `chunks.jsonl`（每行一 chunk 的 text+metadata JSON），**绝不含向量/`.lance` 文件**（D10）。`update(docset)` 用 `NOWDOCS_TEST_URL` 环境变量做测试 fixture，生产构造 `https://github.com/nowdocs-registry/releases/latest/download/{docset}.tar`。`uninstall(docset)` 删 `db_path` + `manifest_path`（存在才删）。
+
 ### 6.3 A3 模型完整性（供应链护城河）
 spec 写"首次运行下载"但**无完整性校验**。`hf-hub` crate 默认不下完不验 SHA。
 **修复（10 行）**：pin `model_revision`（HF commit SHA，不可变）+ `model_sha256`（safetensors 的 LFS oid），下载后用 `sha2::Sha256` 重算比对，失败即删。模型缓存路径 `~/.cache/nowdocs/models/<model_id>/`（A4：原 spec `~/.cache/agentdocs/` 已改名）。
@@ -277,6 +279,8 @@ DEFAULT_METADATA_CACHE_SIZE = 1 GiB   // 字节
 
 ### 6.7 CLI 生命周期缺口（uninstall / list-installed / update）
 spec 只有 install/crawl/ingest/share，**漏了** `nowdocs uninstall <docset>` / `nowdocs list-installed` / `nowdocs update [docset]`。v1 必须加。`update` = 拉最新 registry 版本 + pin manifest 模型 sha（不匹配拒绝）+ 重新解包。
+
+> **实现核实（2026-06-29，registry.rs）**：`update(docset)` 从 registry URL 拉最新 tar → 调 `install` 替换（manifest sha 不符时仍允许但提示——v1 简化）。`uninstall(docset)` 删 `cache::db_path(docset)` 目录 + `cache::manifest_path(docset)` 文件，存在才删。`list-installed` 在 `src/tools.rs`（Task 4c），不在此模块。
 
 ### 6.8 E1 检索质量门禁（最被忽视的漏洞）
 spec 有 chunking/cosine 单测，但**没有检索质量测试**——而产品 = 检索质量。
