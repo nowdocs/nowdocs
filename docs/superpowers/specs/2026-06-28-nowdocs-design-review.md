@@ -488,3 +488,13 @@ Python 参考实现（transformers `AutoModel` + mean-pooling，与 sentence-tra
 - **token**：`Cache::token()` 在 `HF_HOME/token`（非 `HF_HOME/hub/token`，`lib.rs:59-65` `token_path()` pop 一级）。
 - **0.3→0.4 变更**：修复 XET-backed repo 的 relative redirect 处理（`sync.rs:473-501` redirect loop）。API 签名无破坏性变更。
 - **2a 实现策略**：`load_for(spec)` 设 `HF_HOME=<nowdocs_cache>/models/<model_id>` → `ApiBuilder::from_env()` → `Repo::with_revision(spec.model_id, RepoType::Model, spec.model_revision)` → `api.repo(repo).get("model.safetensors")`。下载后 `sha2::Sha256` 校验，不符即删+bail。
+
+### J. Retrieval Pipeline 实现核实（Task 3a）
+
+**3a 实现核实（2026-06-29，commit a6e6b0d）**：
+
+- **fetch_by_idx scalar filter API**：lancedb 0.30 `table.query().only_if("chunk_idx IN (1,2,3)").execute()` 返回 `SendableRecordBatchStream`，需 `use lancedb::query::ExecutableQuery` 导入 `execute()` 方法。column 解析时 `column_by_name()` 返回 `Option<&Arc<dyn Array>>`（非 `&dyn Array`），closure 参数类型需匹配。提取为 `parse_search_hits` / `parse_search_hits_with_score` 两个 helper 复用于 `fetch_by_idx` 和 `hybrid_search`。
+- **manifest 驱动 embedder 版本锁定**：search 第一步读 `cache::manifest_path(docset)` → `manifest::parse_manifest` → `manifest::validate`，用 `manifest.embedder.{model_id, model_revision, model_sha256}` 构造 `embedder::EmbedderSpec` → `Embedder::load_for(&spec)`。查询侧模型版本与 ingest 时锁定一致。
+- **相邻窗口语义**：对每个 hybrid hit 的 `chunk_idx`，取 `idx-1`、`idx`、`idx+1`（clamp 到 `[0, chunk_count)`）。去重 + 升序排列后 `fetch_by_idx` 一次性取回。空结果（chunk_count=0 或无 hit）直接返回空 `SearchResult`。
+- **max_tokens 截断**：`assemble_result` 从第一个 chunk 开始累加 `count_tokens(text)`，下一个 chunk 若 `tokens_used + n > max_tokens` 则停止并设 `truncated=true`。第一个 chunk 总是返回（即使超预算），但标记 `truncated=true`。`tokens_returned` 为实际返回 chunks 的 token 总和。
+- **端到端验证**：`test_search_end_to_end` 用 tempdir + `ingest_dir` → `search` 完整流程，断言召回包含 unique keyword、tokens_returned ≤ 4000、chunks 按 chunk_idx 升序。通过（16.47s）。

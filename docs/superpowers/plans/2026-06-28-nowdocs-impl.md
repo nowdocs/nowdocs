@@ -1080,7 +1080,7 @@ Edit plan 的 Task 2c 全部 `- [ ]` → `- [x]`（7 步）。
 - D-3a-5 **`top_k` 截断**：`resolve_top_k` 已 clamp 到 `[1,20]`；hybrid_search 传 `top_k as usize`。
 - D-3a-6 **空结果**：若 docset 无 chunk 或 hybrid_search 无 hit，返回 `SearchResult { chunks: vec![], tokens_returned: 0, truncated: false }`，不报错。
 
-- [ ] **Step 1: 写失败测试 — 验证 search 函数未定义**
+- [x] **Step 1: 写失败测试 — 验证 search 函数未定义**
 
 `tests/retrieve_tests.rs`：
 ```rust
@@ -1109,7 +1109,7 @@ fn test_search_smoke() {
 Run: `cargo test --test retrieve_tests -- --test-threads=1 > 3a-test.log 2>&1`
 Expected: 编译失败 — `retrieve` module / `search` / `ResultChunk` / `SearchResult` 未定义。
 
-- [ ] **Step 2: 实现 `src/retrieve.rs` 骨架 + 类型定义**
+- [x] **Step 2: 实现 `src/retrieve.rs` 骨架 + 类型定义**
 
 `src/retrieve.rs`（先不实现 search body，只放类型和存根）：
 ```rust
@@ -1157,7 +1157,7 @@ pub fn search(
 Run: `cargo test --test retrieve_tests -- --test-threads=1 > 3a-test.log 2>&1`
 Expected: `test_search_smoke ... ok`（存根没执行到 todo，因为只是 black_box 类型）。
 
-- [ ] **Step 3: 实现 `search` 主流程（manifest 校验 + embed + hybrid_search + 组装）**
+- [x] **Step 3: 实现 `search` 主流程（manifest 校验 + embed + hybrid_search + 组装）**
 
 完整实现 `src/retrieve.rs` 中的 `search`：
 ```rust
@@ -1232,7 +1232,7 @@ pub fn search(
 
 在同一个文件中继续加 `assemble_result`（见 Step 5）。`Store::fetch_by_idx` 在 Step 4 实现。
 
-- [ ] **Step 4: 在 `src/store.rs` 实现 `fetch_by_idx` — scalar filter by `chunk_idx IN (...)`**
+- [x] **Step 4: 在 `src/store.rs` 实现 `fetch_by_idx` — scalar filter by `chunk_idx IN (...)`**
 
 在 `src/store.rs` 的 `impl Store` 块中加：
 ```rust
@@ -1312,7 +1312,7 @@ pub fn fetch_by_idx(&self, ids: &[u32]) -> Result<Vec<SearchHit>> {
 }
 ```
 
-- [ ] **Step 5: 实现 `assemble_result` — 按 `max_tokens` 截断**
+- [x] **Step 5: 实现 `assemble_result` — 按 `max_tokens` 截断**
 
 `src/retrieve.rs` 加：
 ```rust
@@ -1350,7 +1350,7 @@ fn assemble_result(chunks: Vec<ResultChunk>, max_tokens: u32) -> Result<SearchRe
 }
 ```
 
-- [ ] **Step 6: 加边界测试（不依赖真实 embedder）**
+- [x] **Step 6: 加边界测试（不依赖真实 embedder）**
 
 `tests/retrieve_tests.rs` 追加：
 ```rust
@@ -1392,14 +1392,14 @@ fn test_search_rejects_invalid_inputs() {
 Run: `cargo test --test retrieve_tests -- --test-threads=1 > 3a-test.log 2>&1`
 Expected: 非 ignore 测试通过（`test_search_smoke`、`test_search_rejects_invalid_inputs`），`test_search_end_to_end` skipped。
 
-- [ ] **Step 7: 跑端到端 #[ignore] 测试验证召回 + 截断语义**
+- [x] **Step 7: 跑端到端 #[ignore] 测试验证召回 + 截断语义**
 
 Run: `cargo test --test retrieve_tests -- --ignored --test-threads=1 > 3a-test.log 2>&1`
 Expected: `test_search_end_to_end ... ok`（首次下载模型 ~30s）。
 
 额外手动验证截断：构造一个 docset 让总 token > 100，调用 `search(docset, query, Some(50), Some(5))`，断言 `result.truncated == true` 且 `result.tokens_returned <= 50`。
 
-- [ ] **Step 8: `cargo build` + `cargo test` 全绿 + commit**
+- [x] **Step 8: `cargo build` + `cargo test` 全绿 + commit**
 
 Run:
 ```bash
