@@ -10,5 +10,6 @@ pub mod token;
 pub mod embedder; // from S0; if S0 not yet run, create an empty src/embedder.rs with `// placeholder, see S0`
 pub mod ingest;
 pub mod store;
+pub mod retrieve;
 
 // ---- Module stubs (1b-1h fill these) ----

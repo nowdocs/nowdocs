@@ -10,7 +10,7 @@ use half::f16;
 use lance_arrow::FixedSizeListArrayExt;
 use lancedb::index::Index;
 use lancedb::index::scalar::{FtsIndexBuilder, FullTextSearchQuery};
-use lancedb::query::{QueryBase, QueryExecutionOptions};
+use lancedb::query::{ExecutableQuery, QueryBase, QueryExecutionOptions};
 use lancedb::Session;
 
 use crate::cache;
@@ -115,6 +115,34 @@ impl Store {
         Ok(())
     }
 
+    pub fn fetch_by_idx(&self, ids: &[u32]) -> Result<Vec<SearchHit>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let filter = ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let filter = format!("chunk_idx IN ({filter})");
+
+        let table = self
+            .runtime
+            .block_on(self.conn.open_table(&self.table_name).execute())
+            .context("failed to open table for fetch_by_idx")?;
+
+        let batches: Vec<RecordBatch> = self.runtime.block_on(async {
+            let stream = table
+                .query()
+                .only_if(&filter)
+                .execute()
+                .await
+                .context("fetch_by_idx query failed")?;
+            stream
+                .try_collect::<Vec<RecordBatch>>()
+                .await
+                .context("failed to collect fetch_by_idx results")
+        })?;
+
+        parse_search_hits(&batches, 0.0)
+    }
+
     pub fn hybrid_search(
         &self,
         query_vector: &[f32],
@@ -144,63 +172,116 @@ impl Store {
                 .context("failed to collect hybrid search results")
         })?;
 
-        let mut hits = Vec::new();
-        for batch in &batches {
-            // Empty table returns batches without data columns.
-            if batch.column_by_name("chunk_idx").is_none() {
-                continue;
-            }
-
-            let score_col = batch
-                .column_by_name("_score")
-                .and_then(|c| c.as_any().downcast_ref::<arrow_array::Float32Array>())
-                .context("missing _score column")?;
-            let idx_col = batch
-                .column_by_name("chunk_idx")
-                .and_then(|c| c.as_any().downcast_ref::<UInt32Array>())
-                .context("missing chunk_idx column")?;
-            let heading_col = batch
-                .column_by_name("heading_path")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .context("missing heading_path column")?;
-            let url_col = batch
-                .column_by_name("source_url")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .context("missing source_url column")?;
-            let api_col = batch
-                .column_by_name("api_version")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
-            let ctype_col = batch
-                .column_by_name("chunk_type")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .context("missing chunk_type column")?;
-            let text_col = batch
-                .column_by_name("text")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .context("missing text column")?;
-
-            for row in 0..batch.num_rows() {
-                let chunk_type = match ctype_col.value(row) {
-                    "Code" => ChunkType::Code,
-                    _ => ChunkType::Info,
-                };
-                hits.push(SearchHit {
-                    score: score_col.value(row),
-                    chunk_idx: idx_col.value(row),
-                    heading_path: heading_col.value(row).to_string(),
-                    source_url: url_col.value(row).to_string(),
-                    api_version: api_col.map(|c| c.value(row).to_string()),
-                    chunk_type,
-                    text: text_col.value(row).to_string(),
-                });
-            }
-        }
-
-        // Sort by score descending, take top_k.
+        let mut hits = parse_search_hits_with_score(&batches)?;
         hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         hits.truncate(top_k);
         Ok(hits)
     }
+}
+
+/// Parse record batches into SearchHit items with a fixed score (for fetch_by_idx).
+fn parse_search_hits(batches: &[RecordBatch], default_score: f32) -> Result<Vec<SearchHit>> {
+    let mut hits = Vec::new();
+    for batch in batches {
+        if batch.column_by_name("chunk_idx").is_none() {
+            continue;
+        }
+        let idx_col = batch
+            .column_by_name("chunk_idx")
+            .and_then(|c| c.as_any().downcast_ref::<UInt32Array>())
+            .context("missing chunk_idx column")?;
+        let heading_col = batch
+            .column_by_name("heading_path")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing heading_path column")?;
+        let url_col = batch
+            .column_by_name("source_url")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing source_url column")?;
+        let api_col = batch
+            .column_by_name("api_version")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+        let ctype_col = batch
+            .column_by_name("chunk_type")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing chunk_type column")?;
+        let text_col = batch
+            .column_by_name("text")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing text column")?;
+
+        for row in 0..batch.num_rows() {
+            let chunk_type = match ctype_col.value(row) {
+                "Code" => ChunkType::Code,
+                _ => ChunkType::Info,
+            };
+            hits.push(SearchHit {
+                score: default_score,
+                chunk_idx: idx_col.value(row),
+                heading_path: heading_col.value(row).to_string(),
+                source_url: url_col.value(row).to_string(),
+                api_version: api_col.map(|c| c.value(row).to_string()),
+                chunk_type,
+                text: text_col.value(row).to_string(),
+            });
+        }
+    }
+    hits.sort_by_key(|h| h.chunk_idx);
+    Ok(hits)
+}
+
+/// Parse record batches into SearchHit items with _score column (for hybrid_search).
+fn parse_search_hits_with_score(batches: &[RecordBatch]) -> Result<Vec<SearchHit>> {
+    let mut hits = Vec::new();
+    for batch in batches {
+        if batch.column_by_name("chunk_idx").is_none() {
+            continue;
+        }
+        let score_col = batch
+            .column_by_name("_score")
+            .and_then(|c| c.as_any().downcast_ref::<arrow_array::Float32Array>())
+            .context("missing _score column")?;
+        let idx_col = batch
+            .column_by_name("chunk_idx")
+            .and_then(|c| c.as_any().downcast_ref::<UInt32Array>())
+            .context("missing chunk_idx column")?;
+        let heading_col = batch
+            .column_by_name("heading_path")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing heading_path column")?;
+        let url_col = batch
+            .column_by_name("source_url")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing source_url column")?;
+        let api_col = batch
+            .column_by_name("api_version")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+        let ctype_col = batch
+            .column_by_name("chunk_type")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing chunk_type column")?;
+        let text_col = batch
+            .column_by_name("text")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing text column")?;
+
+        for row in 0..batch.num_rows() {
+            let chunk_type = match ctype_col.value(row) {
+                "Code" => ChunkType::Code,
+                _ => ChunkType::Info,
+            };
+            hits.push(SearchHit {
+                score: score_col.value(row),
+                chunk_idx: idx_col.value(row),
+                heading_path: heading_col.value(row).to_string(),
+                source_url: url_col.value(row).to_string(),
+                api_version: api_col.map(|c| c.value(row).to_string()),
+                chunk_type,
+                text: text_col.value(row).to_string(),
+            });
+        }
+    }
+    Ok(hits)
 }
 
 /// Build the table schema: id, vector(FixedSizeList<f16,512>), heading_path,
