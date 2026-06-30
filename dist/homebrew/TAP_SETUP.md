@@ -151,21 +151,25 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${VERSION:?version required}"
+          # github.ref_name arrives as 'v0.2.0'; asset URLs use the bare
+          # version (nowdocs-v0.2.0-...), so strip the leading 'v'.
+          VERSION="${VERSION#v}"
           BASE="https://github.com/nowdocs/nowdocs/releases/download/v${VERSION}"
           ARM_TGZ="nowdocs-v${VERSION}-aarch64-apple-darwin.tar.gz"
           X86_TGZ="nowdocs-v${VERSION}-x86_64-apple-darwin.tar.gz"
           ARM_SHA=$(curl -fsSL "${BASE}/${ARM_TGZ}" | sha256sum | awk '{print $1}')
           X86_SHA=$(curl -fsSL "${BASE}/${X86_TGZ}" | sha256sum | awk '{print $1}')
           sed -i "s/^  version \".*\"/  version \"${VERSION}\"/" Formula/nowdocs.rb
-          # Replace the two TODO_FILL_AFTER_RELEASE lines in order: first arm64, then x86_64.
+          # Replace the sha256 lines in each block: first arm64, then x86_64.
+          # Match any existing value (placeholder OR a real 64-hex hash from a
+          # prior bump) so every release refreshes both hashes, not just the first.
           python3 -c "
           import re, pathlib
           p = pathlib.Path('Formula/nowdocs.rb')
           s = p.read_text()
-          # Replace arm64 block first (appears before x86_64 block).
-          s = re.sub(r'(on_arm do\n.*?sha256 \")TODO_FILL_AFTER_RELEASE(\")',
+          s = re.sub(r'(on_arm do\n.*?sha256 \")[^\"]*(\")',
                      r'\g<1>${ARM_SHA}\g<2>', s, count=1, flags=re.DOTALL)
-          s = re.sub(r'(on_intel do\n.*?sha256 \")TODO_FILL_AFTER_RELEASE(\")',
+          s = re.sub(r'(on_intel do\n.*?sha256 \")[^\"]*(\")',
                      r'\g<1>${X86_SHA}\g<2>', s, count=1, flags=re.DOTALL)
           p.write_text(s)
           "
