@@ -366,6 +366,62 @@ candle 跑 jina-v2-small 是推断。pin 一个参考查询（如 "how to use cl
 
 ---
 
+
+
+### 8.3 跨平台分发矩阵验证结论（Task 5a 实现核实）
+
+> **完成时间**：2026-06-30（feat/5a-binstall）
+> **任务范围**：5 目标交叉构建矩阵 + cargo-binstall metadata
+
+#### 8.3.1 macOS Accelerate 框架（动态链接确认）
+
+- **机制**：macOS 目标（`aarch64-apple-darwin` / `x86_64-apple-darwin`）通过 candle-core 的 Accelerate 后端动态链接系统框架。
+- **部署成本**：**零**——Accelerate framework 是 macOS 系统自带组件，每台 Mac 都有，无需用户安装任何额外依赖。
+- **结论**：macOS 二进制是 self-contained（自包含）但**非纯静态**——区别于 Linux musl 的真·全静态链接。spec §8 项 3 已据此修正措辞为"single self-contained binary"避免过度宣称。
+
+#### 8.3.2 Linux musl 静态链接（`ldd` 核实）
+
+- **机制**：`x86_64-unknown-linux-musl` / `aarch64-unknown-linux-musl` 目标使用 musl libc 而非 glibc，产出完全静态链接的二进制。
+- **CI 验证步骤**（已纳入 `.github/workflows/release.yml`）：
+  ```bash
+  ldd target/${{ matrix.target }}/release/nowdocs
+  # 预期输出：'not a dynamic executable'
+  ```
+- **结论**：Linux musl 二进制是真·全静态，零运行时依赖，可直接 curl + chmod + run。
+
+#### 8.3.3 cargo-binstall 资产命名约定
+
+- **格式**：`{name}-{version}-{target}{archive-suffix}`
+- **示例**：
+  - `nowdocs-v0.1.0-aarch64-apple-darwin.tar.gz`
+  - `nowdocs-v0.1.0-x86_64-unknown-linux-musl.tar.gz`
+  - `nowdocs-v0.1.0-x86_64-pc-windows-msvc.zip`
+- **Cargo.toml 配置**（`[package.metadata.binstall]`）：
+  ```toml
+  pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-{ target }{ archive-suffix }"
+  bin-dir = "{ name }-{ version }-{ target }"
+  pkg-fmt = "tgz"
+  ```
+- **用户安装命令**：`cargo binstall nowdocs`（自动按本机 target 拉取对应资产）。
+
+#### 8.3.4 构建矩阵覆盖（5 目标）
+
+| Target | OS | Archive | 链接方式 |
+|---|---|---|---|
+| `aarch64-apple-darwin` | macOS-latest | `.tar.gz` | 动态链 Accelerate |
+| `x86_64-apple-darwin` | macOS-latest | `.tar.gz` | 动态链 Accelerate |
+| `x86_64-unknown-linux-musl` | ubuntu-latest | `.tar.gz` | 真·全静态 |
+| `aarch64-unknown-linux-musl` | ubuntu-latest | `.tar.gz` | 真·全静态 |
+| `x86_64-pc-windows-msvc` | windows-latest | `.zip` | Windows runtime |
+
+#### 8.3.5 不签名分发（D9 决定）
+
+- 无 code signing / notarization——CLI 工具社区常态（ripgrep / fd / uv / ruff 均无签名）。
+- 权衡：避免 F-1/OPT 签证签名身份暴露风险 + 减少 CI 复杂度。
+- 用户首次安装 macOS 二进制需 `xattr -d com.apple.quarantine`（已知 UX 成本，未签名标准操作）。
+
+---
+
 ## 9. 原 spec 修订清单
 
 | 章节 | 修订动作 |

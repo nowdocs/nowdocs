@@ -38,5 +38,10 @@ half = "2"
 futures = "0.3"
 lance-arrow = "7"
 
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-{ target }{ archive-suffix }"
+bin-dir = "{ name }-{ version }-{ target }"
+pkg-fmt = "tgz"
+
 [dev-dependencies]
 tempfile = "3.10"
