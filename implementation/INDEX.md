@@ -56,12 +56,12 @@
 | 03 | registry 生命周期 | 4e+4f+4g | 1b ✅ 1e ✅ 1c ✅ 2b ✅ | — | ✅ 已合入 |
 | 04 | CLI 集成 | 4d | 02 ✅ 03 ✅ | — | ✅ 已合入 |
 | 05 | binstall 矩阵 | 5a | 1a ✅ | — | ✅ 已合入 |
-| 06 | Homebrew tap | 5b | 5a ✅（产物 URL） | 独立 | ✅ **可派** |
+| 06 | Homebrew tap | 5b | 5a ✅（产物 URL） | 独立 | ✅ 已合入 |
 | 07 | CI 安全闸门 | 5c | 1b ✅ 3b ✅ | — | ✅ 已合入 |
-| 08 | 种子 crate | 5d | 2c ✅ 5c ✅（CI 校验就位） | 独立 | ✅ **可派** |
+| 08 | 种子 crate | 5d | 2c ✅ 5c ✅（CI 校验就位） | 独立 | ✅ 已合入 |
 | 09 | L1-L4 门禁 | 5e | 1a ✅ | — | ✅ 已合入 |
 
-**现在能立刻并行**：`06`（Homebrew tap，5a 已合入）/ `08`（种子 crate，5c 已合入）—— 互不碰文件，各自独立 worktree。
+🎉 **波次 4 全部合入** —— 9 块（01-09）均完成，集成分支 `feat/4-wave-assembly-stubs` @ `b62e1af`（未 push）。下一步：codex review → 用户决策 push / 发版。
 
 ---
 
@@ -86,12 +86,12 @@
 | 01 | 3b | ✅ 完成 | `feat/3b-eval` | `f65dc0e`→`c35ecaa` | recall@5=1.0 / MRR=0.65（门禁 0.8/0.6）；bug#1 retrieve 排序待修 |
 | 02 | 4b+4c | ✅ 完成 | `feat/4bc-tools` | `72bc53a`→`1a1ba6b` | mcp 4/4 + tools 5/5 |
 | 03 | 4e+4f+4g | ✅ 完成 | `feat/4efg-registry` | `35a4e65`→`b159784` | registry 7/7（须串行）|
-| 04 | 4d | ✅ 可派（已解锁）| — | — | 等 02+03 → 已就位 |
-| 05 | 5a | ⬜ 待派 | — | — | 5 目标构建矩阵 |
-| 06 | 5b | ⬜ 待派 | — | — | unsigned formula |
-| 07 | 5c | ⬜ 待派 | — | — | registry 安全闸门 |
-| 08 | 5d | ⬜ 待派 | — | — | Next/React/Vue 种子 |
-| 09 | 5e | ⬜ 待派 | — | — | pre-commit/push/CI/weekly |
+| 04 | 4d | ✅ 完成 | `feat/4d-cli` | `→7afe9d1` | CLI 子命令接线 |
+| 05 | 5a | ✅ 完成 | `feat/5a-binstall` | `→a7314aa` | 5 目标构建矩阵 + release.yml |
+| 06 | 5b | ✅ 完成 | `feat/5b-homebrew` | `→35c4609` | unsigned formula（5 OQ 发布期决策，见下）|
+| 07 | 5c | ✅ 完成 | `feat/5c-ci` | `→8474f8c` | manifest/no-vectors/DCO 闸门 + 威胁模型 |
+| 08 | 5d | ✅ 完成 | `feat/08-seed-crates` | `→b62e1af` | nextjs/react/vue share 产物 3×4；chunk_count MATCH ×3；src/ 已 untrack |
+| 09 | 5e | ✅ 完成 | `feat/5e-gates` | `→785d031` | pre-commit/push/CI/weekly 闸门 |
 
 图例：⬜ 待派 / 🔄 进行中 / ✅ 完成 / ⏸ 阻塞 / ⚠ 软依赖建议等
 
