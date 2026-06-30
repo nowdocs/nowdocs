@@ -37,15 +37,39 @@ def strip_mdx(text: str) -> str:
 
 
 def strip_mdx_preserving_code(text: str) -> str:
-    """Strip MDX/JSX from prose while leaving fenced code blocks intact.
+    """Strip MDX/JSX from prose while leaving code content intact.
 
-    Code fences (``` or ~~~) often contain JS/TS with braces — e.g.
-    ``import { ref } from 'vue'`` or ``const cfg = { mode: 'a' }``. Running
-    strip_mdx over them would delete those ``{...}`` expressions and corrupt
-    the API names that nowdocs is supposed to return to coding agents. So we
-    walk the file line by line, flush each prose run through strip_mdx, and
-    pass code-fence lines through verbatim.
+    Three kinds of code content are preserved verbatim, because strip_mdx's
+    ``{...}`` removal would otherwise delete API names (e.g. ``import { ref }
+    from 'vue'`` → ``import  from 'vue'``) and corrupt the very things nowdocs
+    returns to coding agents:
+
+    1. Fenced code blocks (``` or ~~~).
+    2. ``<script setup>...</script>`` (and ``<script>...</script>``) blocks
+       embedded in Vue/MDX prose — these hold real JS imports.
+    3. Inline code spans between backticks (`` `import { useState }` ``),
+       which appear in prose like "replace `` `import { useState } from 'react'` ``".
+
+    Approach: walk line by line to extract fenced and <script> blocks verbatim
+    (state machine over fences + a non-greedy match for <script> across the
+    prose buffer), then within each prose run, swap backtick spans for
+    placeholders, run strip_mdx, and restore them.
     """
+    # First pass: pull out <script ...>...</script> blocks as protected units,
+    # so the line-walk below treats their inner lines as fenced code.
+    script_blocks: list[str] = []
+
+    def _stash_script(m: re.Match) -> str:
+        script_blocks.append(m.group(0))
+        return f"\x00SCRIPT{len(script_blocks) - 1}\x00"
+
+    text = re.sub(
+        r"<script\b[^>]*>.*?</script>",
+        _stash_script,
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+
     out: list[str] = []
     prose_buf: list[str] = []
     in_fence = False
@@ -55,7 +79,7 @@ def strip_mdx_preserving_code(text: str) -> str:
         if not in_fence:
             if stripped.startswith("```") or stripped.startswith("~~~"):
                 if prose_buf:
-                    out.append(strip_mdx("".join(prose_buf)))
+                    out.append(_strip_prose_run("".join(prose_buf)))
                     prose_buf = []
                 in_fence = True
                 fence_marker = stripped[:3]
@@ -69,8 +93,36 @@ def strip_mdx_preserving_code(text: str) -> str:
                 in_fence = False
                 fence_marker = None
     if prose_buf:
-        out.append(strip_mdx("".join(prose_buf)))
-    return "".join(out)
+        out.append(_strip_prose_run("".join(prose_buf)))
+
+    result = "".join(out)
+
+    # Restore stashed <script> blocks verbatim.
+    for i, block in enumerate(script_blocks):
+        result = result.replace(f"\x00SCRIPT{i}\x00", block)
+    return result
+
+
+def _strip_prose_run(prose: str) -> str:
+    """Strip MDX/JSX from a prose run while preserving inline code spans.
+
+    Backtick spans (`` `...` ``) are swapped for placeholders before
+    strip_mdx runs and restored after, so braces inside inline code —
+    e.g. `` `import { useState } from 'react'` `` in prose — survive.
+    """
+    spans: list[str] = []
+
+    def _stash_span(m: re.Match) -> str:
+        spans.append(m.group(0))
+        return f"\x00SPAN{len(spans) - 1}\x00"
+
+    # Match backtick-delimited inline code (no newline, backticks not escaped).
+    prose = re.sub(r"`[^`\n]+`", _stash_span, prose)
+    prose = strip_mdx(prose)
+    for i, span in enumerate(spans):
+        prose = prose.replace(f"\x00SPAN{i}\x00", span)
+    return prose
+
 
 
 def process_file(src: Path, dst: Path) -> int:
