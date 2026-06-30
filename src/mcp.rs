@@ -12,7 +12,7 @@ use std::io::{self, BufRead, Write};
 
 use serde_json::{json, Value};
 
-use crate::{cache, input};
+use crate::{cache, tools};
 
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const SERVER_NAME: &str = "nowdocs";
@@ -20,9 +20,6 @@ const SERVER_NAME: &str = "nowdocs";
 /// JSON-RPC error codes.
 const ERR_METHOD_NOT_FOUND: i64 = -32601;
 const ERR_INVALID_PARAMS: i64 = -32602;
-
-/// Tool-not-implemented sentinel (replaced by Wave 4).
-const ERR_TOOL_NOT_IMPLEMENTED: i64 = -32601;
 
 pub fn run_loop() -> io::Result<()> {
     // Fail-closed: refuse to serve if the cache layout is wrong (D15).
@@ -130,25 +127,8 @@ fn handle_tools_call(params: Option<&Value>) -> Value {
     let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
-    match name {
-        "nowdocs_search" => {
-            // Validate inputs at the boundary before doing anything else.
-            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-            let docset = args.get("docset").and_then(|v| v.as_str()).unwrap_or("");
-            if let Err(e) = input::validate_query(query) {
-                return err_response(ERR_INVALID_PARAMS, &format!("invalid query: {e}"));
-            }
-            if let Err(e) = input::validate_docset(docset) {
-                return err_response(ERR_INVALID_PARAMS, &format!("invalid docset: {e}"));
-            }
-            // Inputs valid — but the search backend is not wired yet (Wave 4).
-            err_response(ERR_TOOL_NOT_IMPLEMENTED, "nowdocs_search not yet implemented")
-        }
-        "nowdocs_list" => {
-            err_response(ERR_TOOL_NOT_IMPLEMENTED, "nowdocs_list not yet implemented")
-        }
-        other => err_response(ERR_METHOD_NOT_FOUND, &format!("unknown tool: {other}")),
-    }
+    // Delegate to tools module.
+    tools::handle_call(name, args)
 }
 
 fn err_response(code: i64, message: &str) -> Value {
