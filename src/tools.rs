@@ -42,7 +42,7 @@ fn handle_search(args: Value) -> Value {
     // Sanitize each chunk.
     let chunks: Vec<Value> = search_result
         .chunks
-        .into_iter()
+        .iter()
         .map(|c| {
             json!({
                 "chunk_idx": c.chunk_idx,
@@ -55,22 +55,37 @@ fn handle_search(args: Value) -> Value {
         })
         .collect();
 
-    let fallback = format!(
-        "{} chunks, {} tokens, truncated={}",
+    // Text fallback: render each chunk's content for clients that don't support structuredContent.
+    let mut fallback = String::new();
+    for (i, chunk) in search_result.chunks.iter().enumerate() {
+        if i > 0 {
+            fallback.push_str("\n\n---\n\n");
+        }
+        fallback.push_str(&format!(
+            "## {} ({})\n{}",
+            sanitize::sanitize_chunk(&chunk.heading_path),
+            chunk.source_url,
+            sanitize::sanitize_chunk(&chunk.text)
+        ));
+    }
+    fallback.push_str(&format!(
+        "\n\n---\n{} chunks, {} tokens, truncated={}",
         chunks.len(),
         search_result.tokens_returned,
         search_result.truncated
-    );
+    ));
 
+    // P1: structuredContent is a top-level result field, not inside content array.
+    // P2: text fallback includes actual chunk content, not just statistics.
     json!({
         "content": [
-            { "type": "text", "text": fallback },
-            { "type": "structuredContent", "content": {
-                "chunks": chunks,
-                "tokens_returned": search_result.tokens_returned,
-                "truncated": search_result.truncated,
-            }}
-        ]
+            { "type": "text", "text": fallback }
+        ],
+        "structuredContent": {
+            "chunks": chunks,
+            "tokens_returned": search_result.tokens_returned,
+            "truncated": search_result.truncated,
+        }
     })
 }
 
