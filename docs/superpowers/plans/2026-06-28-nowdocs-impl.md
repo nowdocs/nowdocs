@@ -1049,7 +1049,375 @@ Expected: build 全绿 + 非 ignore 测试全 PASS（#[ignore] 测试 skipped）
 Edit plan 的 Task 2c 全部 `- [ ]` → `- [x]`（7 步）。
 
 ### Wave 3 — Retrieval + eval
-- **3a retrieval pipeline** (`src/retrieve.rs`): `search(docset, query, max_tokens, top_k)` → hybrid query + neighbor-window assembly (~2048 tokens, stop at `max_tokens`, set `truncated`) + `tokens_returned` via `count_tokens`. `docset` required (D12). Gate: returns ≤ max_tokens.
+
+### Task 3a: Retrieval Pipeline
+
+**Files:**
+- Create: `src/retrieve.rs`
+- Create: `tests/retrieve_tests.rs`
+- Modify: `src/lib.rs`（加 `pub mod retrieve;`）
+- Test: `cargo test --test retrieve_tests -- --test-threads=1`
+
+**Interfaces:**
+- Consumes:
+  - `store::Store::open`, `Store::hybrid_search`, `Store::fetch_by_idx`
+  - `embedder::{Embedder, EmbedderSpec}` — `load_for(spec)` + `embed`
+  - `input::{validate_docset, validate_query, resolve_max_tokens, resolve_top_k}`
+  - `cache::manifest_path`, `cache::db_path`
+  - `manifest::{parse_manifest, validate, Manifest}`
+  - `token::count_tokens`
+  - `chunker::ChunkType`
+- Produces:
+  - `pub fn search(docset: &str, query: &str, max_tokens: Option<u32>, top_k: Option<u32>) -> anyhow::Result<SearchResult>`
+  - `pub struct SearchResult { pub chunks: Vec<ResultChunk>, pub tokens_returned: u32, pub truncated: bool }`
+  - `pub struct ResultChunk { pub chunk_idx: u32, pub heading_path: String, pub source_url: String, pub api_version: Option<String>, pub chunk_type: ChunkType, pub text: String }`
+
+**决策与边界（D-3a-1 ~ D-3a-6）：**
+- D-3a-1 **`docset` 必填**：`search` 第一个参数是 docset 名，不是 URL；与 2c `ingest_dir` 配对。`max_tokens` / `top_k` 为 `Option<u32>`，内部调用 `resolve_*`。
+- D-3a-2 **嵌入模型从 manifest 读取**：`search` 必须读 manifest，用 `manifest.embedder` 构造 `EmbedderSpec` 并调用 `embedder::Embedder::load_for(&spec)`。这样未来 registry 分发不同模型版本时查询侧不会默认用错模型（v1 当前仍锁 jina-v2-small）。
+- D-3a-3 **相邻窗口定义**：对每个 hybrid hit 的 `chunk_idx`，取自身及 `idx-1`、`idx+1`（在 `[0, chunk_count)` 范围内）。去重后按 `chunk_idx` 升序组装，保证上下文连续。
+- D-3a-4 **`max_tokens` 截断语义**：从第一个 chunk 开始累加 `count_tokens(text)`，下一个 chunk 若会超出预算则停止，并设 `truncated = true`；否则 `truncated = false`。`tokens_returned` 为实际返回 chunks 的 token 总和，保证 `≤ max_tokens`。
+- D-3a-5 **`top_k` 截断**：`resolve_top_k` 已 clamp 到 `[1,20]`；hybrid_search 传 `top_k as usize`。
+- D-3a-6 **空结果**：若 docset 无 chunk 或 hybrid_search 无 hit，返回 `SearchResult { chunks: vec![], tokens_returned: 0, truncated: false }`，不报错。
+
+- [ ] **Step 1: 写失败测试 — 验证 search 函数未定义**
+
+`tests/retrieve_tests.rs`：
+```rust
+use nowdocs::chunker::ChunkType;
+use nowdocs::retrieve::{search, ResultChunk, SearchResult};
+
+#[test]
+fn test_search_smoke() {
+    // 只要编译通过即可；真实搜索需要 embedder，放在 #[ignore] 测试。
+    // 本测试先检查 public API 存在。
+    let _ = std::hint::black_box((ResultChunk {
+        chunk_idx: 0,
+        heading_path: "H".into(),
+        source_url: "a.md".into(),
+        api_version: None,
+        chunk_type: ChunkType::Info,
+        text: "hello".into(),
+    }, SearchResult {
+        chunks: vec![],
+        tokens_returned: 0,
+        truncated: false,
+    }));
+}
+```
+
+Run: `cargo test --test retrieve_tests -- --test-threads=1 > 3a-test.log 2>&1`
+Expected: 编译失败 — `retrieve` module / `search` / `ResultChunk` / `SearchResult` 未定义。
+
+- [ ] **Step 2: 实现 `src/retrieve.rs` 骨架 + 类型定义**
+
+`src/retrieve.rs`（先不实现 search body，只放类型和存根）：
+```rust
+//! Retrieval pipeline: embed query -> hybrid search -> neighbor-window assembly.
+
+use anyhow::{Context, Result};
+
+use crate::chunker::ChunkType;
+use crate::embedder::{self, EmbedderSpec};
+use crate::input::{resolve_max_tokens, resolve_top_k, validate_docset, validate_query};
+use crate::manifest::{self, Manifest};
+use crate::store::Store;
+use crate::token::count_tokens;
+
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    pub chunks: Vec<ResultChunk>,
+    pub tokens_returned: u32,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResultChunk {
+    pub chunk_idx: u32,
+    pub heading_path: String,
+    pub source_url: String,
+    pub api_version: Option<String>,
+    pub chunk_type: ChunkType,
+    pub text: String,
+}
+
+pub fn search(
+    docset: &str,
+    query: &str,
+    max_tokens: Option<u32>,
+    top_k: Option<u32>,
+) -> Result<SearchResult> {
+    let _ = (docset, query, max_tokens, top_k);
+    todo!("Task 3a Step 3 implements this")
+}
+```
+
+`src/lib.rs` 加 `pub mod retrieve;`（加在 `pub mod store;` 行后或 ingest 行后，不影响 API）。
+
+Run: `cargo test --test retrieve_tests -- --test-threads=1 > 3a-test.log 2>&1`
+Expected: `test_search_smoke ... ok`（存根没执行到 todo，因为只是 black_box 类型）。
+
+- [ ] **Step 3: 实现 `search` 主流程（manifest 校验 + embed + hybrid_search + 组装）**
+
+完整实现 `src/retrieve.rs` 中的 `search`：
+```rust
+pub fn search(
+    docset: &str,
+    query: &str,
+    max_tokens: Option<u32>,
+    top_k: Option<u32>,
+) -> Result<SearchResult> {
+    let docset = validate_docset(docset)?;
+    let query = validate_query(query)?;
+    let max_tokens = resolve_max_tokens(max_tokens);
+    let top_k = resolve_top_k(top_k);
+
+    // Load and validate manifest.
+    let manifest_path = crate::cache::manifest_path(&docset);
+    let manifest_json = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("failed to read manifest for docset {docset:?}"))?;
+    let manifest: Manifest = manifest::parse_manifest(&manifest_json)?;
+    manifest::validate(&manifest)?;
+
+    // Build embedder spec from manifest (model-version lock).
+    let embedder_spec = EmbedderSpec {
+        model_id: manifest.embedder.model_id.clone(),
+        model_revision: manifest.embedder.model_revision.clone(),
+        model_sha256: manifest.embedder.model_sha256.clone(),
+    };
+    let embedder = embedder::Embedder::load_for(&embedder_spec)?;
+
+    // Embed query and run hybrid search.
+    let query_vector = embedder.embed(&query)?;
+    let store = Store::open(&docset)?;
+    let hits = store.hybrid_search(&query_vector, &query, top_k as usize)?;
+
+    if hits.is_empty() {
+        return Ok(SearchResult {
+            chunks: vec![],
+            tokens_returned: 0,
+            truncated: false,
+        });
+    }
+
+    // Collect neighbor window indices.
+    let chunk_count = manifest.source.chunk_count as u32;
+    let mut window_ids: Vec<u32> = Vec::new();
+    for hit in &hits {
+        for delta in [-1i32, 0, 1] {
+            let idx = hit.chunk_idx as i32 + delta;
+            if idx >= 0 && (idx as u32) < chunk_count {
+                window_ids.push(idx as u32);
+            }
+        }
+    }
+    window_ids.sort_unstable();
+    window_ids.dedup();
+
+    // Fetch window chunks from lancedb by chunk_idx, then map to ResultChunk.
+    let window_hits = store.fetch_by_idx(&window_ids)?;
+    let window_chunks: Vec<ResultChunk> = window_hits.into_iter().map(|h| ResultChunk {
+        chunk_idx: h.chunk_idx,
+        heading_path: h.heading_path,
+        source_url: h.source_url,
+        api_version: h.api_version,
+        chunk_type: h.chunk_type,
+        text: h.text,
+    }).collect();
+
+    // Assemble within max_tokens budget.
+    assemble_result(window_chunks, max_tokens)
+}
+```
+
+在同一个文件中继续加 `assemble_result`（见 Step 5）。`Store::fetch_by_idx` 在 Step 4 实现。
+
+- [ ] **Step 4: 在 `src/store.rs` 实现 `fetch_by_idx` — scalar filter by `chunk_idx IN (...)`**
+
+在 `src/store.rs` 的 `impl Store` 块中加：
+```rust
+pub fn fetch_by_idx(&self, ids: &[u32]) -> Result<Vec<SearchHit>> {
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let filter = ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+    let filter = format!("chunk_idx IN ({filter})");
+
+    let table = self
+        .runtime
+        .block_on(self.conn.open_table(&self.table_name).execute())
+        .context("failed to open table for fetch_by_idx")?;
+
+    let batches: Vec<RecordBatch> = self.runtime.block_on(async {
+        let stream = table
+            .query()
+            .only_if(&filter)
+            .execute()
+            .await
+            .context("fetch_by_idx query failed")?;
+        stream
+            .try_collect::<Vec<_>>()
+            .await
+            .context("failed to collect fetch_by_idx results")
+    })?;
+
+    // Reuse the same column-parsing logic as hybrid_search; consider extracting a helper.
+    let mut hits = Vec::new();
+    for batch in &batches {
+        if batch.column_by_name("chunk_idx").is_none() {
+            continue;
+        }
+        let idx_col = batch
+            .column_by_name("chunk_idx")
+            .and_then(|c| c.as_any().downcast_ref::<UInt32Array>())
+            .context("missing chunk_idx column")?;
+        let heading_col = batch
+            .column_by_name("heading_path")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing heading_path column")?;
+        let url_col = batch
+            .column_by_name("source_url")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing source_url column")?;
+        let api_col = batch
+            .column_by_name("api_version")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+        let ctype_col = batch
+            .column_by_name("chunk_type")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing chunk_type column")?;
+        let text_col = batch
+            .column_by_name("text")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing text column")?;
+
+        for row in 0..batch.num_rows() {
+            let chunk_type = match ctype_col.value(row) {
+                "Code" => ChunkType::Code,
+                _ => ChunkType::Info,
+            };
+            hits.push(SearchHit {
+                score: 0.0,
+                chunk_idx: idx_col.value(row),
+                heading_path: heading_col.value(row).to_string(),
+                source_url: url_col.value(row).to_string(),
+                api_version: api_col.map(|c| c.value(row).to_string()),
+                chunk_type,
+                text: text_col.value(row).to_string(),
+            });
+        }
+    }
+    hits.sort_by_key(|h| h.chunk_idx);
+    Ok(hits)
+}
+```
+
+- [ ] **Step 5: 实现 `assemble_result` — 按 `max_tokens` 截断**
+
+`src/retrieve.rs` 加：
+```rust
+fn assemble_result(chunks: Vec<ResultChunk>, max_tokens: u32) -> Result<SearchResult> {
+    let mut selected = Vec::new();
+    let mut tokens_used: u32 = 0;
+    let mut truncated = false;
+
+    for chunk in chunks {
+        let n = count_tokens(&chunk.text) as u32;
+        if selected.is_empty() {
+            // First chunk always fits; count_tokens is guaranteed > 0 for non-empty text.
+            selected.push(chunk);
+            tokens_used += n;
+            continue;
+        }
+        if tokens_used + n > max_tokens {
+            truncated = true;
+            break;
+        }
+        selected.push(chunk);
+        tokens_used += n;
+    }
+
+    // Sanity: if even the first chunk exceeds budget, still return it but mark truncated.
+    if selected.len() == 1 && tokens_used > max_tokens {
+        truncated = true;
+    }
+
+    Ok(SearchResult {
+        chunks: selected,
+        tokens_returned: tokens_used,
+        truncated,
+    })
+}
+```
+
+- [ ] **Step 6: 加边界测试（不依赖真实 embedder）**
+
+`tests/retrieve_tests.rs` 追加：
+```rust
+use std::fs;
+
+use nowdocs::ingest::ingest_dir;
+use nowdocs::retrieve::{search, SearchResult};
+
+#[test]
+#[ignore = "needs real embedder (~66MB download, ~30s)"]
+fn test_search_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    fs::write(dir.path().join("a.md"), "# Auth\n\nUse token zzzretrieve_xyz to authenticate.\n").unwrap();
+    fs::write(dir.path().join("b.md"), "# Config\n\nSet timeout to 30s.\n").unwrap();
+
+    let stats = ingest_dir(dir.path(), "retrieve_e2e").unwrap();
+    assert!(stats.chunks >= 2);
+
+    let result = search("retrieve_e2e", "zzzretrieve_xyz", Some(4000), Some(5)).unwrap();
+    assert!(!result.chunks.is_empty(), "should return at least one chunk");
+    assert!(
+        result.chunks.iter().any(|c| c.text.contains("zzzretrieve_xyz")),
+        "recalled chunk must contain the unique keyword"
+    );
+    assert!(result.tokens_returned <= 4000, "tokens must fit budget");
+    assert!(result.chunks.windows(2).all(|w| w[0].chunk_idx < w[1].chunk_idx), "chunks sorted by idx");
+}
+
+#[test]
+fn test_search_rejects_invalid_inputs() {
+    unsafe { std::env::set_var("XDG_CACHE_HOME", tempfile::tempdir().unwrap().path()) };
+    assert!(search("../bad", "query", None, None).is_err());
+    assert!(search("valid", "", None, None).is_err());
+}
+```
+
+Run: `cargo test --test retrieve_tests -- --test-threads=1 > 3a-test.log 2>&1`
+Expected: 非 ignore 测试通过（`test_search_smoke`、`test_search_rejects_invalid_inputs`），`test_search_end_to_end` skipped。
+
+- [ ] **Step 7: 跑端到端 #[ignore] 测试验证召回 + 截断语义**
+
+Run: `cargo test --test retrieve_tests -- --ignored --test-threads=1 > 3a-test.log 2>&1`
+Expected: `test_search_end_to_end ... ok`（首次下载模型 ~30s）。
+
+额外手动验证截断：构造一个 docset 让总 token > 100，调用 `search(docset, query, Some(50), Some(5))`，断言 `result.truncated == true` 且 `result.tokens_returned <= 50`。
+
+- [ ] **Step 8: `cargo build` + `cargo test` 全绿 + commit**
+
+Run:
+```bash
+cargo build > 3a-build.log 2>&1
+cargo test --test retrieve_tests -- --test-threads=1 > 3a-test.log 2>&1
+```
+
+Expected: build 全绿 + 非 ignore 测试全 PASS。
+
+Commit:
+```bash
+git add src/retrieve.rs tests/retrieve_tests.rs src/lib.rs src/store.rs
+git commit -m "feat(retrieve): hybrid search + neighbor-window assembly (3a)"
+```
+
+Edit plan 的 Task 3a 全部 `- [ ]` → `- [x]`（8 步）。
+
+### Task 3b: Golden eval
 - **3b golden eval** (`src/eval.rs` + `tests/eval_tests.rs`): per-docset golden set (10-30 queries + expected chunk url), recall@5 + MRR. Gate: canonical fixture passes threshold.
 
 ### Wave 4 — Assembly
