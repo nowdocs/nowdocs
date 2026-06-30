@@ -686,7 +686,7 @@ pub fn default_config() -> ChunkConfig { ChunkConfig { min_tokens: 256, max_toke
 
 **TDD steps:**
 
-- [ ] **Step 1: 加 Cargo.toml 依赖 + 确认 protoc**
+- [x] **Step 1: 加 Cargo.toml 依赖 + 确认 protoc** (4b098a3: arrow=58 actual vs plan 55, lance-arrow=7 added)
 
 `Cargo.toml` `[dependencies]` 新增（lancedb 行已存在 = `lancedb = "0.30"`）：
 ```toml
@@ -702,7 +702,7 @@ futures = "0.3"   # try_collect
 Run: `protoc --version`（预期有版本号；无则装 `protobuf-compiler`）+ `cargo build > 2b-build.log 2>&1`
 Expected: build 通过（lancedb/lance 全链编译成功）
 
-- [ ] **Step 2: 写失败测试 — open 建表 + 插入 + 精确召回**
+- [x] **Step 2: 写失败测试 — open 建表 + 插入 + 精确召回** (4b098a3)
 
 `tests/store_tests.rs`：用 tempdir 作 cache_root（测试隔离），插入 3 个 chunk（含一个文本唯一关键词如 "zzzunique_token"），hybrid_search 用该关键词的查询向量应返回该 chunk 排第一。
 ```rust
@@ -726,26 +726,26 @@ fn test_open_insert_recall() {
 Run: `cargo test --test store_tests > 2b-test.log 2>&1`
 Expected: FAIL（`Store` 未定义）
 
-- [ ] **Step 3: 实现 store.rs 骨架（open + 表 schema + FTS 索引）**
+- [x] **Step 3: 实现 store.rs 骨架（open + 表 schema + FTS 索引）** (4b098a3)
 
 `src/store.rs`：定义 `Store`/`SearchHit`，`Store::open` 建 `Runtime` + 共享 `Arc<Session>` + `connect(db_path).session(arc).execute()` + `create_table`（schema: id, vector FixedSizeList<f16>,512>, heading_path, source_url, api_version, chunk_type, chunk_idx, text）+ 建 FTS 索引（`Index::FTS(FtsIndexBuilder::default())` on "text"）。表已存在则 open_table。
 
 Run: `cargo test --test store_tests` → 仍 FAIL（insert/hybrid_search 未实现）
 
-- [ ] **Step 4: 实现 insert（chunks+vectors → RecordBatch → table.add）**
+- [x] **Step 4: 实现 insert（chunks+vectors → RecordBatch → table.add）** (4b098a3)
 
 把 `&[Chunk]` + `&[Vec<f32>]` 转 arrow `RecordBatch`（vector 列 f32→f16 via `half`，其他列 String/Option<String>/u32），`table.add(batches).execute().await`（block_on）。
 
 Run: `cargo test --test store_tests` → 仍 FAIL（hybrid_search 未实现）
 
-- [ ] **Step 5: 实现 hybrid_search（hybrid 链 + 结果转 SearchHit）**
+- [x] **Step 5: 实现 hybrid_search（hybrid 链 + 结果转 SearchHit）** (4b098a3)
 
 `table.query().full_text_search(FullTextSearchQuery::new(q.to_string())).nearest_to(&qv_f16)?.rerank(Arc::new(RRFReranker::new(1.0))).execute_hybrid(Default::default())` → `try_collect::<Vec<RecordBatch>>()` → 逐行取 `_distance`/`_score` 取 score、text/heading_path/source_url/chunk_idx 取字段 → 组 `SearchHit`，按 score 排序取 top_k。
 
 Run: `cargo test --test store_tests > 2b-test.log 2>&1`
 Expected: PASS（`test_open_insert_recall` 绿）
 
-- [ ] **Step 6: 加边界测试 — insert 长度不等 bail + 空 docset open**
+- [x] **Step 6: 加边界测试 — insert 长度不等 bail + 空 docset open** (4b098a3)
 
 ```rust
 #[test]
@@ -764,7 +764,7 @@ fn test_open_empty_docset_creates_table() {
 ```
 Run: `cargo test --test store_tests` → Expected: 全 PASS
 
-- [ ] **Step 7: lib.rs 注册 + commit**
+- [x] **Step 7: lib.rs 注册 + commit** (4b098a3)
 
 `src/lib.rs` 加 `pub mod store;`（在 embedder 行后）。`cargo build` + `cargo test` 全绿后 commit：`feat(store): lancedb hybrid store + FTS + f16 vectors (2b)`。
 - **2c ingest** (`src/ingest.rs`): md dir → `chunker` → `embedder.embed` → `store.insert`. Uses `manifest` + `cache`. Gate: ingest a fixture dir, search returns expected chunk.

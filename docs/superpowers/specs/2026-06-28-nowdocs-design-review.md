@@ -469,6 +469,13 @@ Python 参考实现（transformers `AutoModel` + mean-pooling，与 sentence-tra
 - **async 边界**：lancedb 全 async。Store 内部持 `tokio::runtime::Runtime`，`self.runtime.block_on(...)` 同步包装。**陷阱**：lancedb 内部 `tokio::spawn`，若在已有 tokio runtime 上下文里 `Runtime::new().block_on` 会 panic「Cannot start a runtime from within a runtime」。nowdocs 顶层无 tokio context 故安全；W4 mcp.rs 若变 async 需重审（改用 `Handle::current().block_on`）。
 - **insert**：`table.add(Vec<RecordBatch>).execute().await`（`Vec<RecordBatch>` 直接 `Scannable`，`table.rs:886/1829`）。
 
+> **2b 实现核实（2026-06-29，commit 4b098a3）**：以上 §G API 事实全部在实际编译+测试中验证通过。补充：
+> - arrow 实际解析版本 = `58.3.0`（非 plan 猜测的 55），Cargo.toml 写 `"58"`。
+> - `FixedSizeListArray::try_new_from_values` 需 `lance-arrow = "7"` 的 `FixedSizeListArrayExt` trait（非 arrow 原生）。
+> - `StringArray` 无 `FromIterator` impl，需 `StringArray::from(vec)` 构造。
+> - 空表 hybrid_search 返回的 RecordBatch 不含数据列（仅 `_score`/`_distance`），需 `chunk_idx` 列存在性检查后 skip。
+> - 测试需 `--test-threads=1`（`XDG_CACHE_HOME` 环境变量并行竞争）。
+
 ### H. hf-hub 0.4 API 核实（Task 2a 实现）
 
 **源码级核实（2026-06-29，`~/.cargo/registry/src/index.crates.io-.../hf-hub-0.4.3/`）**：
