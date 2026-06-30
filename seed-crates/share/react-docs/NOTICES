@@ -1,0 +1,28 @@
+React Documentation
+===================
+
+Source: https://github.com/reactjs/react.dev
+Upstream license: Creative Commons Attribution 4.0 International (CC BY 4.0)
+Documentation site: https://react.dev
+
+This docset contains text excerpts from the React documentation,
+reformatted and chunked for local hybrid retrieval. Code samples remain
+under their original CC BY 4.0 terms. Image content has been excluded
+from redistribution.
+
+Attribution
+-----------
+React documentation by Meta Platforms, Inc. and the React documentation
+contributors, licensed under CC BY 4.0.
+
+The full license text is available in the LICENSE file accompanying this
+docset and at: https://creativecommons.org/licenses/by/4.0/legalcode
+
+When redistributing or displaying this content, you must:
+  - Provide attribution to "Meta Platforms, Inc. and React documentation
+    contributors" (or the user-supplied manifest legal.attribution).
+  - Indicate any changes made.
+  - Not apply legal terms or technological measures that restrict others
+    from doing anything the license permits.
+
+nowdocs is a community project and is not affiliated with Meta Platforms, Inc.
