@@ -1,9 +1,0 @@
----
-title: API Reference
-sidebar: false
-page: true
-footer: false
----
-
-import ApiIndex from './ApiIndex.vue'
-
