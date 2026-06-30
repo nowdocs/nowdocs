@@ -64,7 +64,7 @@ fn handle_search(args: Value) -> Value {
         fallback.push_str(&format!(
             "## {} ({})\n{}",
             sanitize::sanitize_chunk(&chunk.heading_path),
-            chunk.source_url,
+            sanitize::sanitize_metadata(&chunk.source_url),
             sanitize::sanitize_chunk(&chunk.text)
         ));
     }
