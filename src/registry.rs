@@ -17,10 +17,19 @@ fn is_test_file_url(url: &str) -> bool {
 }
 
 fn is_allowed_registry_url(url: &str) -> bool {
-    is_test_file_url(url)
-        || ALLOWED_REGISTRY_DOMAINS
-            .iter()
-            .any(|d| url.contains(d))
+    if is_test_file_url(url) {
+        return true;
+    }
+    // Extract host+path prefix from URL and check against allowed domains.
+    // e.g. "https://github.com/nowdocs-registry/foo" → "github.com/nowdocs-registry"
+    let after_scheme = url
+        .split("://")
+        .nth(1)
+        .unwrap_or(url);
+    let host_path = after_scheme.split('/').take(2).collect::<Vec<_>>().join("/");
+    ALLOWED_REGISTRY_DOMAINS
+        .iter()
+        .any(|d| host_path == *d || after_scheme.starts_with(d))
 }
 
 fn download_to_temp(url: &str) -> Result<PathBuf> {
@@ -37,6 +46,7 @@ fn download_to_temp(url: &str) -> Result<PathBuf> {
         .status()
         .context("failed to spawn curl")?;
     if !status.success() {
+        let _ = std::fs::remove_file(&tmp);
         anyhow::bail!("curl failed for {}", url);
     }
     Ok(tmp)
@@ -118,15 +128,19 @@ fn parse_octal(s: &[u8]) -> Option<u64> {
 pub fn install(docset: &str, url: &str) -> Result<()> {
     cache::ensure_layout()?;
 
-    let archive_path = if is_test_file_url(url) {
+    let (archive_path, is_temp) = if is_test_file_url(url) {
         let path = url.strip_prefix("file://").unwrap();
-        PathBuf::from(path)
+        (PathBuf::from(path), false)
     } else {
-        download_to_temp(url)?
+        (download_to_temp(url)?, true)
     };
 
     let mut file = std::fs::File::open(&archive_path).context("open archive")?;
     let entries = extract_tar(&mut file)?;
+    drop(file);
+    if is_temp {
+        let _ = std::fs::remove_file(&archive_path);
+    }
 
     let manifest_entry = entries
         .iter()

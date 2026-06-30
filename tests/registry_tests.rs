@@ -207,37 +207,39 @@ fn test_share_produces_no_vectors() {
     populate_test_store(docset);
 
     let out_dir = dir.path().join("share_out");
-    let result = nowdocs::registry::share(docset, &out_dir);
-    match result {
-        Ok(share_path) => {
-            // Verify no .lance files or vector data in share output.
-            let entries: Vec<_> = std::fs::read_dir(&share_path)
-                .unwrap()
-                .filter_map(|e| e.ok())
-                .collect();
-            for entry in &entries {
-                let name = entry.file_name();
-                let name_str = name.to_string_lossy();
-                assert!(
-                    !name_str.contains(".lance"),
-                    "share output should not contain .lance files, found: {}",
-                    name_str
-                );
-            }
-            assert!(
-                share_path.join("manifest.json").is_file(),
-                "share should produce manifest.json"
-            );
-            assert!(
-                share_path.join("chunks.jsonl").is_file(),
-                "share should produce chunks.jsonl"
-            );
-        }
-        Err(e) => {
-            // If store dump fails (e.g., empty db), the test still validates
-            // that share doesn't panic and returns an error gracefully.
-            eprintln!("share returned error (acceptable if db empty): {}", e);
-        }
+    let share_path = nowdocs::registry::share(docset, &out_dir).unwrap();
+
+    // Verify no .lance files or vector data in share output.
+    let entries: Vec<_> = std::fs::read_dir(&share_path)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    for entry in &entries {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        assert!(
+            !name_str.contains(".lance"),
+            "share output should not contain .lance files, found: {}",
+            name_str
+        );
+    }
+    assert!(
+        share_path.join("manifest.json").is_file(),
+        "share should produce manifest.json"
+    );
+    assert!(
+        share_path.join("chunks.jsonl").is_file(),
+        "share should produce chunks.jsonl"
+    );
+
+    // Verify chunks.jsonl content: should be JSON lines without vector data.
+    let jsonl = std::fs::read_to_string(share_path.join("chunks.jsonl")).unwrap();
+    for line in jsonl.lines() {
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert!(v.get("text").is_some(), "chunk should have text field");
+        assert!(v.get("idx").is_some(), "chunk should have idx field");
+        // No vector field should exist.
+        assert!(v.get("vector").is_none(), "chunk should NOT have vector field");
     }
 }
 
