@@ -88,10 +88,17 @@ def strip_mdx_preserving_code(text: str) -> str:
                 prose_buf.append(line)
         else:
             out.append(line)
-            # Close fence: a line whose stripped form starts with the same marker.
+            # Close fence: per CommonMark, the closing fence is the marker (``` or
+            # ~~~) followed by ONLY optional whitespace — no info string. A line
+            # like ```js inside a fence is NOT a closer; it's the opener of a new
+            # fence (a mis-pairing that previously desynced the state machine and
+            # caused real code inside fences to be treated as prose, deleting
+            # braces from e.g. ``import { ref } from 'vue'``).
             if fence_marker and stripped.startswith(fence_marker):
-                in_fence = False
-                fence_marker = None
+                tail = stripped[len(fence_marker):]
+                if tail.strip() == "":
+                    in_fence = False
+                    fence_marker = None
     if prose_buf:
         out.append(_strip_prose_run("".join(prose_buf)))
 
