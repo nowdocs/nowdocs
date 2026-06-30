@@ -28,7 +28,7 @@ fn test_search_rejects_invalid_inputs() {
 #[test]
 #[ignore = "needs real embedder (~66MB download, ~30s)"]
 fn test_search_end_to_end() {
-    use nowdocs::ingest::ingest_dir;
+    use nowdocs::ingest::{ingest_dir, IngestMeta};
     use nowdocs::retrieve::search;
     use std::fs;
 
@@ -38,7 +38,7 @@ fn test_search_end_to_end() {
     fs::write(dir.path().join("a.md"), "# Auth\n\nUse token zzzretrieve_xyz to authenticate.\n").unwrap();
     fs::write(dir.path().join("b.md"), "# Config\n\nSet timeout to 30s.\n").unwrap();
 
-    let stats = ingest_dir(dir.path(), "retrieve_e2e").unwrap();
+    let stats = ingest_dir(dir.path(), "retrieve_e2e", &IngestMeta::default()).unwrap();
     assert!(stats.chunks >= 2);
 
     let result = search("retrieve_e2e", "zzzretrieve_xyz", Some(4000), Some(5)).unwrap();
