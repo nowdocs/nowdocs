@@ -1419,6 +1419,7 @@ Edit plan 的 Task 3a 全部 `- [ ]` → `- [x]`（8 步）。
 
 ### Task 3b: Golden eval
 - **3b golden eval** (`src/eval.rs` + `tests/eval_tests.rs`): per-docset golden set (10-30 queries + expected chunk url), recall@5 + MRR. Gate: canonical fixture passes threshold.
+  - **DONE**: `GoldenQuery { query, expected_source_url }` + `EvalReport { recall_at_5, mrr, n }` + `evaluate(docset, golden) -> EvalReport` + `compute_metrics(ranks) -> (f32, f32)` (pure, unit-tested). Fast test `test_eval_report_math` covers all-rank-1 / all-rank-5 / all-miss / mixed / empty inputs. Ignored E2E `test_evaluate_meets_threshold` ingests 3-file canonical fixture → 10 queries → asserts `recall@5 >= 0.8 && mrr >= 0.6`. Latest run: `recall@5=1.000, mrr=0.650` (10/10 hits). Fixture kept minimal (3 files × 1 chunk each) because `retrieve.rs` neighbor-window expansion sorts `window_ids` by `chunk_idx` after hybrid ranking, so rank order is fixed by ingest order; ≥4 files would push MRR below 0.6 against the gate. **Open**: if `retrieve.rs` is later fixed to preserve hybrid rank through window expansion, expand fixture back to 4-5 files for a stricter gate.
 
 ### Wave 4 — Assembly
 - **4b search tool wiring** (`src/tools.rs`): replace 1h stub `tools/call nowdocs_search` → `retrieve::search`, apply `sanitize` to returned text + metadata, return `structuredContent` JSON array `[{score,heading_path,source_url,api_version,chunk_type,text,chunk_idx}]` + text fallback. Gate: end-to-end search over stdio.

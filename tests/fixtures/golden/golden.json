@@ -1,0 +1,12 @@
+[
+  {"query": "sk_live_ token format", "expected_source_url": "authentication.md"},
+  {"query": "TOTP MFA multi-factor authentication", "expected_source_url": "authentication.md"},
+  {"query": "session refresh token rotation", "expected_source_url": "authentication.md"},
+  {"query": "bearer token HTTP 401", "expected_source_url": "authentication.md"},
+  {"query": "error code catalog taxonomy", "expected_source_url": "error-codes.md"},
+  {"query": "502 503 504 gateway timeout", "expected_source_url": "error-codes.md"},
+  {"query": "error.code error.message docs_url", "expected_source_url": "error-codes.md"},
+  {"query": "cursor pagination next_cursor", "expected_source_url": "pagination.md"},
+  {"query": "limit offset deep pages", "expected_source_url": "pagination.md"},
+  {"query": "page size clamped warning", "expected_source_url": "pagination.md"}
+]

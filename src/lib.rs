@@ -8,6 +8,7 @@ pub mod sanitize;
 pub mod token;
 // Wave 0/2+ modules registered when implemented:
 pub mod embedder; // from S0; if S0 not yet run, create an empty src/embedder.rs with `// placeholder, see S0`
+pub mod eval;
 pub mod ingest;
 pub mod store;
 pub mod retrieve;
