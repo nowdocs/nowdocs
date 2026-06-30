@@ -11,5 +11,7 @@ pub mod embedder; // from S0; if S0 not yet run, create an empty src/embedder.rs
 pub mod ingest;
 pub mod store;
 pub mod retrieve;
+pub mod registry;
+pub mod tools;
 
 // ---- Module stubs (1b-1h fill these) ----
