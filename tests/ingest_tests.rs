@@ -11,16 +11,25 @@ fn test_ingest_end_to_end() {
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
-    fs::write(dir.path().join("intro.md"), "# Intro\n\nGeneral setup notes.\n").unwrap();
-    fs::write(dir.path().join("api.md"),
-        "# API\n\n## Auth\n\nAuthentication uses zzzunique_ingest_token for bearer flow.\n").unwrap();
+    fs::write(
+        dir.path().join("intro.md"),
+        "# Intro\n\nGeneral setup notes.\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("api.md"),
+        "# API\n\n## Auth\n\nAuthentication uses zzzunique_ingest_token for bearer flow.\n",
+    )
+    .unwrap();
 
     let stats = ingest_dir(dir.path(), "test_ingest", &IngestMeta::default()).unwrap();
     assert_eq!(stats.files, 2);
     assert!(stats.chunks >= 2);
 
     // manifest written + validates
-    let m = manifest::parse_manifest(&fs::read_to_string(cache::manifest_path("test_ingest")).unwrap()).unwrap();
+    let m =
+        manifest::parse_manifest(&fs::read_to_string(cache::manifest_path("test_ingest")).unwrap())
+            .unwrap();
     manifest::validate(&m).unwrap();
     assert_eq!(m.source.chunk_count, stats.chunks);
     assert_eq!(m.embedder.model_id, "jinaai/jina-embeddings-v2-small-en");
@@ -29,9 +38,14 @@ fn test_ingest_end_to_end() {
     let emb = Embedder::load().unwrap();
     let qv = emb.embed("zzzunique_ingest_token").unwrap();
     let store = Store::open("test_ingest").unwrap();
-    let hits = store.hybrid_search(&qv, "zzzunique_ingest_token", 5).unwrap();
-    assert!(hits.iter().any(|h| h.text.contains("zzzunique_ingest_token")),
-        "unique-keyword chunk should be recalled");
+    let hits = store
+        .hybrid_search(&qv, "zzzunique_ingest_token", 5)
+        .unwrap();
+    assert!(
+        hits.iter()
+            .any(|h| h.text.contains("zzzunique_ingest_token")),
+        "unique-keyword chunk should be recalled"
+    );
 }
 
 #[test]
@@ -39,8 +53,9 @@ fn test_ingest_rejects_bad_docset() {
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
     fs::write(dir.path().join("a.md"), "# A\n\ntext\n").unwrap();
-    assert!(ingest_dir(dir.path(), "../bad", &IngestMeta::default()).is_err());      // path traversal
-    assert!(ingest_dir(dir.path(), "BadDocset", &IngestMeta::default()).is_err());  // uppercase
+    assert!(ingest_dir(dir.path(), "../bad", &IngestMeta::default()).is_err()); // path traversal
+    assert!(ingest_dir(dir.path(), "BadDocset", &IngestMeta::default()).is_err());
+    // uppercase
 }
 
 #[test]
@@ -50,8 +65,9 @@ fn test_ingest_empty_dir() {
     let stats = ingest_dir(dir.path(), "empty_ds", &IngestMeta::default()).unwrap();
     assert_eq!(stats.files, 0);
     assert_eq!(stats.chunks, 0);
-    let m = manifest::parse_manifest(
-        &fs::read_to_string(cache::manifest_path("empty_ds")).unwrap()).unwrap();
+    let m =
+        manifest::parse_manifest(&fs::read_to_string(cache::manifest_path("empty_ds")).unwrap())
+            .unwrap();
     manifest::validate(&m).unwrap();
     assert_eq!(m.source.chunk_count, 0);
 }
@@ -65,15 +81,21 @@ fn test_ingest_default_meta_uses_mit_and_today_scraped_at() {
     let stats = ingest_dir(dir.path(), "def_meta_ds", &IngestMeta::default()).unwrap();
     assert_eq!(stats.files, 0);
 
-    let m = manifest::parse_manifest(
-        &fs::read_to_string(cache::manifest_path("def_meta_ds")).unwrap()).unwrap();
+    let m =
+        manifest::parse_manifest(&fs::read_to_string(cache::manifest_path("def_meta_ds")).unwrap())
+            .unwrap();
     manifest::validate(&m).unwrap();
     // default license is MIT (backward-compatible with the pre-flag behavior)
     assert_eq!(m.legal.license, "MIT");
     assert_eq!(m.legal.copyright_holder, "");
     assert_eq!(m.legal.attribution, "");
     // scraped_at is auto-filled with today's date as YYYY-MM-DD (no chrono dep)
-    assert_eq!(m.source.scraped_at.len(), 10, "scraped_at must be YYYY-MM-DD, got: {}", m.source.scraped_at);
+    assert_eq!(
+        m.source.scraped_at.len(),
+        10,
+        "scraped_at must be YYYY-MM-DD, got: {}",
+        m.source.scraped_at
+    );
     assert_eq!(m.source.scraped_at.chars().nth(4), Some('-'));
     assert_eq!(m.source.scraped_at.chars().nth(7), Some('-'));
 }
@@ -91,12 +113,15 @@ fn test_ingest_cc_by_with_attribution_persists_legal_and_source() {
     };
     ingest_dir(dir.path(), "ccb_ds", &meta).unwrap();
 
-    let m = manifest::parse_manifest(
-        &fs::read_to_string(cache::manifest_path("ccb_ds")).unwrap()).unwrap();
+    let m = manifest::parse_manifest(&fs::read_to_string(cache::manifest_path("ccb_ds")).unwrap())
+        .unwrap();
     manifest::validate(&m).unwrap();
     assert_eq!(m.legal.license, "CC-BY-4.0");
     assert_eq!(m.legal.copyright_holder, "Meta Platforms, Inc.");
-    assert_eq!(m.legal.attribution, "React documentation by Meta, licensed CC BY 4.0.");
+    assert_eq!(
+        m.legal.attribution,
+        "React documentation by Meta, licensed CC BY 4.0."
+    );
     assert_eq!(m.source.source_url, "https://github.com/reactjs/react.dev");
     assert_eq!(m.source.entry_url, "https://react.dev");
     assert_eq!(m.source.scraped_at.len(), 10);

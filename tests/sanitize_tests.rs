@@ -53,7 +53,11 @@ fn metadata_strips_zero_width() {
 fn metadata_caps_length() {
     let long = "x".repeat(2000);
     let out = sanitize_metadata(&long);
-    assert!(out.chars().count() <= 500, "metadata must be capped, got {}", out.chars().count());
+    assert!(
+        out.chars().count() <= 500,
+        "metadata must be capped, got {}",
+        out.chars().count()
+    );
 }
 
 #[test]

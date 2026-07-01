@@ -41,7 +41,11 @@ fn cache_root_ends_with_nowdocs() {
 fn db_path_ends_with_docset_lance() {
     let _g = EnvGuard::set("XDG_CACHE_HOME", "/tmp/nowdocs-fake-cache");
     let p = db_path("nextjs");
-    assert!(p.ends_with(Path::new("nowdocs/db/nextjs.lance")), "got {:?}", p);
+    assert!(
+        p.ends_with(Path::new("nowdocs/db/nextjs.lance")),
+        "got {:?}",
+        p
+    );
 }
 
 #[test]
@@ -76,7 +80,11 @@ fn ensure_layout_rejects_version_mismatch() {
     std::fs::write(cache_root().join(".layout_version"), "99").unwrap();
     let err = ensure_layout().unwrap_err();
     let msg = format!("{}", err);
-    assert!(msg.contains("migrate"), "err should hint migration, got: {}", msg);
+    assert!(
+        msg.contains("migrate"),
+        "err should hint migration, got: {}",
+        msg
+    );
 }
 
 #[test]

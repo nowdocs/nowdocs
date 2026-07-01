@@ -67,10 +67,16 @@ pub fn validate(m: &Manifest) -> anyhow::Result<()> {
         anyhow::bail!("embedder.model_id mismatch: {}", m.embedder.model_id);
     }
     if m.embedder.vector_dim != 512 {
-        anyhow::bail!("embedder.vector_dim must be 512, got {}", m.embedder.vector_dim);
+        anyhow::bail!(
+            "embedder.vector_dim must be 512, got {}",
+            m.embedder.vector_dim
+        );
     }
     if m.embedder.engine != "candle" {
-        anyhow::bail!("embedder.engine must be \"candle\", got {}", m.embedder.engine);
+        anyhow::bail!(
+            "embedder.engine must be \"candle\", got {}",
+            m.embedder.engine
+        );
     }
     if m.embedder.dtype != "f16" {
         anyhow::bail!("embedder.dtype must be \"f16\", got {}", m.embedder.dtype);

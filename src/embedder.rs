@@ -102,11 +102,11 @@ impl Embedder {
             PositionEmbeddingType::Alibi,
         );
 
-        let vb = if weights.extension().map_or(false, |e| e == "safetensors") {
+        let vb = if weights.extension().is_some_and(|e| e == "safetensors") {
             // SAFETY: mmap of a read-only model file in the HF cache.
             unsafe {
                 candle_nn::VarBuilder::from_mmaped_safetensors(
-                    &[weights.clone()],
+                    std::slice::from_ref(&weights),
                     DType::F32,
                     &Device::Cpu,
                 )
@@ -119,8 +119,8 @@ impl Embedder {
 
         let model = BertModel::new(vb, &config).context("load jina-bert")?;
 
-        let tokenizer = Tokenizer::from_file(tok_path)
-            .map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
+        let tokenizer =
+            Tokenizer::from_file(tok_path).map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
 
         Ok(Self { model, tokenizer })
     }
@@ -153,8 +153,11 @@ fn sanitize_config(path: &std::path::Path) -> Result<()> {
     if let Some(obj) = val.as_object_mut() {
         obj.remove("auto_map");
     }
-    std::fs::write(path, serde_json::to_string_pretty(&val).context("serialize config")?)
-        .context("write sanitized config.json")?;
+    std::fs::write(
+        path,
+        serde_json::to_string_pretty(&val).context("serialize config")?,
+    )
+    .context("write sanitized config.json")?;
     Ok(())
 }
 

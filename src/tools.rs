@@ -23,7 +23,10 @@ fn handle_search(args: Value) -> Value {
     // Extract and validate inputs.
     let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
     let docset = args.get("docset").and_then(|v| v.as_str()).unwrap_or("");
-    let max_tokens = args.get("max_tokens").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let max_tokens = args
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
     let top_k = args.get("top_k").and_then(|v| v.as_u64()).map(|v| v as u32);
 
     if let Err(e) = input::validate_query(query) {

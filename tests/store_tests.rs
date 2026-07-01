@@ -59,7 +59,10 @@ fn test_open_insert_recall() {
 
     let qv = embed_stub("zzzunique_token");
     let hits = store.hybrid_search(&qv, "zzzunique_token", 3).unwrap();
-    assert!(!hits.is_empty(), "hybrid_search should return at least one hit");
+    assert!(
+        !hits.is_empty(),
+        "hybrid_search should return at least one hit"
+    );
     // The chunk containing "zzzunique_token" should appear in results.
     // RRF reranking may reorder based on vector similarity, so we check
     // presence rather than exact rank.
@@ -105,5 +108,8 @@ fn test_open_empty_docset_creates_table() {
 
     let store = Store::open("test_empty").unwrap();
     let hits = store.hybrid_search(&[0.0f32; 512], "anything", 5).unwrap();
-    assert!(hits.is_empty(), "empty table should return empty results, not error");
+    assert!(
+        hits.is_empty(),
+        "empty table should return empty results, not error"
+    );
 }

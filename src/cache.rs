@@ -36,7 +36,9 @@ pub fn model_path(model_id: &str) -> PathBuf {
 
 /// `<cache>/nowdocs/db/<docset>.manifest.json` — manifest alongside the lance table.
 pub fn manifest_path(docset: &str) -> PathBuf {
-    cache_root().join("db").join(format!("{docset}.manifest.json"))
+    cache_root()
+        .join("db")
+        .join(format!("{docset}.manifest.json"))
 }
 
 /// Create the cache tree if absent and gate on the layout version.
@@ -50,10 +52,9 @@ pub fn ensure_layout() -> anyhow::Result<()> {
 
     if version_file.is_file() {
         let on_disk = std::fs::read_to_string(&version_file)?;
-        let on_disk: u32 = on_disk
-            .trim()
-            .parse()
-            .map_err(|_| anyhow::anyhow!("corrupt .layout_version (not a number): run `nowdocs migrate`"))?;
+        let on_disk: u32 = on_disk.trim().parse().map_err(|_| {
+            anyhow::anyhow!("corrupt .layout_version (not a number): run `nowdocs migrate`")
+        })?;
         if on_disk != CACHE_LAYOUT_VERSION {
             anyhow::bail!(
                 "cache layout version mismatch: on disk {}, nowdocs {} — run `nowdocs migrate`",

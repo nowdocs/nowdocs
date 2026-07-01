@@ -13,27 +13,48 @@ fn test_eval_report_math() {
     // All hits at rank 1 → recall = 1.0, mrr = 1.0
     let ranks_all_first = vec![Some(1usize), Some(1), Some(1)];
     let (rec, mrr) = compute_metrics(&ranks_all_first);
-    assert!((rec - 1.0).abs() < 1e-6, "all rank-1 hits → recall=1.0, got {rec}");
-    assert!((mrr - 1.0).abs() < 1e-6, "all rank-1 hits → mrr=1.0, got {mrr}");
+    assert!(
+        (rec - 1.0).abs() < 1e-6,
+        "all rank-1 hits → recall=1.0, got {rec}"
+    );
+    assert!(
+        (mrr - 1.0).abs() < 1e-6,
+        "all rank-1 hits → mrr=1.0, got {mrr}"
+    );
 
     // All hits at rank 5 → recall = 1.0, mrr = 0.2
     let ranks_all_fifth = vec![Some(5usize), Some(5)];
     let (rec, mrr) = compute_metrics(&ranks_all_fifth);
-    assert!((rec - 1.0).abs() < 1e-6, "all rank-5 hits → recall=1.0, got {rec}");
-    assert!((mrr - 0.2).abs() < 1e-6, "all rank-5 hits → mrr=0.2, got {mrr}");
+    assert!(
+        (rec - 1.0).abs() < 1e-6,
+        "all rank-5 hits → recall=1.0, got {rec}"
+    );
+    assert!(
+        (mrr - 0.2).abs() < 1e-6,
+        "all rank-5 hits → mrr=0.2, got {mrr}"
+    );
 
     // All misses → recall = 0.0, mrr = 0.0
     let ranks_none = vec![None, None, None];
     let (rec, mrr) = compute_metrics(&ranks_none);
-    assert!((rec - 0.0).abs() < 1e-6, "all misses → recall=0.0, got {rec}");
+    assert!(
+        (rec - 0.0).abs() < 1e-6,
+        "all misses → recall=0.0, got {rec}"
+    );
     assert!((mrr - 0.0).abs() < 1e-6, "all misses → mrr=0.0, got {mrr}");
 
     // Mixed: 2 hits at rank 1, 1 hit at rank 3, 1 miss → recall = 0.75, mrr = (1 + 1 + 1/3 + 0) / 4 = 0.5833...
     let ranks_mixed = vec![Some(1usize), Some(1), Some(3), None];
     let (rec, mrr) = compute_metrics(&ranks_mixed);
-    assert!((rec - 0.75).abs() < 1e-6, "3/4 hits → recall=0.75, got {rec}");
+    assert!(
+        (rec - 0.75).abs() < 1e-6,
+        "3/4 hits → recall=0.75, got {rec}"
+    );
     let expected_mrr = (1.0 + 1.0 + 1.0 / 3.0 + 0.0) / 4.0;
-    assert!((mrr - expected_mrr).abs() < 1e-6, "mixed → mrr={expected_mrr}, got {mrr}");
+    assert!(
+        (mrr - expected_mrr).abs() < 1e-6,
+        "mixed → mrr={expected_mrr}, got {mrr}"
+    );
 
     // Empty input → 0/0 safely
     let (rec, mrr) = compute_metrics(&[]);
@@ -67,8 +88,13 @@ fn test_evaluate_meets_threshold() {
 
     // Ingest fixture into a uniquely named docset.
     let docset = "golden_e2e";
-    let stats = ingest_dir(&fixture_dir, docset, &IngestMeta::default()).expect("ingest fixture corpus");
-    assert!(stats.files >= 3, "fixture must have >= 3 md files, got {}", stats.files);
+    let stats =
+        ingest_dir(&fixture_dir, docset, &IngestMeta::default()).expect("ingest fixture corpus");
+    assert!(
+        stats.files >= 3,
+        "fixture must have >= 3 md files, got {}",
+        stats.files
+    );
     assert!(stats.chunks > 0, "fixture must produce chunks");
 
     // Load golden.json into a Vec<GoldenQuery>.
@@ -82,7 +108,11 @@ fn test_evaluate_meets_threshold() {
             expected_source_url: v["expected_source_url"].as_str().unwrap().to_string(),
         })
         .collect();
-    assert!(golden.len() >= 10, "golden.json should have >= 10 queries, got {}", golden.len());
+    assert!(
+        golden.len() >= 10,
+        "golden.json should have >= 10 queries, got {}",
+        golden.len()
+    );
 
     // Run the eval.
     let report = evaluate(docset, &golden).expect("evaluate over golden set");

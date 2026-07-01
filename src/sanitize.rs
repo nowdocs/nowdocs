@@ -46,14 +46,17 @@ fn re_override() -> &'static Regex {
 fn re_danger() -> &'static Regex {
     // Danger flags only as standalone tokens (preceded by start/space), so a
     // flag substring inside a version string like "forceful" is not touched.
-    RE_DANGER.get_or_init(|| {
-        Regex::new(r"(^|\s)(?:-y|--yes|--force|sudo|rm\s+-rf)\b").unwrap()
-    })
+    RE_DANGER.get_or_init(|| Regex::new(r"(^|\s)(?:-y|--yes|--force|sudo|rm\s+-rf)\b").unwrap())
 }
 
 fn strip_zero_width(s: &str) -> String {
     s.chars()
-        .filter(|&c| !matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' | '\u{2060}'))
+        .filter(|&c| {
+            !matches!(
+                c,
+                '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' | '\u{2060}'
+            )
+        })
         .collect()
 }
 

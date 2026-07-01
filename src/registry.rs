@@ -33,8 +33,7 @@ fn is_allowed_registry_url(url: &str) -> bool {
         "github.com" => {
             let after_scheme = url.split("://").nth(1).unwrap_or(url);
             let path = after_scheme.strip_prefix(host).unwrap_or(after_scheme);
-            path.starts_with("/nowdocs-registry/")
-                || path == "/nowdocs-registry"
+            path.starts_with("/nowdocs-registry/") || path == "/nowdocs-registry"
         }
         "registry.nowdocs.rs" => true,
         _ => false,
@@ -97,7 +96,7 @@ fn extract_tar<R: Read>(reader: &mut R) -> Result<Vec<(String, Vec<u8>)>> {
             }
 
             // Skip padding (align to 512 bytes).
-            let padded = ((size as usize + 511) / 512) * 512;
+            let padded = (size as usize).div_ceil(512) * 512;
             if padded > size as usize {
                 let mut skip = vec![0u8; padded - size as usize];
                 let _ = reader.read_exact(&mut skip);
@@ -106,7 +105,7 @@ fn extract_tar<R: Read>(reader: &mut R) -> Result<Vec<(String, Vec<u8>)>> {
             files.push((name, content));
         } else {
             // Skip non-regular entries.
-            let padded = ((size as usize + 511) / 512) * 512;
+            let padded = (size as usize).div_ceil(512) * 512;
             let mut skip = vec![0u8; padded];
             let _ = reader.read_exact(&mut skip);
         }
@@ -119,7 +118,7 @@ fn parse_octal(s: &[u8]) -> Option<u64> {
         .iter()
         .copied()
         .skip_while(|&b| b == 0 || b == b' ')
-        .take_while(|&b| b >= b'0' && b <= b'7')
+        .take_while(|&b| (b'0'..=b'7').contains(&b))
         .collect();
     if trimmed.is_empty() {
         return Some(0);
@@ -167,13 +166,15 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
 
     // Materialize chunks into the LanceDB store so retrieve::search works.
     // Uses zero vectors as placeholders; real vectors are rebuilt by CI (D10).
-    let chunks_entry = entries.iter().find(|(name, _)| name.ends_with("chunks.jsonl"));
+    let chunks_entry = entries
+        .iter()
+        .find(|(name, _)| name.ends_with("chunks.jsonl"));
     if let Some((_, data)) = chunks_entry {
         let jsonl = std::str::from_utf8(data).context("chunks.jsonl utf8")?;
         let parsed: Vec<JsonlChunk> = jsonl
             .lines()
             .filter(|l| !l.trim().is_empty())
-            .map(|l| serde_json::from_str::<JsonlChunk>(l))
+            .map(serde_json::from_str::<JsonlChunk>)
             .collect::<Result<Vec<_>, _>>()
             .context("parse chunks.jsonl")?;
 
