@@ -1,0 +1,17 @@
+nowdocs is dual-licensed under either:
+
+- the MIT License (LICENSE-MIT), or
+- the Apache License, Version 2.0 (LICENSE-APACHE)
+
+at your option. This `MIT OR Apache-2.0` licensing follows Rust ecosystem
+convention (tokio, serde, clap). You may choose either license to comply with;
+the obligations of the two do not stack.
+
+The `license` field in Cargo.toml mirrors this: `MIT OR Apache-2.0`.
+
+Copyright (c) 2026 GWMM LLC.
+
+File-level licensing note: the `option-ext` crate (MPL-2.0) is statically
+linked into the binary. MPL-2.0 is file-level copyleft and does not infect the
+whole binary; its notice is retained in NOTICE. See NOTICE for the full
+third-party license inventory.
