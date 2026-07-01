@@ -23,7 +23,7 @@
 
 class Nowdocs < Formula
   desc "Local MCP server: latest third-party dev docs, hybrid search, zero API cost"
-  homepage "https://nowdocs.rs"
+  homepage "https://github.com/nowdocs/nowdocs"
   license "MIT OR Apache-2.0"
   version "0.1.0"
 
