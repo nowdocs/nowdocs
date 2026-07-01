@@ -37,6 +37,7 @@ arrow-schema = "58"
 half = "2"
 futures = "0.3"
 lance-arrow = "7"
+openssl = { version = "0.10", features = ["vendored"] }
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-{ target }{ archive-suffix }"
