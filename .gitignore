@@ -42,6 +42,11 @@ seed-crates/tmp/ingest-*.log
 seed-crates/tmp/share-*.log
 seed-crates/tmp/__pycache__/
 
+# license 审计工具产物（本地审计报告 / curl 调试 / python 缓存，勿入库）
+scripts/audit_license/report.json
+scripts/audit_license/__pycache__/
+curl_output.txt
+
 # 上游原始文档源（抓取+剥离后的中间产物，可由 share/ 产物中
 # manifest.source_url 重新 clone 重建）— 不入库避免版权冗余拷贝+仓库膨胀
 seed-crates/src/
