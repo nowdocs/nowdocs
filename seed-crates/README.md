@@ -31,7 +31,6 @@ seed-crates/
     ├── react-docs/             # Shallow clone of reactjs/react.dev (gitignored)
     ├── next-docs/              # Sparse clone of vercel/next.js docs/ (gitignored)
     ├── prep_docs.py            # MDX/JSX stripper
-    ├── patch_manifest.py       # Per-docset legal metadata patcher
     └── ingest-*.log, share-*.log
 ```
 
@@ -55,18 +54,17 @@ All 3 share artifacts pass:
 - ✅ DCO — commit signed off (see `git log` for `Signed-off-by:`)
 - ✅ Pure text only — no images extracted from any source
 
-## Open questions
+## Resolved follow-ups
 
-1. `ingest::build_manifest` hardcodes `legal.license = "MIT"` (`src/ingest.rs:111`).
-   The current `nowdocs ingest` CLI has no `--license` / `--copyright-holder` /
-   `--attribution` flag. The CC-BY manifests for React/Vue were produced by
-   running `ingest` (which writes the hardcoded MIT manifest), then post-patching
-   the manifest via `tmp/patch_manifest.py`. **Suggestion**: add ingest CLI flags
-   or a `LegalSpec` parameter to `ingest::ingest_dir` so the source of truth is
-   the tool, not a post-step. Files for Task 4d/5d owner.
-2. `nowdocs share` hardcodes the output dir to `<cwd>/<docset>-share/<docset>/`
-   (`src/main.rs:33`). The redundant `<docset>-share/<docset>/` nesting was
-   flattened post-hoc. A `--out-dir` flag would let the caller control the path.
+1. `ingest::ingest_dir` now takes an `IngestMeta` parameter; the `nowdocs ingest`
+   CLI exposes `--license` / `--copyright-holder` / `--attribution` /
+   `--source-url` / `--entry-url`. The manifest's legal + source fields are
+   correct on first write, so `tmp/patch_manifest.py` is no longer needed
+   (kept as a legacy reference only). `scraped_at` is auto-filled with today's
+   UTC date via a std-only `civil_from_days` (no chrono dependency).
+2. `nowdocs share` takes `--out-dir` to control the output directory; the
+   default remains `./{docset}-share`. Passing `--out-dir seed-crates/share`
+   produces `seed-crates/share/{docset}/` directly — no `mv`/`rmdir` hack.
 
 ## Reproducibility
 
@@ -82,13 +80,19 @@ uv run python3 seed-crates/tmp/prep_docs.py seed-crates/tmp/vue-docs/src seed-cr
 uv run python3 seed-crates/tmp/prep_docs.py seed-crates/tmp/react-docs/src/content seed-crates/src/react-docs
 uv run python3 seed-crates/tmp/prep_docs.py seed-crates/tmp/next-docs/docs seed-crates/src/next-docs
 
-# 3. Ingest + patch manifest + share
-./target/release/nowdocs ingest seed-crates/src/next-docs nextjs-docs
-./target/release/nowdocs ingest seed-crates/src/react-docs react-docs
-./target/release/nowdocs ingest seed-crates/src/vue-docs vue-docs
-uv run python3 seed-crates/tmp/patch_manifest.py nextjs-docs MIT "Vercel, Inc." "..." "..." "..."
-uv run python3 seed-crates/tmp/patch_manifest.py react-docs CC-BY-4.0 "Meta Platforms, Inc. and React documentation contributors" "..." "..." "..."
-uv run python3 seed-crates/tmp/patch_manifest.py vue-docs CC-BY-4.0 "Yuxi (Evan) You and Vue documentation contributors" "..." "..." "..."
-cd seed-crates/share && /path/to/nowdocs share nextjs-docs && mv nextjs-docs-share/nextjs-docs . && rmdir nextjs-docs-share
-# (same for react-docs and vue-docs)
+# 3. Ingest (legal/source metadata baked in) + share
+./target/release/nowdocs ingest seed-crates/src/next-docs nextjs-docs \
+  --license MIT --copyright-holder "Vercel, Inc." \
+  --attribution "Documentation from https://github.com/vercel/next.js, licensed under MIT." \
+  --source-url https://github.com/vercel/next.js --entry-url https://nextjs.org
+./target/release/nowdocs ingest seed-crates/src/react-docs react-docs \
+  --license CC-BY-4.0 --copyright-holder "Meta Platforms, Inc. and React documentation contributors" \
+  --attribution "React documentation by Meta Platforms, Inc. ..., licensed CC BY 4.0. Source: https://github.com/reactjs/react.dev." \
+  --source-url https://github.com/reactjs/react.dev --entry-url https://react.dev
+./target/release/nowdocs ingest seed-crates/src/vue-docs vue-docs \
+  --license CC-BY-4.0 --copyright-holder "Yuxi (Evan) You and Vue documentation contributors" \
+  --attribution "Vue documentation by Yuxi (Evan) You ..., licensed CC BY 4.0. Source: https://github.com/vuejs/docs." \
+  --source-url https://github.com/vuejs/docs --entry-url https://vuejs.org
+./target/release/nowdocs share nextjs-docs --out-dir seed-crates/share
+# (same `share --out-dir seed-crates/share` for react-docs and vue-docs)
 ```

@@ -14,9 +14,32 @@ pub enum Commands {
     /// Install a pre-built doc crate from the registry
     Install { docset: String },
     /// Import a Markdown directory as a local docset
-    Ingest { dir: String, name: String },
+    Ingest {
+        dir: String,
+        name: String,
+        /// SPDX-style license for the docset (MIT, Apache-2.0, CC-BY-4.0). Defaults to MIT.
+        #[arg(long)]
+        license: Option<String>,
+        /// Copyright holder line for the manifest legal block.
+        #[arg(long)]
+        copyright_holder: Option<String>,
+        /// Attribution text (required when --license is CC-BY-4.0).
+        #[arg(long)]
+        attribution: Option<String>,
+        /// Upstream source repo URL (e.g. https://github.com/vercel/next.js).
+        #[arg(long)]
+        source_url: Option<String>,
+        /// Entry/docs site URL for the source block.
+        #[arg(long)]
+        entry_url: Option<String>,
+    },
     /// Package a local docset for registry contribution (text+manifest, NOT vectors)
-    Share { docset: String },
+    Share {
+        docset: String,
+        /// Output directory (defaults to ./{docset}-share in cwd).
+        #[arg(long)]
+        out_dir: Option<String>,
+    },
     /// Remove an installed docset
     Uninstall { docset: String },
     /// List installed docsets

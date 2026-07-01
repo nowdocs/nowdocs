@@ -53,7 +53,7 @@ fn test_eval_report_math() {
 #[test]
 #[ignore = "needs real embedder (~66MB download, ~30s)"]
 fn test_evaluate_meets_threshold() {
-    use nowdocs::ingest::ingest_dir;
+    use nowdocs::ingest::{ingest_dir, IngestMeta};
 
     // Isolated cache so we don't clobber any real docset.
     let cache_dir = tempfile::tempdir().unwrap();
@@ -67,7 +67,7 @@ fn test_evaluate_meets_threshold() {
 
     // Ingest fixture into a uniquely named docset.
     let docset = "golden_e2e";
-    let stats = ingest_dir(&fixture_dir, docset).expect("ingest fixture corpus");
+    let stats = ingest_dir(&fixture_dir, docset, &IngestMeta::default()).expect("ingest fixture corpus");
     assert!(stats.files >= 3, "fixture must have >= 3 md files, got {}", stats.files);
     assert!(stats.chunks > 0, "fixture must produce chunks");
 

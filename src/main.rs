@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -24,13 +24,23 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             println!("installed {docset}");
             Ok(())
         }
-        Commands::Ingest { dir, name } => {
-            let stats = nowdocs::ingest::ingest_dir(Path::new(&dir), &name)?;
+        Commands::Ingest { dir, name, license, copyright_holder, attribution, source_url, entry_url } => {
+            let meta = nowdocs::ingest::IngestMeta {
+                license: license.unwrap_or_else(|| "MIT".to_string()),
+                copyright_holder: copyright_holder.unwrap_or_default(),
+                attribution: attribution.unwrap_or_default(),
+                source_url: source_url.unwrap_or_default(),
+                entry_url: entry_url.unwrap_or_default(),
+            };
+            let stats = nowdocs::ingest::ingest_dir(Path::new(&dir), &name, &meta)?;
             println!("ingested {} files, {} chunks", stats.files, stats.chunks);
             Ok(())
         }
-        Commands::Share { docset } => {
-            let out_dir = std::env::current_dir()?.join(format!("{docset}-share"));
+        Commands::Share { docset, out_dir } => {
+            let out_dir = match out_dir {
+                Some(p) => PathBuf::from(p),
+                None => std::env::current_dir()?.join(format!("{docset}-share")),
+            };
             let product = nowdocs::registry::share(&docset, &out_dir)?;
             println!("wrote {}", product.display());
             Ok(())

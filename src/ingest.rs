@@ -11,13 +11,45 @@ use crate::input;
 use crate::manifest::{self, EmbedderSpec, LegalSpec, Manifest, RefreshSpec, RetrievalSpec, SourceSpec};
 use crate::store::Store;
 
+#[derive(Debug)]
 pub struct IngestStats {
     pub files: u32,
     pub chunks: u32,
 }
 
+/// Legal + source metadata for an ingested docset.
+///
+/// Absorbs what `seed-crates/tmp/patch_manifest.py` used to do as a post-hoc
+/// Python patch: the caller passes license/copyright/attribution/source fields
+/// at ingest time so the manifest is correct on first write, with no external
+/// patching step. `scraped_at` is auto-filled with today's UTC date (no chrono
+/// dependency — see `today_iso`).
+#[derive(Clone)]
+pub struct IngestMeta {
+    pub license: String,
+    pub copyright_holder: String,
+    pub attribution: String,
+    pub source_url: String,
+    pub entry_url: String,
+}
+
+impl Default for IngestMeta {
+    /// Defaults preserve the pre-flag behavior: MIT license, empty source
+    /// fields. CC-BY-4.0 callers must set `attribution` or `manifest::validate`
+    /// will reject the result.
+    fn default() -> Self {
+        Self {
+            license: "MIT".to_string(),
+            copyright_holder: String::new(),
+            attribution: String::new(),
+            source_url: String::new(),
+            entry_url: String::new(),
+        }
+    }
+}
+
 /// Ingest a directory of markdown files into a docset store.
-pub fn ingest_dir(dir: &Path, docset: &str) -> Result<IngestStats> {
+pub fn ingest_dir(dir: &Path, docset: &str, meta: &IngestMeta) -> Result<IngestStats> {
     let docset = input::validate_docset(docset)?;
     cache::ensure_layout()?;
 
@@ -41,6 +73,14 @@ pub fn ingest_dir(dir: &Path, docset: &str) -> Result<IngestStats> {
         c.idx = i as u32;
     }
 
+    // Build + validate the manifest BEFORE touching the store. Invalid metadata
+    // (e.g. CC-BY-4.0 without --attribution) must fail fast here, otherwise
+    // Store::open + insert would leave an orphan `.lance` directory with no
+    // manifest — list-installed would then report a broken docset and later
+    // search/share would fail. chunk_count is already known at this point.
+    let manifest = build_manifest(&docset, chunks.len() as u32, meta);
+    manifest::validate(&manifest)?;
+
     // Embed + insert. Empty dir skips embedder load but still opens (empty) store.
     if !chunks.is_empty() {
         let emb = embedder::Embedder::load()?;
@@ -54,9 +94,7 @@ pub fn ingest_dir(dir: &Path, docset: &str) -> Result<IngestStats> {
         let _ = Store::open(&docset)?;
     }
 
-    // Build + validate + write manifest.
-    let manifest = build_manifest(&docset, chunks.len() as u32);
-    manifest::validate(&manifest)?;
+    // Store written successfully — persist the pre-validated manifest.
     std::fs::write(cache::manifest_path(&docset), serde_json::to_string_pretty(&manifest)?)?;
 
     Ok(IngestStats { files, chunks: chunks.len() as u32 })
@@ -81,7 +119,7 @@ fn walk_md(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Build the v1 manifest with locked embedder provenance.
-fn build_manifest(docset: &str, chunk_count: u32) -> Manifest {
+fn build_manifest(docset: &str, chunk_count: u32, meta: &IngestMeta) -> Manifest {
     let (model_id, model_revision, model_sha256) = embedder::provenance();
     Manifest {
         docset: docset.to_string(),
@@ -102,19 +140,75 @@ fn build_manifest(docset: &str, chunk_count: u32) -> Manifest {
             window_tokens: 2048,
         },
         source: SourceSpec {
-            entry_url: String::new(),
-            source_url: String::new(),
-            scraped_at: String::new(),
+            entry_url: meta.entry_url.clone(),
+            source_url: meta.source_url.clone(),
+            scraped_at: today_iso(),
             chunk_count,
         },
         legal: LegalSpec {
-            license: "MIT".to_string(),
-            copyright_holder: String::new(),
-            attribution: String::new(),
+            license: meta.license.clone(),
+            copyright_holder: meta.copyright_holder.clone(),
+            attribution: meta.attribution.clone(),
         },
         refresh_strategy: RefreshSpec {
             tier: "community".to_string(),
             auto_days: 0,
         },
+    }
+}
+
+/// Today's UTC date as `YYYY-MM-DD`, using only `std` (no chrono dependency —
+/// adding a date crate would cross the Cargo.toml red line).
+fn today_iso() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86400) as i64;
+    civil_from_days(days)
+}
+
+/// Convert days-since-Unix-epoch to `YYYY-MM-DD`. Howard Hinnant's algorithm
+/// (civil_from_days); valid proleptic Gregorian, UTC.
+fn civil_from_days(z_in: i64) -> String {
+    let z = z_in + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;                                  // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);           // [0, 365]
+    let mp = (5 * doy + 2) / 153;                                // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1;                        // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };              // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{:04}-{:02}-{:02}", y, m, d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::civil_from_days;
+
+    #[test]
+    fn test_civil_from_days_epoch() {
+        // 1970-01-01 is day 0.
+        assert_eq!(civil_from_days(0), "1970-01-01");
+    }
+
+    #[test]
+    fn test_civil_from_days_known_dates() {
+        // 2024-01-01 = day 19723 (54 years × 365 + 13 leap days).
+        assert_eq!(civil_from_days(19_723), "2024-01-01");
+        // 2024 is a leap year; Dec 1 = 19723 + 335.
+        assert_eq!(civil_from_days(20_058), "2024-12-01");
+        assert_eq!(civil_from_days(20_088), "2024-12-31"); // leap-year edge
+        assert_eq!(civil_from_days(20_089), "2025-01-01");
+    }
+
+    #[test]
+    fn test_civil_from_days_2026() {
+        // 2026-01-01 = 20089 + 365 (2025 is not a leap year) = 20454.
+        assert_eq!(civil_from_days(20_454), "2026-01-01");
+        // 2026-04-15 = 20454 + (31+28+31) + 14 = 20558.
+        assert_eq!(civil_from_days(20_558), "2026-04-15");
     }
 }
