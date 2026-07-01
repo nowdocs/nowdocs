@@ -238,7 +238,49 @@ pub fn share(docset: &str, out_dir: &Path) -> Result<PathBuf> {
     }
     std::fs::write(share_dir.join("chunks.jsonl"), &jsonl)?;
 
+    // Carry the upstream LICENSE text verbatim (stashed at ingest time) so
+    // recipients can fulfill MIT/Apache notice retention and CC-BY-4.0
+    // attribution. Omitted when the source had no license file.
+    let license_path = cache::license_text_path(&docset);
+    if license_path.is_file() {
+        std::fs::write(share_dir.join("LICENSE"), std::fs::read(&license_path)?)?;
+    }
+    // Human-readable NOTICE synthesized from manifest legal + source fields.
+    std::fs::write(share_dir.join("NOTICE"), build_notice(&m))?;
+
     Ok(share_dir)
+}
+
+/// Build a human-readable NOTICE for a share bundle from the manifest's legal
+/// + source fields. Satisfies CC-BY-4.0's attribution requirement and
+/// MIT/Apache's notice-retention requirement for downstream recipients.
+fn build_notice(m: &manifest::Manifest) -> String {
+    let mut s = String::new();
+    s.push_str("nowdocs docset: ");
+    s.push_str(&m.docset);
+    s.push('\n');
+    s.push_str("Source: ");
+    s.push_str(&m.source.source_url);
+    s.push('\n');
+    s.push_str("Entry: ");
+    s.push_str(&m.source.entry_url);
+    s.push('\n');
+    s.push_str("License: ");
+    s.push_str(&m.legal.license);
+    s.push('\n');
+    if !m.legal.copyright_holder.trim().is_empty() {
+        s.push_str("Copyright: ");
+        s.push_str(&m.legal.copyright_holder);
+        s.push('\n');
+    }
+    if !m.legal.attribution.trim().is_empty() {
+        s.push_str("Attribution: ");
+        s.push_str(&m.legal.attribution);
+        s.push('\n');
+    }
+    s.push_str("\nThis bundle is a derived work produced by nowdocs (prep + chunk + embed)\n");
+    s.push_str("from the upstream documentation source cited above.\n");
+    s
 }
 
 #[derive(serde::Deserialize)]

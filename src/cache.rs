@@ -41,6 +41,14 @@ pub fn manifest_path(docset: &str) -> PathBuf {
         .join(format!("{docset}.manifest.json"))
 }
 
+/// `<cache>/nowdocs/db/<docset>.license.txt` — verbatim upstream LICENSE text
+/// stashed at ingest time. `nowdocs share` copies this into the bundle so the
+/// derived work carries the source license (MIT/Apache notice retention,
+/// CC-BY-4.0 attribution). Absent when the source had no LICENSE file.
+pub fn license_text_path(docset: &str) -> PathBuf {
+    cache_root().join("db").join(format!("{docset}.license.txt"))
+}
+
 /// Create the cache tree if absent and gate on the layout version.
 ///
 /// - First run (no `.layout_version`): create `db/` + `models/`, write version.

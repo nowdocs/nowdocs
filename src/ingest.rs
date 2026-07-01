@@ -79,6 +79,14 @@ pub fn ingest_dir(dir: &Path, docset: &str, meta: &IngestMeta) -> Result<IngestS
         c.idx = i as u32;
     }
 
+    // Stash the source repo's LICENSE text (if present) so `nowdocs share` can
+    // carry the verbatim upstream license in the bundle. This is the ground
+    // truth — we copy what upstream ships, we do not regenerate text from the
+    // SPDX id. No LICENSE file → nothing stashed; share then emits NOTICE only.
+    if let Some(text) = find_license_text(dir) {
+        std::fs::write(cache::license_text_path(&docset), text)?;
+    }
+
     // Build + validate the manifest BEFORE touching the store. Invalid metadata
     // (e.g. CC-BY-4.0 without --attribution) must fail fast here, otherwise
     // Store::open + insert would leave an orphan `.lance` directory with no
@@ -128,6 +136,34 @@ fn walk_md(dir: &Path) -> Result<Vec<PathBuf>> {
     }
     out.sort();
     Ok(out)
+}
+
+/// Locate the upstream license text in the ingest `dir` root. Returns the
+/// verbatim contents of the first match, or `None`.
+///
+/// Matches `LICENSE` / `LICENSE.md` / `LICENSE.txt` / `COPYING` / …
+/// (case-insensitive on the stem), preferring `LICENSE*` over `COPYING*`.
+/// Only scans the dir root — a docs source rarely nests its license, and
+/// recursing would risk pulling in a vendored `node_modules/LICENSE`.
+fn find_license_text(dir: &Path) -> Option<String> {
+    let mut license: Option<PathBuf> = None;
+    let mut copying: Option<PathBuf> = None;
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            let stem = name.trim_end_matches(".md").trim_end_matches(".txt");
+            if stem == "license" && license.is_none() {
+                license = Some(path);
+            } else if stem == "copying" && copying.is_none() {
+                copying = Some(path);
+            }
+        }
+    }
+    std::fs::read_to_string(license.or(copying)?).ok()
 }
 
 /// Build the v1 manifest with locked embedder provenance.
@@ -222,5 +258,63 @@ mod tests {
         assert_eq!(civil_from_days(20_454), "2026-01-01");
         // 2026-04-15 = 20454 + (31+28+31) + 14 = 20558.
         assert_eq!(civil_from_days(20_558), "2026-04-15");
+    }
+
+    // --- find_license_text: locate the upstream license file in the ingest dir ---
+
+    use super::find_license_text;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_find_license_text_finds_license() {
+        let d = tempdir().unwrap();
+        fs::write(d.path().join("LICENSE"), "MIT license body\n").unwrap();
+        assert_eq!(
+            find_license_text(d.path()),
+            Some("MIT license body\n".to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_license_text_finds_license_md() {
+        let d = tempdir().unwrap();
+        fs::write(d.path().join("LICENSE.md"), "body\n").unwrap();
+        assert_eq!(find_license_text(d.path()), Some("body\n".to_string()));
+    }
+
+    #[test]
+    fn test_find_license_text_case_insensitive() {
+        let d = tempdir().unwrap();
+        fs::write(d.path().join("license"), "lowercase name\n").unwrap();
+        assert_eq!(
+            find_license_text(d.path()),
+            Some("lowercase name\n".to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_license_text_finds_copying_when_no_license() {
+        let d = tempdir().unwrap();
+        fs::write(d.path().join("COPYING"), "GPL body\n").unwrap();
+        assert_eq!(
+            find_license_text(d.path()),
+            Some("GPL body\n".to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_license_text_prefers_license_over_copying() {
+        let d = tempdir().unwrap();
+        fs::write(d.path().join("LICENSE"), "MIT\n").unwrap();
+        fs::write(d.path().join("COPYING"), "GPL\n").unwrap();
+        assert_eq!(find_license_text(d.path()), Some("MIT\n".to_string()));
+    }
+
+    #[test]
+    fn test_find_license_text_none_when_absent() {
+        let d = tempdir().unwrap();
+        fs::write(d.path().join("README.md"), "readme\n").unwrap();
+        assert_eq!(find_license_text(d.path()), None);
     }
 }
