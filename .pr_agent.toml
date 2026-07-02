@@ -1,0 +1,26 @@
+[config]
+model = "custom_openai/gpt-5.5"
+fallback_models = ["moonshot/kimi2.7"]
+
+[litellm]
+timeout = 120
+num_retries = 5
+
+[pr_reviewer]
+num_code_suggestions = 5
+inline_code_comments = true
+extra_instructions = """
+你是一个顶级的安全架构师与代码质量卫士，在评审 nowdocs (纯 Rust 单二进制 MCP server) 变更时，必须严格执行以下审查：
+1. 协议与接口安全：确保 MCP 协议版本为 `2025-11-25`，stdio 传输为 NDJSON。`serve` 模块不应绑定 IP 和端口（必须绑定 localhost/127.0.0.1，防范 0.0.0.0 和外网 IP 暴露风险）。
+2. 密钥防线：严禁在代码中出现任何明文 API Key、私钥或凭证（如 HuggingFace Token 等）硬编码，必须存放在环境变量或配置中。
+3. 模型完整性与代码执行防御：加载 HuggingFace 模型时，需通过哈希（sha256）校验模型完整性，并禁止 `config.json` 中的 `auto_map` 选项以避免任意代码执行。
+4. 提示注入防御：凡返回给客户端/LLM 客户端的文本和 metadata 数据，必须执行严格的 `sanitize` 过滤以防 Prompt 注入。
+5. 工程约束与 DCO 契约：只使用单二进制 Rust Edition 2021 架构，确认代码修改未破坏接口签名；提交信息应符合 DCO 规范（带有 Signed-off-by）。
+反馈应当干练，直接指出隐患或错误行，并提供修改建议。
+"""
+
+[github_action_config]
+auto_review = true
+auto_describe = true
+auto_improve = false
+pr_actions = ["opened", "reopened", "ready_for_review", "review_requested", "synchronize"]
