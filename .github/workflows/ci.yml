@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # prost-build (lance-encoding) needs protoc; explicit PROTOC avoids PATH flakiness.
+  PROTOC: /usr/bin/protoc
+
 jobs:
   # --- DCO: every commit must have Signed-off-by (D8) ---
   dco:
@@ -76,6 +80,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Cargo build
         run: cargo build 2>&1 | tail -5
       - name: Cargo test

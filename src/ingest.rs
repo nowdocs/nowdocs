@@ -8,7 +8,9 @@ use crate::cache;
 use crate::chunker::{self, Chunk};
 use crate::embedder;
 use crate::input;
-use crate::manifest::{self, EmbedderSpec, LegalSpec, Manifest, RefreshSpec, RetrievalSpec, SourceSpec};
+use crate::manifest::{
+    self, EmbedderSpec, LegalSpec, Manifest, RefreshSpec, RetrievalSpec, SourceSpec,
+};
 use crate::store::Store;
 
 #[derive(Debug)]
@@ -58,10 +60,14 @@ pub fn ingest_dir(dir: &Path, docset: &str, meta: &IngestMeta) -> Result<IngestS
     let mut files: u32 = 0;
     for entry in walk_md(dir)? {
         files += 1;
-        let md = std::fs::read_to_string(&entry)
-            .with_context(|| format!("read {}", entry.display()))?;
+        let md =
+            std::fs::read_to_string(&entry).with_context(|| format!("read {}", entry.display()))?;
         let mut file_chunks = chunker::chunk_markdown(&md, &chunker::default_config());
-        let rel = entry.strip_prefix(dir).unwrap_or(&entry).to_string_lossy().to_string();
+        let rel = entry
+            .strip_prefix(dir)
+            .unwrap_or(&entry)
+            .to_string_lossy()
+            .to_string();
         for c in &mut file_chunks {
             c.source_url = rel.clone();
         }
@@ -95,9 +101,15 @@ pub fn ingest_dir(dir: &Path, docset: &str, meta: &IngestMeta) -> Result<IngestS
     }
 
     // Store written successfully — persist the pre-validated manifest.
-    std::fs::write(cache::manifest_path(&docset), serde_json::to_string_pretty(&manifest)?)?;
+    std::fs::write(
+        cache::manifest_path(&docset),
+        serde_json::to_string_pretty(&manifest)?,
+    )?;
 
-    Ok(IngestStats { files, chunks: chunks.len() as u32 })
+    Ok(IngestStats {
+        files,
+        chunks: chunks.len() as u32,
+    })
 }
 
 /// Recursively collect `*.md` paths under `dir`, sorted for determinism.
@@ -109,7 +121,7 @@ fn walk_md(dir: &Path) -> Result<Vec<PathBuf>> {
             let path = entry?.path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.extension().map_or(false, |e| e == "md") {
+            } else if path.extension().is_some_and(|e| e == "md") {
                 out.push(path);
             }
         }
@@ -173,13 +185,13 @@ fn today_iso() -> String {
 fn civil_from_days(z_in: i64) -> String {
     let z = z_in + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097;                                  // [0, 146096]
+    let doe = z - era * 146097; // [0, 146096]
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
     let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);           // [0, 365]
-    let mp = (5 * doy + 2) / 153;                                // [0, 11]
-    let d = doy - (153 * mp + 2) / 5 + 1;                        // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };              // [1, 12]
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
     let y = if m <= 2 { y + 1 } else { y };
     format!("{:04}-{:02}-{:02}", y, m, d)
 }

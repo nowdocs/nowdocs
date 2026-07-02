@@ -8,11 +8,22 @@ fn test_cli_help_lists_all_subcommands() {
         .output()
         .expect("failed to execute");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for sub in ["serve", "install", "ingest", "share", "uninstall", "list-installed", "update"] {
+    for sub in [
+        "serve",
+        "install",
+        "ingest",
+        "share",
+        "uninstall",
+        "list-installed",
+        "update",
+    ] {
         assert!(stdout.contains(sub), "help must list `{}`", sub);
     }
     // serve must NOT take --host/--port (network-defense rule)
-    assert!(!stdout.contains("--port"), "serve must be argless (stdio binds no port)");
+    assert!(
+        !stdout.contains("--port"),
+        "serve must be argless (stdio binds no port)"
+    );
 }
 
 // ---- 4d: CLI ↔ real module wiring ----
@@ -86,14 +97,18 @@ fn make_tar_entry(name: &str, data: &[u8]) -> Vec<u8> {
 
     let mut sum: u32 = 0;
     for (i, &b) in header.iter().enumerate() {
-        sum += if (148..156).contains(&i) { b' ' as u32 } else { b as u32 };
+        sum += if (148..156).contains(&i) {
+            b' ' as u32
+        } else {
+            b as u32
+        };
     }
     let chk_str = format!("{:06o}\0 ", sum);
     header[148..156].copy_from_slice(chk_str.as_bytes());
 
     let mut entry = header.to_vec();
     entry.extend_from_slice(data);
-    let padded = ((data.len() + 511) / 512) * 512;
+    let padded = data.len().div_ceil(512) * 512;
     if padded > data.len() {
         entry.extend_from_slice(&vec![0u8; padded - data.len()]);
     }
@@ -124,7 +139,11 @@ fn write_tarball(dir: &std::path::Path, version: &str) -> std::path::PathBuf {
 }
 
 // Run the nowdocs binary with a fresh XDG_CACHE_HOME + cwd.
-fn run_nowdocs(cwd: &std::path::Path, cache_home: &std::path::Path, args: &[&str]) -> std::process::Output {
+fn run_nowdocs(
+    cwd: &std::path::Path,
+    cache_home: &std::path::Path,
+    args: &[&str],
+) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_nowdocs"))
         .args(args)
         .current_dir(cwd)
@@ -157,7 +176,11 @@ fn test_cli_list_installed_empty() {
     let cwd = tempfile::tempdir().unwrap();
 
     let out = run_nowdocs(cwd.path(), cache.path(), &["list-installed"]);
-    assert!(out.status.success(), "list-installed should exit 0, stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "list-installed should exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("no docsets installed"),
@@ -175,7 +198,8 @@ fn test_cli_install_uninstall_roundtrip() {
     let url = format!("file://{}", tar.display());
 
     // install
-    let out = run_nowdocs_with_test_url(cwd.path(), cache.path(), &url, &["install", "rnd-foo-7711"]);
+    let out =
+        run_nowdocs_with_test_url(cwd.path(), cache.path(), &url, &["install", "rnd-foo-7711"]);
     assert!(
         out.status.success(),
         "install should exit 0, stderr: {}",
@@ -219,8 +243,17 @@ fn test_cli_share_creates_out_dir() {
     let url = format!("file://{}", tar.display());
 
     // install
-    let out = run_nowdocs_with_test_url(cwd.path(), cache.path(), &url, &["install", "rnd-share-9912"]);
-    assert!(out.status.success(), "install failed: {}", String::from_utf8_lossy(&out.stderr));
+    let out = run_nowdocs_with_test_url(
+        cwd.path(),
+        cache.path(),
+        &url,
+        &["install", "rnd-share-9912"],
+    );
+    assert!(
+        out.status.success(),
+        "install failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // share — default out_dir is ./{docset}-share relative to cwd
     let out = run_nowdocs(cwd.path(), cache.path(), &["share", "rnd-share-9912"]);
@@ -232,7 +265,10 @@ fn test_cli_share_creates_out_dir() {
 
     // registry::share appends `<docset>` to out_dir, so the final layout is
     // <cwd>/<docset>-share/<docset>/{manifest.json,chunks.jsonl}.
-    let share_dir = cwd.path().join("rnd-share-9912-share").join("rnd-share-9912");
+    let share_dir = cwd
+        .path()
+        .join("rnd-share-9912-share")
+        .join("rnd-share-9912");
     assert!(
         share_dir.join("manifest.json").is_file(),
         "share must produce manifest.json at {}",
@@ -255,14 +291,28 @@ fn test_cli_update_refreshes_manifest() {
     let v1_url = format!("file://{}", v1.display());
 
     // install v1
-    let out = run_nowdocs_with_test_url(cwd.path(), cache.path(), &v1_url, &["install", "rnd-upd-3344"]);
-    assert!(out.status.success(), "install v1 failed: {}", String::from_utf8_lossy(&out.stderr));
+    let out = run_nowdocs_with_test_url(
+        cwd.path(),
+        cache.path(),
+        &v1_url,
+        &["install", "rnd-upd-3344"],
+    );
+    assert!(
+        out.status.success(),
+        "install v1 failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // confirm v1 on disk (manifest path is known from cache layout; the test
     // process doesn't see the subprocess's XDG_CACHE_HOME, so we construct
     // the path directly from the tempdir we passed in)
-    let manifest_path = cache.path().join("nowdocs").join("db").join("rnd-upd-3344.manifest.json");
-    let m1 = nowdocs::manifest::parse_manifest(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    let manifest_path = cache
+        .path()
+        .join("nowdocs")
+        .join("db")
+        .join("rnd-upd-3344.manifest.json");
+    let m1 = nowdocs::manifest::parse_manifest(&std::fs::read_to_string(&manifest_path).unwrap())
+        .unwrap();
     assert_eq!(m1.doc_version, "1.0.0");
 
     // write v2 tarball
@@ -270,12 +320,25 @@ fn test_cli_update_refreshes_manifest() {
     let v2_url = format!("file://{}", v2.display());
 
     // update with v2
-    let out = run_nowdocs_with_test_url(cwd.path(), cache.path(), &v2_url, &["update", "rnd-upd-3344"]);
-    assert!(out.status.success(), "update failed: {}", String::from_utf8_lossy(&out.stderr));
+    let out = run_nowdocs_with_test_url(
+        cwd.path(),
+        cache.path(),
+        &v2_url,
+        &["update", "rnd-upd-3344"],
+    );
+    assert!(
+        out.status.success(),
+        "update failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // manifest should now be v2
-    let m2 = nowdocs::manifest::parse_manifest(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
-    assert_eq!(m2.doc_version, "2.0.0", "update should refresh manifest to v2");
+    let m2 = nowdocs::manifest::parse_manifest(&std::fs::read_to_string(&manifest_path).unwrap())
+        .unwrap();
+    assert_eq!(
+        m2.doc_version, "2.0.0",
+        "update should refresh manifest to v2"
+    );
 }
 
 // --- Test 5: ingest + list-installed (uses real embedder) ---

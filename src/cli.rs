@@ -1,7 +1,11 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "nowdocs", version, about = "Local MCP doc server for LLM agents")]
+#[command(
+    name = "nowdocs",
+    version,
+    about = "Local MCP doc server for LLM agents"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,

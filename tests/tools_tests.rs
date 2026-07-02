@@ -33,7 +33,10 @@ fn test_list_two_docsets() {
 
     let result = nowdocs::tools::handle_call("nowdocs_list", json!({}));
     // Should be a success result with content array.
-    assert!(result.get("content").is_some(), "expected content array, got: {result:?}");
+    assert!(
+        result.get("content").is_some(),
+        "expected content array, got: {result:?}"
+    );
     let content = result["content"].as_array().unwrap();
     assert!(!content.is_empty(), "content should not be empty");
     // The text should contain both docset names.
@@ -79,10 +82,8 @@ fn test_search_invalid_docset() {
 fn test_search_rejects_empty_query() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (_tmp, _) = setup_cache("empty_query");
-    let result = nowdocs::tools::handle_call(
-        "nowdocs_search",
-        json!({"query": "", "docset": "nextjs"}),
-    );
+    let result =
+        nowdocs::tools::handle_call("nowdocs_search", json!({"query": "", "docset": "nextjs"}));
     assert!(
         result.get("code").is_some(),
         "expected JSON-RPC error for empty query, got: {result:?}"
@@ -101,7 +102,10 @@ fn test_unknown_tool() {
     );
     assert_eq!(result["code"].as_i64().unwrap(), -32601);
     let msg = result["message"].as_str().unwrap();
-    assert!(msg.contains("nonexistent_tool"), "error should name the tool: {msg:?}");
+    assert!(
+        msg.contains("nonexistent_tool"),
+        "error should name the tool: {msg:?}"
+    );
 }
 
 // E2E test — requires real embedder + ingested docset. Run manually.

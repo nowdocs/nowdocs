@@ -36,7 +36,7 @@ fn chunks_are_sequentially_indexed_from_zero() {
 #[test]
 fn fenced_code_block_stays_in_one_chunk_even_when_over_target() {
     let cfg = default_config(); // target 384, max 512
-    // Build a code block well over target_tokens (384) but each line short.
+                                // Build a code block well over target_tokens (384) but each line short.
     let mut code = String::from("```rust\n");
     for _ in 0..500 {
         code.push_str("let x = 42; // a line\n");
@@ -45,7 +45,10 @@ fn fenced_code_block_stays_in_one_chunk_even_when_over_target() {
     let md = format!("# Code Section\n\n{code}\n");
 
     let chunks = chunk_markdown(&md, &cfg);
-    let code_chunks: Vec<_> = chunks.iter().filter(|c| c.chunk_type == ChunkType::Code).collect();
+    let code_chunks: Vec<_> = chunks
+        .iter()
+        .filter(|c| c.chunk_type == ChunkType::Code)
+        .collect();
 
     assert_eq!(
         code_chunks.len(),
@@ -67,10 +70,13 @@ fn fenced_code_block_stays_in_one_chunk_even_when_over_target() {
 #[test]
 fn prose_chunks_respect_max_tokens() {
     let cfg = default_config(); // max 512
-    // A long prose paragraph with no code — must be split to stay ≤ max_tokens.
+                                // A long prose paragraph with no code — must be split to stay ≤ max_tokens.
     let mut para = String::new();
     for i in 0..2000 {
-        para.push_str(&format!("Sentence number {} about how rust works well. ", i));
+        para.push_str(&format!(
+            "Sentence number {} about how rust works well. ",
+            i
+        ));
     }
     let md = format!("# Prose\n\n{para}\n");
 
@@ -79,7 +85,10 @@ fn prose_chunks_respect_max_tokens() {
         .iter()
         .filter(|c| c.chunk_type == ChunkType::Info)
         .collect();
-    assert!(prose_chunks.len() > 1, "long prose should be split into multiple chunks");
+    assert!(
+        prose_chunks.len() > 1,
+        "long prose should be split into multiple chunks"
+    );
     for c in &prose_chunks {
         let n = count_tokens(&c.text);
         assert!(

@@ -25,7 +25,7 @@ pub fn run_loop() -> io::Result<()> {
     // Fail-closed: refuse to serve if the cache layout is wrong (D15).
     if let Err(e) = cache::ensure_layout() {
         eprintln!("nowdocs: cache layout error: {e}");
-        return Err(io::Error::new(io::ErrorKind::Other, e.to_string()));
+        return Err(io::Error::other(e.to_string()));
     }
 
     let stdin = io::stdin();
@@ -45,7 +45,11 @@ pub fn run_loop() -> io::Result<()> {
             Ok(v) => v,
             Err(e) => {
                 // Parse error — no id known, use null per JSON-RPC spec.
-                let _ = write_response(&mut out, &Value::Null, &err_response(ERR_INVALID_PARAMS, &format!("parse error: {e}")));
+                let _ = write_response(
+                    &mut out,
+                    &Value::Null,
+                    &err_response(ERR_INVALID_PARAMS, &format!("parse error: {e}")),
+                );
                 continue;
             }
         };
@@ -60,7 +64,11 @@ pub fn run_loop() -> io::Result<()> {
             "tools/call" => Some(handle_tools_call(msg.get("params"))),
             // Unknown request method.
             _ if id.is_some() => {
-                let _ = write_response(&mut out, id.as_ref().unwrap(), &err_response(ERR_METHOD_NOT_FOUND, &format!("method not found: {method}")));
+                let _ = write_response(
+                    &mut out,
+                    id.as_ref().unwrap(),
+                    &err_response(ERR_METHOD_NOT_FOUND, &format!("method not found: {method}")),
+                );
                 continue;
             }
             // Unknown notification — ignore.

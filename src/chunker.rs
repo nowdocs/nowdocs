@@ -74,13 +74,12 @@ fn parse_heading(line: &str) -> Option<(usize, String)> {
 /// Detect a fence open/close marker (``` or ~~~) and return its char length.
 fn fence_marker(line: &str) -> Option<usize> {
     let t = line.trim_start();
-    if t.starts_with("```") {
-        Some(3 + t[3..].chars().take_while(|&c| c == '`').count())
-    } else if t.starts_with("~~~") {
-        Some(3 + t[3..].chars().take_while(|&c| c == '~').count())
-    } else {
-        None
-    }
+    t.strip_prefix("```")
+        .map(|rest| 3 + rest.chars().take_while(|&c| c == '`').count())
+        .or_else(|| {
+            t.strip_prefix("~~~")
+                .map(|rest| 3 + rest.chars().take_while(|&c| c == '~').count())
+        })
 }
 
 fn is_fence_line(line: &str) -> bool {
@@ -163,17 +162,18 @@ pub fn chunk_markdown(md: &str, cfg: &ChunkConfig) -> Vec<Chunk> {
     let mut chunks: Vec<Chunk> = Vec::new();
     let mut idx: u32 = 0;
 
-    let emit = |chunks: &mut Vec<Chunk>, path: &str, ctype: ChunkType, text: String, idx: &mut u32| {
-        chunks.push(Chunk {
-            idx: *idx,
-            heading_path: path.to_string(),
-            source_url: String::new(),
-            api_version: None,
-            chunk_type: ctype,
-            text,
-        });
-        *idx += 1;
-    };
+    let emit =
+        |chunks: &mut Vec<Chunk>, path: &str, ctype: ChunkType, text: String, idx: &mut u32| {
+            chunks.push(Chunk {
+                idx: *idx,
+                heading_path: path.to_string(),
+                source_url: String::new(),
+                api_version: None,
+                chunk_type: ctype,
+                text,
+            });
+            *idx += 1;
+        };
 
     for block in blocks {
         match block {
@@ -217,7 +217,10 @@ fn with_path_prefix(path: &str, body: &str) -> String {
 /// `target` tokens per piece. Splits prefer paragraph → sentence → word →
 /// character boundaries (in that order) so prose stays readable.
 fn split_prose(body: &str, target: usize, max: usize) -> Vec<String> {
-    let paragraphs: Vec<&str> = body.split("\n\n").filter(|p| !p.trim().is_empty()).collect();
+    let paragraphs: Vec<&str> = body
+        .split("\n\n")
+        .filter(|p| !p.trim().is_empty())
+        .collect();
     let mut out: Vec<String> = Vec::new();
     let mut buf = String::new();
 
@@ -306,7 +309,6 @@ fn split_sentences(text: &str) -> Vec<String> {
                 if n == ' ' || n == '\t' || n == '\n' {
                     cur.push(n);
                     chars.next();
-                    break;
                 } else {
                     break;
                 }

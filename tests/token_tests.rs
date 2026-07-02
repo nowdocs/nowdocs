@@ -8,7 +8,11 @@ fn empty_string_is_zero() {
 #[test]
 fn short_string_in_sane_range() {
     let n = count_tokens("hello world");
-    assert!(n > 0 && n < 10, "hello world should be 1..10 tokens, got {}", n);
+    assert!(
+        n > 0 && n < 10,
+        "hello world should be 1..10 tokens, got {}",
+        n
+    );
 }
 
 #[test]

@@ -24,7 +24,15 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             println!("installed {docset}");
             Ok(())
         }
-        Commands::Ingest { dir, name, license, copyright_holder, attribution, source_url, entry_url } => {
+        Commands::Ingest {
+            dir,
+            name,
+            license,
+            copyright_holder,
+            attribution,
+            source_url,
+            entry_url,
+        } => {
             let meta = nowdocs::ingest::IngestMeta {
                 license: license.unwrap_or_else(|| "MIT".to_string()),
                 copyright_holder: copyright_holder.unwrap_or_default(),

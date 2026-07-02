@@ -1,15 +1,13 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use arrow_array::{
-    FixedSizeListArray, Float16Array, RecordBatch, StringArray, UInt32Array,
-};
+use arrow_array::{FixedSizeListArray, Float16Array, RecordBatch, StringArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
 use half::f16;
 use lance_arrow::FixedSizeListArrayExt;
-use lancedb::index::Index;
 use lancedb::index::scalar::{FtsIndexBuilder, FullTextSearchQuery};
+use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase, QueryExecutionOptions};
 use lancedb::Session;
 
@@ -51,11 +49,7 @@ impl Store {
         let session = Arc::new(Session::new(256, 256, Default::default()));
 
         let conn = runtime
-            .block_on(
-                lancedb::connect(&db_path_str)
-                    .session(session)
-                    .execute(),
-            )
+            .block_on(lancedb::connect(&db_path_str).session(session).execute())
             .context("failed to connect to lancedb")?;
 
         let table_name = TABLE_NAME.to_string();
@@ -119,7 +113,11 @@ impl Store {
         if ids.is_empty() {
             return Ok(vec![]);
         }
-        let filter = ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let filter = ids
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
         let filter = format!("chunk_idx IN ({filter})");
 
         let table = self
@@ -206,7 +204,11 @@ impl Store {
         })?;
 
         let mut hits = parse_search_hits_with_score(&batches)?;
-        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         hits.truncate(top_k);
         Ok(hits)
     }
@@ -344,9 +346,24 @@ fn chunks_to_batch(chunks: &[Chunk], vectors: &[Vec<f32>]) -> Result<RecordBatch
     let n = chunks.len();
 
     let ids: UInt32Array = (0..n as u32).collect();
-    let heading_paths = StringArray::from(chunks.iter().map(|c| c.heading_path.as_str()).collect::<Vec<_>>());
-    let source_urls = StringArray::from(chunks.iter().map(|c| c.source_url.as_str()).collect::<Vec<_>>());
-    let api_versions = StringArray::from(chunks.iter().map(|c| c.api_version.as_deref()).collect::<Vec<_>>());
+    let heading_paths = StringArray::from(
+        chunks
+            .iter()
+            .map(|c| c.heading_path.as_str())
+            .collect::<Vec<_>>(),
+    );
+    let source_urls = StringArray::from(
+        chunks
+            .iter()
+            .map(|c| c.source_url.as_str())
+            .collect::<Vec<_>>(),
+    );
+    let api_versions = StringArray::from(
+        chunks
+            .iter()
+            .map(|c| c.api_version.as_deref())
+            .collect::<Vec<_>>(),
+    );
     let chunk_types = StringArray::from(
         chunks
             .iter()

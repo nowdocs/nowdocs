@@ -94,7 +94,11 @@ fn make_tar_entry(name: &str, data: &[u8]) -> Vec<u8> {
     // Compute checksum: sum of header bytes with checksum field (148..156) as spaces.
     let mut sum: u32 = 0;
     for (i, &b) in header.iter().enumerate() {
-        sum += if (148..156).contains(&i) { b' ' as u32 } else { b as u32 };
+        sum += if (148..156).contains(&i) {
+            b' ' as u32
+        } else {
+            b as u32
+        };
     }
     let chk_str = format!("{:06o}\0 ", sum);
     header[148..156].copy_from_slice(chk_str.as_bytes());
@@ -102,7 +106,7 @@ fn make_tar_entry(name: &str, data: &[u8]) -> Vec<u8> {
     let mut entry = header.to_vec();
     entry.extend_from_slice(data);
     // Pad to 512-byte boundary.
-    let padded = ((data.len() + 511) / 512) * 512;
+    let padded = data.len().div_ceil(512) * 512;
     if padded > data.len() {
         entry.extend_from_slice(&vec![0u8; padded - data.len()]);
     }
@@ -268,7 +272,10 @@ fn test_share_produces_no_vectors() {
         assert!(v.get("text").is_some(), "chunk should have text field");
         assert!(v.get("idx").is_some(), "chunk should have idx field");
         // No vector field should exist.
-        assert!(v.get("vector").is_none(), "chunk should NOT have vector field");
+        assert!(
+            v.get("vector").is_none(),
+            "chunk should NOT have vector field"
+        );
     }
 }
 

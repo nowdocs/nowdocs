@@ -99,11 +99,25 @@ fn tools_list_exposes_search_and_list() {
     let resp = s.round_trip(&serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
     let tools = resp["result"]["tools"].as_array().expect("tools array");
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert!(names.contains(&"nowdocs_search"), "missing nowdocs_search: {:?}", names);
-    assert!(names.contains(&"nowdocs_list"), "missing nowdocs_list: {:?}", names);
+    assert!(
+        names.contains(&"nowdocs_search"),
+        "missing nowdocs_search: {:?}",
+        names
+    );
+    assert!(
+        names.contains(&"nowdocs_list"),
+        "missing nowdocs_list: {:?}",
+        names
+    );
 
-    let search = tools.iter().find(|t| t["name"] == "nowdocs_search").unwrap();
-    assert!(search["inputSchema"].is_object(), "search needs inputSchema");
+    let search = tools
+        .iter()
+        .find(|t| t["name"] == "nowdocs_search")
+        .unwrap();
+    assert!(
+        search["inputSchema"].is_object(),
+        "search needs inputSchema"
+    );
     let required = search["inputSchema"]["required"].as_array().unwrap();
     let req_names: Vec<&str> = required.iter().map(|r| r.as_str().unwrap()).collect();
     assert!(req_names.contains(&"query"), "query must be required");
@@ -129,9 +143,17 @@ fn tools_call_search_returns_structured_error_not_crash() {
     }));
     // Search is wired (Wave 4) but docset doesn't exist — must be a structured
     // JSON-RPC error, never a crash / dropped connection.
-    assert!(resp.get("error").is_some(), "expected error result, got: {}", resp);
+    assert!(
+        resp.get("error").is_some(),
+        "expected error result, got: {}",
+        resp
+    );
     let code = resp["error"]["code"].as_i64().expect("error code");
-    assert!(code == -32602, "expected -32602 search-failed, got {}", code);
+    assert!(
+        code == -32602,
+        "expected -32602 search-failed, got {}",
+        code
+    );
 
     // Server must still be alive (not crashed).
     let alive = s.round_trip(&serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/list"}));
@@ -151,6 +173,10 @@ fn tools_call_rejects_invalid_docset() {
         "jsonrpc":"2.0","id":2,"method":"tools/call",
         "params":{"name":"nowdocs_search","arguments":{"query":"x","docset":"../etc"}}
     }));
-    assert!(resp.get("error").is_some(), "invalid docset must error, got: {}", resp);
+    assert!(
+        resp.get("error").is_some(),
+        "invalid docset must error, got: {}",
+        resp
+    );
     let _ = child.kill();
 }
