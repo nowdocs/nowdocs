@@ -46,7 +46,7 @@ lance-arrow = "7"
 openssl = { version = "0.10", features = ["vendored"] }
 
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-{ target }{ archive-suffix }"
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }{ archive-suffix }"
 bin-dir = "{ name }-v{ version }-{ target }"
 pkg-fmt = "tgz"
 
