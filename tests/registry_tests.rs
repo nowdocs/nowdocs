@@ -228,6 +228,50 @@ fn test_install_from_file_url() {
     assert_eq!(chunks[1].text, "world");
 }
 
+// --- Test: install persists bundled LICENSE so re-share carries it ---
+
+#[test]
+fn test_install_persists_license_for_reshare() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "test_install_lic";
+    let license_body = "MIT license body, upstream notice\n";
+
+    // Build an archive that includes a LICENSE entry alongside manifest + chunks.
+    let mut archive = Vec::new();
+    for (name, data) in [
+        ("manifest.json", test_manifest_json().as_bytes()),
+        ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+        ("LICENSE", license_body.as_bytes()),
+    ] {
+        archive.extend_from_slice(&make_tar_entry(name, data));
+    }
+    archive.extend_from_slice(&[0u8; 512]);
+    archive.extend_from_slice(&[0u8; 512]);
+
+    let tar_path = dir.path().join("archive_lic.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    let url = format!("file://{}", tar_path.display());
+    nowdocs::registry::install(docset, &url).unwrap();
+
+    // install should have stashed the LICENSE at license_text_path (same path
+    // share reads from), even though this docset was never locally ingested.
+    assert!(
+        nowdocs::cache::license_text_path(docset).is_file(),
+        "install should persist bundled LICENSE to license_text_path"
+    );
+
+    // Re-sharing the installed docset must carry the upstream LICENSE forward.
+    let out_dir = dir.path().join("share_out_lic");
+    let share_path = nowdocs::registry::share(docset, &out_dir).unwrap();
+    let shared = std::fs::read_to_string(share_path.join("LICENSE")).unwrap();
+    assert_eq!(
+        shared, license_body,
+        "re-share of installed docset must carry upstream LICENSE verbatim"
+    );
+}
+
 // --- Test: share produces no vectors ---
 
 #[test]

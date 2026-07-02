@@ -164,6 +164,25 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
 
     std::fs::write(cache::manifest_path(&docset), &manifest_entry.1)?;
 
+    // Persist the upstream LICENSE bundled in the archive (if present) so a
+    // later `share` of this docset carries the notice text forward. Without
+    // this, docsets installed from a registry tar lose their LICENSE on
+    // re-share even though the archive contained it — mirror what `ingest`
+    // stashes at cache::license_text_path for locally-ingested docsets.
+    let license_entry = entries.iter().find(|(name, _)| {
+        std::path::Path::new(name)
+            .file_name()
+            .map(|f| f == std::ffi::OsStr::new("LICENSE"))
+            .unwrap_or(false)
+    });
+    if let Some((_, data)) = license_entry {
+        let license_path = cache::license_text_path(&docset);
+        if let Some(parent) = license_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&license_path, data)?;
+    }
+
     // Materialize chunks into the LanceDB store so retrieve::search works.
     // Uses zero vectors as placeholders; real vectors are rebuilt by CI (D10).
     let chunks_entry = entries

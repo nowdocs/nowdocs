@@ -151,6 +151,25 @@ def _verdict_id(v: dict) -> str:
     return s or "UNKNOWN"
 
 
+def classify_exit(scan, gemma: dict, glm: dict) -> int:
+    """Exit code from the two model verdicts + regex scan.
+
+    0 = clean (agree + allowlisted), 1 = needs human
+    (disagree/dangerous/unknown/not-allowlisted). Pure (no I/O) so it can be
+    unit-tested. An agreed-but-unallowlisted id (e.g. MPL-2.0) is NOT clean:
+    render_report only prints RECOMMEND, so the exit code must reject it or a
+    wrapper trusting "0 = clean" would wave it through registry intake.
+    """
+    banned = bool(scan.dangerous()) or _verdict_id(gemma) in DANGEROUS or _verdict_id(glm) in DANGEROUS
+    agree = _verdict_id(gemma) == _verdict_id(glm)
+    if (banned
+            or not agree
+            or _verdict_id(gemma) not in ALLOWLIST
+            or _verdict_id(gemma) in ("UNKNOWN", "ERROR", "PARSE_ERROR", "SKIPPED")):
+        return 1
+    return 0
+
+
 def render_report(repo: str, scan, gemma: dict, glm: dict, *, use_color: bool = True) -> str:
     g_id, l_id = _verdict_id(gemma), _verdict_id(glm)
     agree = g_id == l_id
@@ -297,12 +316,9 @@ def main() -> int:
         print(f"\n(wrote {args.out})", file=sys.stderr)
 
     # Exit code: 0 = clean (agree + allowlisted), 1 = needs human (disagree/
-    #   dangerous/unknown), 2 = usage error. Lets a wrapper script gate on it.
-    banned = bool(scan.dangerous()) or _verdict_id(gemma_v) in DANGEROUS or _verdict_id(glm_v) in DANGEROUS
-    agree = _verdict_id(gemma_v) == _verdict_id(glm_v)
-    if banned or not agree or _verdict_id(gemma_v) in ("UNKNOWN", "ERROR", "PARSE_ERROR", "SKIPPED"):
-        return 1
-    return 0
+    #   dangerous/unknown/not-allowlisted), 2 = usage error. Lets a wrapper
+    #   script gate on it. See classify_exit for the contract.
+    return classify_exit(scan, gemma_v, glm_v)
 
 
 if __name__ == "__main__":

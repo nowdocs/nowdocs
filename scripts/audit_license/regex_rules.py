@@ -37,13 +37,15 @@ SCAN_EXTS = {".md", ".markdown", ".txt", ".rst", "license", "licence", ".py",
 
 # --- SPDX identifier matching -------------------------------------------------
 
-# Order matters: compound CC ids (SA/ND/NC) MUST precede the bare CC-BY-4.0 so
-# the longer match wins under leftmost-longest alternation. Copyleft ids are
-# listed so we can flag them even though they're not in the ingest allowlist.
+# Order matters: compound CC ids (SA/ND/NC/NC-SA) MUST precede the bare
+# CC-BY-4.0 so the longer match wins under leftmost-longest alternation.
+# (The alternation is re-sorted by length below, but list order documents
+# intent.) Copyleft ids are listed so we can flag them even though they're
+# not in the ingest allowlist.
 SPDX_IDS = [
-    # CC family — specific modifiers first
-    "CC-BY-SA-4.0", "CC-BY-ND-4.0", "CC-BY-NC-4.0",
-    "CC-BY-SA-3.0", "CC-BY-ND-3.0", "CC-BY-NC-3.0",
+    # CC family — specific modifiers first; NC-SA before its NC/SA subsets
+    "CC-BY-NC-SA-4.0", "CC-BY-SA-4.0", "CC-BY-ND-4.0", "CC-BY-NC-4.0",
+    "CC-BY-NC-SA-3.0", "CC-BY-SA-3.0", "CC-BY-ND-3.0", "CC-BY-NC-3.0",
     "CC-BY-4.0", "CC-BY-3.0",
     "CC0-1.0",
     # permissive
@@ -71,6 +73,11 @@ _SPDX_MARKER_RE = re.compile(r"SPDX-License-Identifier:\s*([A-Za-z0-9.+\-]+)")
 # Natural-language Creative Commons names → SPDX id. The modifier word is the
 # disambiguator we most need to catch.
 _CC_PROSE = [
+    # NC-SA must precede NC-only and plain Attribution: "Attribution-
+    # NonCommercial-ShareAlike" would otherwise be missed (the NC-only regex
+    # needs a version right after NonCommercial, which isn't there).
+    (re.compile(r"Creative\s+Commons\s+Attribution[- ]+NonCommercial[- ]+ShareAlike\s+(\d(?:\.\d)?)", re.I), "CC-BY-NC-SA-"),
+    (re.compile(r"\bAttribution[- ]+NonCommercial[- ]+ShareAlike\s+(\d(?:\.\d)?)", re.I), "CC-BY-NC-SA-"),
     (re.compile(r"Creative\s+Commons\s+Attribution[- ]+ShareAlike\s+(\d(?:\.\d)?)", re.I), "CC-BY-SA-"),
     (re.compile(r"Creative\s+Commons\s+Attribution[- ]+NoDeriv\w*\s+(\d(?:\.\d)?)", re.I), "CC-BY-ND-"),
     (re.compile(r"Creative\s+Commons\s+Attribution[- ]+NonCommercial\s+(\d(?:\.\d)?)", re.I), "CC-BY-NC-"),
@@ -90,6 +97,7 @@ _LICENSED_UNDER_RE = re.compile(
 DANGEROUS = {
     "CC-BY-ND-4.0", "CC-BY-ND-3.0",        # NoDerivatives — derived work banned
     "CC-BY-NC-4.0", "CC-BY-NC-3.0",        # NonCommercial
+    "CC-BY-NC-SA-4.0", "CC-BY-NC-SA-3.0",  # NonCommercial + ShareAlike
     "CC-BY-SA-4.0", "CC-BY-SA-3.0",        # copyleft (not accepted, per policy)
     "GPL-2.0", "GPL-3.0", "AGPL-3.0",
     "LGPL-2.1", "LGPL-3.0",

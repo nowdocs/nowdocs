@@ -120,6 +120,29 @@ def test_repo_scan_flags_dangerous_nd():
         check("CC-BY-ND-4.0 flagged dangerous", "CC-BY-ND-4.0" in scan.dangerous(), str(scan.dangerous()))
 
 
+def test_cc_by_nc_sa_caught():
+    # The combined NC+SA variant must be caught as its own id, not collapsed
+    # to CC-BY-NC-4.0 / CC-BY-SA-4.0 / plain CC-BY-4.0.
+    ids = line_spdx("docs are licensed under CC-BY-NC-SA-4.0")
+    check("CC-BY-NC-SA-4.0 caught", "CC-BY-NC-SA-4.0" in ids, str(ids))
+    check("...not misread as CC-BY-4.0", "CC-BY-4.0" not in ids, str(ids))
+
+
+def test_cc_prose_nc_sa():
+    # Natural language: "Attribution-NonCommercial-ShareAlike 4.0" -> CC-BY-NC-SA-4.0
+    ids = line_spdx("licensed under Creative Commons Attribution-NonCommercial-ShareAlike 4.0")
+    check("prose NC-SA -> CC-BY-NC-SA-4.0", "CC-BY-NC-SA-4.0" in ids, str(ids))
+
+
+def test_repo_scan_flags_dangerous_nc_sa():
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(os.path.join(d, "docs"))
+        with open(os.path.join(d, "docs", "LICENSE.md"), "w") as f:
+            f.write("Creative Commons Attribution-NonCommercial-ShareAlike 4.0\n")
+        scan = scan_repo(d)
+        check("CC-BY-NC-SA-4.0 flagged dangerous", "CC-BY-NC-SA-4.0" in scan.dangerous(), str(scan.dangerous()))
+
+
 def main() -> int:
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
