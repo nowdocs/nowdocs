@@ -20,7 +20,7 @@ extra_instructions = """
 """
 
 [github_action_config]
-auto_review = true
-auto_describe = true
+auto_review = false
+auto_describe = false
 auto_improve = false
 pr_actions = ["opened", "reopened", "ready_for_review", "review_requested", "synchronize"]
