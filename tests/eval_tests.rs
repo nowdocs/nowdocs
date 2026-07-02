@@ -135,3 +135,102 @@ fn test_evaluate_meets_threshold() {
     );
     assert_eq!(report.n, golden.len(), "report.n must equal golden.len()");
 }
+
+/// Exploratory: ingest the rebuilt Next.js corpus (437 files / ~7480 chunks)
+/// and run concept-level golden queries to probe retrieval quality on a real
+/// large docset — the 3-file synthetic fixture's MRR 1.0 does not generalize
+/// by itself. Prints per-query rank + recall/MRR. No hard gate (exploratory);
+/// only asserts recall stays reasonable for a real corpus.
+#[test]
+#[ignore = "needs real embedder + rebuilt nextjs corpus (~minutes)"]
+fn test_eval_nextjs_real() {
+    use nowdocs::ingest::{ingest_dir, IngestMeta};
+    use nowdocs::{eval::compute_metrics, retrieve};
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache_dir.path()) };
+
+    let corpus: PathBuf = [
+        env!("CARGO_MANIFEST_DIR"),
+        "seed-crates",
+        "tmp",
+        "nextjs_rebuilt",
+    ]
+    .iter()
+    .collect();
+    assert!(
+        corpus.exists(),
+        "run `uv run python3 seed-crates/tmp/rebuild_nextjs.py` first"
+    );
+
+    let meta = IngestMeta {
+        license: "MIT".into(),
+        copyright_holder: "Vercel, Inc.".into(),
+        source_url: "https://github.com/vercel/next.js".into(),
+        entry_url: "https://nextjs.org/docs".into(),
+        attribution: String::new(),
+    };
+    let stats = ingest_dir(&corpus, "nextjs_real", &meta).expect("ingest nextjs corpus");
+    eprintln!(
+        "nextjs-real ingest: {} files, {} chunks",
+        stats.files, stats.chunks
+    );
+
+    let golden = vec![
+        GoldenQuery { query: "how to install create-next-app CLI setup new project".into(),
+            expected_source_url: "01-app/01-getting-started/01-installation.md".into() },
+        GoldenQuery { query: "linking and navigating between routes Link component prefetch".into(),
+            expected_source_url: "01-app/01-getting-started/04-linking-and-navigating.md".into() },
+        GoldenQuery { query: "server components vs client components use client directive".into(),
+            expected_source_url: "01-app/01-getting-started/05-server-and-client-components.md".into() },
+        GoldenQuery { query: "fetching data in server components async await fetch".into(),
+            expected_source_url: "01-app/01-getting-started/06-fetching-data.md".into() },
+        GoldenQuery { query: "caching fetch requests cache options force-cache no-store".into(),
+            expected_source_url: "01-app/01-getting-started/08-caching.md".into() },
+        GoldenQuery { query: "revalidating data revalidateTag revalidatePath ISR".into(),
+            expected_source_url: "01-app/01-getting-started/09-revalidating.md".into() },
+        GoldenQuery { query: "error handling error.tsx error boundary recovery".into(),
+            expected_source_url: "01-app/01-getting-started/10-error-handling.md".into() },
+        GoldenQuery { query: "route handlers GET POST API endpoints request response".into(),
+            expected_source_url: "01-app/01-getting-started/15-route-handlers.md".into() },
+        GoldenQuery { query: "authentication session strategies auth providers".into(),
+            expected_source_url: "01-app/02-guides/authentication.md".into() },
+        GoldenQuery { query: "environment variables env files NODE_ENV".into(),
+            expected_source_url: "01-app/02-guides/environment-variables.md".into() },
+    ];
+
+    let mut ranks: Vec<Option<usize>> = Vec::with_capacity(golden.len());
+    for q in &golden {
+        let result = retrieve::search("nextjs_real", &q.query, Some(4000), Some(5))
+            .expect("search nextjs_real");
+        let rank = result
+            .chunks
+            .iter()
+            .position(|c| c.source_url == q.expected_source_url)
+            .map(|p| p + 1);
+        eprintln!(
+            "  q={:?} expected={:?} rank={:?} hits={}",
+            q.query,
+            q.expected_source_url,
+            rank,
+            result
+                .chunks
+                .iter()
+                .map(|c| c.source_url.clone())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        ranks.push(rank);
+    }
+    let (recall, mrr) = compute_metrics(&ranks);
+    eprintln!(
+        "nextjs-real eval: n={} recall@5={:.3} mrr={:.3}",
+        golden.len(),
+        recall,
+        mrr
+    );
+    assert!(
+        recall >= 0.5,
+        "recall@5 {recall} too low on real nextjs corpus"
+    );
+}
