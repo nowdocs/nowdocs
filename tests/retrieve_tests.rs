@@ -1,5 +1,5 @@
 use nowdocs::chunker::ChunkType;
-use nowdocs::retrieve::{reorder_to_window, ResultChunk, SearchResult, window_ids_for};
+use nowdocs::retrieve::{reorder_to_window, window_ids_for, ResultChunk, SearchResult};
 use nowdocs::store::SearchHit;
 
 /// Build a SearchHit with only the fields the ordering logic inspects.
@@ -97,9 +97,7 @@ fn test_search_end_to_end() {
     // Hit-first ordering: the top-ranked hit must lead the result so the most
     // relevant chunk is returned first (relevance > document reading order).
     assert!(
-        result.chunks[0]
-            .text
-            .contains("zzzretrieve_xyz"),
+        result.chunks[0].text.contains("zzzretrieve_xyz"),
         "top hit must be first under hit-first ordering, got idx {}",
         result.chunks[0].chunk_idx
     );

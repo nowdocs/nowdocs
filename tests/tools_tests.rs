@@ -147,5 +147,8 @@ fn test_search_end_to_end() {
     );
     // structuredContent carries the chunk array.
     let chunks = result["structuredContent"]["chunks"].as_array().unwrap();
-    assert!(!chunks.is_empty(), "structuredContent chunks should be non-empty");
+    assert!(
+        !chunks.is_empty(),
+        "structuredContent chunks should be non-empty"
+    );
 }
