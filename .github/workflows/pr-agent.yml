@@ -16,7 +16,7 @@ jobs:
     if: ${{ github.event.sender.type != 'Bot' && github.event.issue.pull_request }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: PR Agent Action Step
         id: pragent
