@@ -39,7 +39,7 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -50,6 +50,15 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # prost-build (lance-encoding) reads PROTOC first, then PATH. setup-protoc
+      # only adds protoc to PATH, which cargo build-script subprocesses don't
+      # reliably inherit — the same root cause as the ci/gates protoc fix. Set
+      # PROTOC to the resolved path explicitly. Cross-platform: bash + which
+      # are available on ubuntu/macos/windows runners.
+      - name: Export PROTOC for prost-build
+        shell: bash
+        run: echo "PROTOC=$(which protoc)" >> "$GITHUB_ENV"
 
       - name: Install musl-tools (Linux x86_64 musl only)
         if: matrix.target == 'x86_64-unknown-linux-musl'
