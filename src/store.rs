@@ -272,10 +272,19 @@ fn parse_search_hits_with_score(batches: &[RecordBatch]) -> Result<Vec<SearchHit
         if batch.column_by_name("chunk_idx").is_none() {
             continue;
         }
+        // Prefer the reranker's fused relevance score (_relevance_score, written
+        // by RRFReranker) over the raw FTS BM25 score (_score). Sorting by the
+        // raw _score ignores vector relevance entirely and discards the reranker
+        // output — fall back to _score only when no reranker ran.
         let score_col = batch
-            .column_by_name("_score")
+            .column_by_name("_relevance_score")
             .and_then(|c| c.as_any().downcast_ref::<arrow_array::Float32Array>())
-            .context("missing _score column")?;
+            .or_else(|| {
+                batch
+                    .column_by_name("_score")
+                    .and_then(|c| c.as_any().downcast_ref::<arrow_array::Float32Array>())
+            })
+            .context("missing _relevance_score/_score column")?;
         let idx_col = batch
             .column_by_name("chunk_idx")
             .and_then(|c| c.as_any().downcast_ref::<UInt32Array>())
