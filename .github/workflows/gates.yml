@@ -1,6 +1,4 @@
-# L3: CI 门禁 (云端，PR 级)
-# 注意: 与 07 的 ci.yml、05 的 release.yml 文件名不同
-
+# L3: CI 门禁 (云端，PR / push 到 main 时触发)
 name: Quality Gates
 
 on:
@@ -9,6 +7,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   # prost-build (lance-encoding) needs protoc; apt installs to /usr/bin/protoc.
@@ -16,31 +17,38 @@ env:
   PROTOC: /usr/bin/protoc
 
 jobs:
-  fmt:
-    name: Rustfmt
+  # --- DCO: every commit must have Signed-off-by (D8) ---
+  dco:
+    name: DCO (Signed-off-by)
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
-      - run: cargo fmt --check
+          fetch-depth: 0
+      - name: Check DCO sign-off on all PR commits
+        run: bash scripts/ci-check-dco.sh ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
 
-  clippy:
-    name: Clippy
+  # --- Rust formatting and linting ---
+  lint:
+    name: Lint (fmt + clippy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: rustfmt, clippy
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: protoc-v1
-      - run: cargo clippy --all-targets -- -D warnings
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
 
+  # --- Build and test ---
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -67,9 +75,47 @@ jobs:
           prefix-key: protoc-v1
       - run: cargo build --release
 
+  # --- License and security audit ---
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  # --- Project-specific compliance checks ---
+  compliance:
+    name: Compliance (manifest + no-vectors + audit-tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Validate manifest schemas
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            FILES=$(git diff --name-only --diff-filter=ACM ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} | grep 'manifest\.json$' || true)
+          else
+            FILES=$(git diff --name-only --diff-filter=ACM HEAD~1 HEAD | grep 'manifest\.json$' || true)
+          fi
+          if [ -z "$FILES" ]; then
+            echo "No manifest files changed — skipping"
+            exit 0
+          fi
+          failed=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            echo "--- Checking $f ---"
+            if ! bash scripts/ci-check-manifest.sh "$f"; then
+              failed=1
+            fi
+          done <<< "$FILES"
+          exit $failed
+      - name: Scan for vector artifacts
+        run: bash scripts/ci-no-vectors.sh .
+      - name: Run license audit unit tests
+        run: |
+          python3 scripts/audit_license/test_regex.py
+          python3 scripts/audit_license/test_audit.py
