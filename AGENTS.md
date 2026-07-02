@@ -11,7 +11,9 @@ nowdocs = 纯 Rust 单二进制 MCP server，本地运行，给 LLM coding agent
 
 ## 2. 当前阶段
 
-**Wave 1 ✅ 已完成（8 task / 48 tests 绿），S0 命门 spike 进行中**。spec 已评审+自审，plan 已拆 6 wave。代码在 `feat/1a-cargo-skeleton` 分支（未合并 main、无 remote）。下一站：S0 验证 candle+jina → Wave 2 引擎层。
+**Wave 0-5 ✅ 全完成**：S0 命门 spike（candle+jina-v2-small）+ Wave 1 基础层（8 task）+ Wave 2 引擎（embedder 加固 / lancedb hybrid store / ingest）+ Wave 3 检索管线 + golden eval + Wave 4 装配（MCP tools / registry 生命周期 / CLI 接线）+ Wave 5 分发与治理（cargo-binstall 矩阵 / Homebrew tap / CI 安全闸门 / seed crates / L1-L4 门禁）。全 suite 绿，单二进制跑通 ingest→chunk→embed→lancedb 混合检索→MCP search/list→registry install/share/update/uninstall→CLI 全线。
+
+**当前主线：检索质量加固 + 可用性验证。** 已修两个检索 bug——(1) retrieve 邻窗排序按 chunk_idx 升序丢相关性（hit 优先修复），(2) store 读 FTS `_score` 而非 RRF `_relevance_score` 致 reranker 白跑——golden eval MRR 0.65→1.000。下一站：真实大 docset（Next.js 7480 chunks）检索验证 + 端到端 MCP 闭环。发版暂缓（产品未成熟）。
 
 ## 3. 必读文档（按顺序）
 

@@ -41,6 +41,7 @@ seed-crates/tmp/*-docs/
 seed-crates/tmp/ingest-*.log
 seed-crates/tmp/share-*.log
 seed-crates/tmp/__pycache__/
+seed-crates/tmp/*_rebuilt/
 
 # license 审计工具产物（本地审计报告 / curl 调试 / python 缓存，勿入库）
 scripts/audit_license/report.json
