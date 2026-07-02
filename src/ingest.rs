@@ -297,10 +297,7 @@ mod tests {
     fn test_find_license_text_finds_copying_when_no_license() {
         let d = tempdir().unwrap();
         fs::write(d.path().join("COPYING"), "GPL body\n").unwrap();
-        assert_eq!(
-            find_license_text(d.path()),
-            Some("GPL body\n".to_string())
-        );
+        assert_eq!(find_license_text(d.path()), Some("GPL body\n".to_string()));
     }
 
     #[test]

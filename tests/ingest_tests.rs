@@ -160,7 +160,11 @@ fn test_ingest_stashes_source_license() {
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
-    fs::write(dir.path().join("intro.md"), "# Intro\n\nzzzunique_license_probe content.\n").unwrap();
+    fs::write(
+        dir.path().join("intro.md"),
+        "# Intro\n\nzzzunique_license_probe content.\n",
+    )
+    .unwrap();
     fs::write(
         dir.path().join("LICENSE"),
         "MIT License\n\nCopyright (c) Test Holder\n",

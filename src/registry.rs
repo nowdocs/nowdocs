@@ -251,9 +251,9 @@ pub fn share(docset: &str, out_dir: &Path) -> Result<PathBuf> {
     Ok(share_dir)
 }
 
-/// Build a human-readable NOTICE for a share bundle from the manifest's legal
-/// + source fields. Satisfies CC-BY-4.0's attribution requirement and
-/// MIT/Apache's notice-retention requirement for downstream recipients.
+/// Build a human-readable NOTICE for a share bundle from the manifest's
+/// legal and source fields. Satisfies CC-BY-4.0's attribution requirement
+/// and MIT/Apache's notice-retention requirement for downstream recipients.
 fn build_notice(m: &manifest::Manifest) -> String {
     let mut s = String::new();
     s.push_str("nowdocs docset: ");
