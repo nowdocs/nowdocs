@@ -108,28 +108,44 @@ fn test_unknown_tool() {
     );
 }
 
-// E2E test — requires real embedder + ingested docset. Run manually.
+// E2E: ingest a fixture docset, then search it through the MCP tool handler.
+// Requires the real embedder (~66MB download, ~30s).
 #[test]
-#[ignore]
+#[ignore = "needs real embedder (~66MB download, ~30s)"]
 fn test_search_end_to_end() {
-    // This test requires:
-    // 1. A real docset ingested via ingest::ingest_dir
-    // 2. The candle+jina embedder available
-    // Skipped by default; run with: cargo test test_search_end_to_end -- --ignored
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let (_tmp, _) = setup_cache("e2e");
+    use nowdocs::ingest::{ingest_dir, IngestMeta};
 
-    // TODO: ingest a fixture docset then search it.
-    // For now, just verify handle_call returns something for a valid docset
-    // (will fail with "manifest not found" which is expected without ingest).
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (tmp, _cache_root) = setup_cache("e2e");
+
+    // Build a tiny fixture corpus with a unique sentinel keyword so the hit is
+    // unambiguous.
+    let fixture = tmp.path().join("e2e").join("fixture");
+    fs::create_dir_all(&fixture).unwrap();
+    fs::write(
+        fixture.join("routing.md"),
+        "# App Router\n\nUse the App Router with a unique sentinel `zzztools_e2e` to route.\n",
+    )
+    .unwrap();
+
+    let stats = ingest_dir(&fixture, "e2e_docset", &IngestMeta::default()).unwrap();
+    assert!(stats.chunks > 0, "fixture must produce chunks");
+
     let result = nowdocs::tools::handle_call(
         "nowdocs_search",
-        json!({"query": "how to use router", "docset": "nextjs"}),
+        json!({"query": "zzztools_e2e app router", "docset": "e2e_docset"}),
     );
-    // Either success or a retrieval error (not a validation error).
-    if result.get("code").is_some() {
-        let code = result["code"].as_i64().unwrap();
-        // Should NOT be a validation error (-32602) — those are caught above.
-        assert_ne!(code, -32602, "should not be a validation error: {result:?}");
-    }
+    // Success: a content array, not a JSON-RPC error object.
+    assert!(
+        result.get("content").is_some(),
+        "expected success result, got error: {result:?}"
+    );
+    let fallback = result["content"][0]["text"].as_str().unwrap();
+    assert!(
+        fallback.contains("zzztools_e2e"),
+        "recalled text should contain the sentinel, got: {fallback:?}"
+    );
+    // structuredContent carries the chunk array.
+    let chunks = result["structuredContent"]["chunks"].as_array().unwrap();
+    assert!(!chunks.is_empty(), "structuredContent chunks should be non-empty");
 }
