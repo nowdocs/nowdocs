@@ -177,26 +177,47 @@ fn test_eval_nextjs_real() {
     );
 
     let golden = vec![
-        GoldenQuery { query: "how to install create-next-app CLI setup new project".into(),
-            expected_source_url: "01-app/01-getting-started/01-installation.md".into() },
-        GoldenQuery { query: "linking and navigating between routes Link component prefetch".into(),
-            expected_source_url: "01-app/01-getting-started/04-linking-and-navigating.md".into() },
-        GoldenQuery { query: "server components vs client components use client directive".into(),
-            expected_source_url: "01-app/01-getting-started/05-server-and-client-components.md".into() },
-        GoldenQuery { query: "fetching data in server components async await fetch".into(),
-            expected_source_url: "01-app/01-getting-started/06-fetching-data.md".into() },
-        GoldenQuery { query: "caching fetch requests cache options force-cache no-store".into(),
-            expected_source_url: "01-app/01-getting-started/08-caching.md".into() },
-        GoldenQuery { query: "revalidating data revalidateTag revalidatePath ISR".into(),
-            expected_source_url: "01-app/01-getting-started/09-revalidating.md".into() },
-        GoldenQuery { query: "error handling error.tsx error boundary recovery".into(),
-            expected_source_url: "01-app/01-getting-started/10-error-handling.md".into() },
-        GoldenQuery { query: "route handlers GET POST API endpoints request response".into(),
-            expected_source_url: "01-app/01-getting-started/15-route-handlers.md".into() },
-        GoldenQuery { query: "authentication session strategies auth providers".into(),
-            expected_source_url: "01-app/02-guides/authentication.md".into() },
-        GoldenQuery { query: "environment variables env files NODE_ENV".into(),
-            expected_source_url: "01-app/02-guides/environment-variables.md".into() },
+        GoldenQuery {
+            query: "how to install create-next-app CLI setup new project".into(),
+            expected_source_url: "01-app/01-getting-started/01-installation.md".into(),
+        },
+        GoldenQuery {
+            query: "linking and navigating between routes Link component prefetch".into(),
+            expected_source_url: "01-app/01-getting-started/04-linking-and-navigating.md".into(),
+        },
+        GoldenQuery {
+            query: "server components vs client components use client directive".into(),
+            expected_source_url: "01-app/01-getting-started/05-server-and-client-components.md"
+                .into(),
+        },
+        GoldenQuery {
+            query: "fetching data in server components async await fetch".into(),
+            expected_source_url: "01-app/01-getting-started/06-fetching-data.md".into(),
+        },
+        GoldenQuery {
+            query: "caching fetch requests cache options force-cache no-store".into(),
+            expected_source_url: "01-app/01-getting-started/08-caching.md".into(),
+        },
+        GoldenQuery {
+            query: "revalidating data revalidateTag revalidatePath ISR".into(),
+            expected_source_url: "01-app/01-getting-started/09-revalidating.md".into(),
+        },
+        GoldenQuery {
+            query: "error handling error.tsx error boundary recovery".into(),
+            expected_source_url: "01-app/01-getting-started/10-error-handling.md".into(),
+        },
+        GoldenQuery {
+            query: "route handlers GET POST API endpoints request response".into(),
+            expected_source_url: "01-app/01-getting-started/15-route-handlers.md".into(),
+        },
+        GoldenQuery {
+            query: "authentication session strategies auth providers".into(),
+            expected_source_url: "01-app/02-guides/authentication.md".into(),
+        },
+        GoldenQuery {
+            query: "environment variables env files NODE_ENV".into(),
+            expected_source_url: "01-app/02-guides/environment-variables.md".into(),
+        },
     ];
 
     let mut ranks: Vec<Option<usize>> = Vec::with_capacity(golden.len());
