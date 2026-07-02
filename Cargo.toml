@@ -3,6 +3,12 @@ name = "nowdocs"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Single-binary MCP documentation server for LLM coding agents — ingest, chunk, embed, and retrieve docs locally"
+repository = "https://github.com/nowdocs/nowdocs"
+homepage = "https://github.com/nowdocs/nowdocs"
+readme = "README.md"
+keywords = ["mcp", "llm", "documentation", "retrieval", "embeddings"]
+categories = ["command-line-utilities", "development-tools", "text-processing"]
 
 [lib]
 name = "nowdocs"
