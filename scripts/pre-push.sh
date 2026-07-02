@@ -26,4 +26,31 @@ resolve_script_dir() {
   cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd -P
 }
 SCRIPT_DIR="$(resolve_script_dir "$0")"
+
+# --- 拦截低于 15 行修改的代码直接 push ---
+CURRENT_BRANCH=$(git symbolic-ref --short HEAD)
+if [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BRANCH" != "master" ]; then
+    if git rev-parse --verify origin/main >/dev/null 2>&1; then
+        BASE_BRANCH="origin/main"
+    elif git rev-parse --verify origin/master >/dev/null 2>&1; then
+        BASE_BRANCH="origin/master"
+    else
+        BASE_BRANCH=""
+    fi
+    if [ -n "$BASE_BRANCH" ]; then
+        git fetch origin $(echo $BASE_BRANCH | cut -d'/' -f2) --quiet || true
+        CHANGES=$(git diff --numstat "$BASE_BRANCH...HEAD" | grep -v '\.md$' | awk '{add+=$1; del+=$2} END {print add+del}')
+        if [ -z "$CHANGES" ]; then
+            CHANGES=0
+        fi
+        if [ "$CHANGES" -lt 15 ]; then
+            echo "❌ ERROR: Total code lines changed compared to $BASE_BRANCH is $CHANGES (less than 15 lines)."
+            echo "Pushing changes under 15 lines is prohibited on feature branches."
+            exit 1
+        fi
+        echo "✅ Feature branch code changes: $CHANGES lines (>= 15 lines)."
+    fi
+fi
+
 bash "$SCRIPT_DIR/check.sh"
+
