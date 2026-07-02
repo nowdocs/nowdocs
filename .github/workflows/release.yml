@@ -120,7 +120,7 @@ jobs:
           ls -la "${STAGE}${{ matrix.archive_suffix }}"
 
       - name: Upload release asset
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: nowdocs-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.archive_suffix }}
           fail_on_unmatched_files: true
