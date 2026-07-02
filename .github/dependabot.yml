@@ -1,8 +1,6 @@
 # Dependabot: keep Cargo dependencies and GitHub Actions versions current.
-# - cargo: weekly check for crate updates (PRs run the full CI gate)
-# - github-actions: weekly check for action version bumps (e.g. checkout,
-#   rust-toolchain, rust-cache) so we stay ahead of Node-runtime deprecations
-#   and security patches.
+# - cargo: weekly check for crate updates, grouped into a single PR
+# - github-actions: weekly check for action version bumps, grouped into a single PR
 version: 2
 updates:
   - package-ecosystem: "cargo"
@@ -16,6 +14,10 @@ updates:
       - "cargo"
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      cargo-deps:
+        patterns:
+          - "*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -28,3 +30,7 @@ updates:
       - "github-actions"
     commit-message:
       prefix: "chore(ci)"
+    groups:
+      github-actions-deps:
+        patterns:
+          - "*"
