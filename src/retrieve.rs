@@ -6,7 +6,7 @@ use crate::chunker::ChunkType;
 use crate::embedder::{self, EmbedderSpec};
 use crate::input::{resolve_max_tokens, resolve_top_k, validate_docset, validate_query};
 use crate::manifest;
-use crate::store::Store;
+use crate::store::{SearchHit, Store};
 use crate::token::count_tokens;
 
 #[derive(Debug, Clone)]
@@ -65,21 +65,18 @@ pub fn search(
         });
     }
 
-    // Collect neighbor window indices: for each hit, take chunk_idx-1, chunk_idx, chunk_idx+1.
+    // Build the neighbor window in relevance-first order: for each hit
+    // (already ranked by score desc from `hybrid_search`), emit
+    // `[hit, hit-1, hit+1]` so the hit itself leads and its adjacent chunks
+    // follow as context. Dedup keeps first-seen position, so a higher-ranked
+    // hit's chunk precedes a lower-ranked hit's context. This fixes bug#1: the
+    // old code sorted window_ids by chunk_idx, discarding relevance and making
+    // output order independent of the query (MRR 0.65 was pure idx luck).
     let chunk_count = manifest.source.chunk_count as u32;
-    let mut window_ids: Vec<u32> = Vec::new();
-    for hit in &hits {
-        for delta in [-1i32, 0, 1] {
-            let idx = hit.chunk_idx as i32 + delta;
-            if idx >= 0 && (idx as u32) < chunk_count {
-                window_ids.push(idx as u32);
-            }
-        }
-    }
-    window_ids.sort_unstable();
-    window_ids.dedup();
+    let window_ids = window_ids_for(&hits, chunk_count);
 
-    // Fetch window chunks from lancedb by chunk_idx.
+    // Fetch window chunks by chunk_idx (store returns them idx-ascending), then
+    // restore the relevance-first window order.
     let window_hits = store.fetch_by_idx(&window_ids)?;
     let window_chunks: Vec<ResultChunk> = window_hits
         .into_iter()
@@ -92,9 +89,48 @@ pub fn search(
             text: h.text,
         })
         .collect();
+    let window_chunks = reorder_to_window(window_chunks, &window_ids);
 
     // Assemble within max_tokens budget.
     assemble_result(window_chunks, max_tokens)
+}
+
+/// Build the relevance-ordered neighbor-window index list from hybrid search
+/// hits. `hits` must be in score-descending order (as returned by
+/// `Store::hybrid_search`). For each hit, emits `[hit, hit-1, hit+1]` so the
+/// hit itself leads and its adjacent chunks follow as context. Deduplication
+/// keeps the first-seen position, so a higher-ranked hit's chunk always
+/// precedes a lower-ranked hit's context. Indices are clamped to
+/// `[0, chunk_count)`.
+pub fn window_ids_for(hits: &[SearchHit], chunk_count: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for hit in hits {
+        for delta in [0i32, -1, 1] {
+            let idx = hit.chunk_idx as i32 + delta;
+            if idx >= 0 && (idx as u32) < chunk_count {
+                let u = idx as u32;
+                if seen.insert(u) {
+                    out.push(u);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Reorder chunks fetched by idx (ascending) back into the relevance-first
+/// window order defined by `window_ids`. Chunks whose idx is absent from
+/// `window_ids` sort to the end (defensive — `fetch_by_idx` only returns
+/// requested ids in practice).
+pub fn reorder_to_window(chunks: Vec<ResultChunk>, window_ids: &[u32]) -> Vec<ResultChunk> {
+    let mut order: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    for (i, &id) in window_ids.iter().enumerate() {
+        order.insert(id, i);
+    }
+    let mut chunks = chunks;
+    chunks.sort_by_key(|c| order.get(&c.chunk_idx).copied().unwrap_or(usize::MAX));
+    chunks
 }
 
 fn assemble_result(chunks: Vec<ResultChunk>, max_tokens: u32) -> Result<SearchResult> {
