@@ -193,7 +193,7 @@ impl Store {
                 .query()
                 .full_text_search(fts_query)
                 .nearest_to(&*qv_f16)?
-                .rerank(Arc::new(lancedb::rerankers::rrf::RRFReranker::new(1.0)))
+                .rerank(Arc::new(lancedb::rerankers::rrf::RRFReranker::default()))
                 .execute_hybrid(QueryExecutionOptions::default())
                 .await
                 .context("hybrid search execution failed")?;
