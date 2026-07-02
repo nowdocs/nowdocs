@@ -37,7 +37,7 @@ hf-hub = "0.4"
 # store (Wave 2 — only task 2b may touch these lines, AGENTS §4.5)
 lancedb = "0.30"
 tokio = { version = "1", features = ["rt", "macros", "fs"] }
-arrow = "58"
+arrow = "59"
 arrow-array = "58"
 arrow-schema = "58"
 half = "2"
