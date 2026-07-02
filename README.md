@@ -49,6 +49,52 @@ Wave 1 基础层已落地（manifest / chunker / token / cache / sanitize / inpu
 
 ## 许可证
 
-`MIT OR Apache-2.0`（Rust 双许可惯例）。
+`MIT OR Apache-2.0`（Rust 双许可惯例）。完整文本见 [LICENSE-MIT](LICENSE-MIT) 与
+[LICENSE-APACHE](LICENSE-APACHE)，二者任选其一遵守，义务不叠加。版权归 GWMM LLC。
 
-贡献遵循 DCO（Developer Certificate of Origin），不使用 CLA。
+依赖许可证审计：全树 616 个 crate，零强 copyleft（无 GPL/AGPL 传染），见
+[NOTICE](NOTICE) 与 `deny.toml`。其中 `option-ext` 为 MPL-2.0（文件级 copyleft，
+不感染整个二进制），其 notice 在 NOTICE 中保留。
+
+贡献遵循 DCO（Developer Certificate of Origin），不使用 CLA。每个 commit 须带
+`Signed-off-by:`（`git commit -s`），CI 由 `scripts/ci-check-dco.sh` 强制校验。
+
+## 商标
+
+"nowdocs" 及 nowdocs logo 为 GWMM LLC 的商标。MIT/Apache-2.0 授予的是代码使用权，
+**不授予商标权**。你不可用 "nowdocs" 名称或 logo 来命名、推广或标识衍生产品。
+描述来源时合理使用（"基于 nowdocs"）不受限制。
+
+## 隐私与遥测
+
+**nowdocs 不收集任何遥测数据，不向任何分析服务 phone-home。** 代码中无
+telemetry/analytics/tracking。
+
+网络访问仅限以下用户主动触发的场景：
+
+- `nowdocs ingest`：**不联网**。仅读取本地目录（用户自行 clone 官方 repo，连接
+  的是 GitHub 等源站，属用户行为，与 nowdocs 无关）。
+- `nowdocs install` / `update`：从 registry 下载 docset，仅限白名单域
+  `github.com/nowdocs-registry/*` 与 `registry.nowdocs.rs/*`。
+- 首次 embed 时从 HuggingFace 下载 embedder 模型（`hf-hub`），之后本地缓存。
+
+无任何使用数据、分析或追踪离开你的机器。
+
+## 安全漏洞披露
+
+**请勿为安全漏洞开启公开 GitHub issue**——这会在修复前公开暴露风险。
+
+通过 GitHub 仓库 **Security** 标签页 → **Report a vulnerability**（私有渠道）
+报告；或邮件 `legal@gwmmai.com`（标题加 `[nowdocs security]`）。详见
+[SECURITY.md](.github/SECURITY.md)。响应窗口：3 个工作日内确认，高危 30 天内修复。
+
+## 侵权下架（Takedown）
+
+公共 registry 为**策展制**（curated），非开放提交，但我们仍提供侵权下架流程。
+若认为 registry 上某 docset 侵犯你的版权，请邮件 `legal@gwmmai.com`，附：
+
+1. 被侵权作品的标识与权属证明；
+2. 被指控的 docset 名称及位置；
+3. 善意声明（你有权主张、且确信对方未授权）。
+
+我们将在合理期限内（高危版权争议数日内）先行下架，待反通知后再行处理。

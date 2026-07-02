@@ -164,6 +164,25 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
 
     std::fs::write(cache::manifest_path(&docset), &manifest_entry.1)?;
 
+    // Persist the upstream LICENSE bundled in the archive (if present) so a
+    // later `share` of this docset carries the notice text forward. Without
+    // this, docsets installed from a registry tar lose their LICENSE on
+    // re-share even though the archive contained it — mirror what `ingest`
+    // stashes at cache::license_text_path for locally-ingested docsets.
+    let license_entry = entries.iter().find(|(name, _)| {
+        std::path::Path::new(name)
+            .file_name()
+            .map(|f| f == std::ffi::OsStr::new("LICENSE"))
+            .unwrap_or(false)
+    });
+    if let Some((_, data)) = license_entry {
+        let license_path = cache::license_text_path(&docset);
+        if let Some(parent) = license_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&license_path, data)?;
+    }
+
     // Materialize chunks into the LanceDB store so retrieve::search works.
     // Uses zero vectors as placeholders; real vectors are rebuilt by CI (D10).
     let chunks_entry = entries
@@ -238,7 +257,49 @@ pub fn share(docset: &str, out_dir: &Path) -> Result<PathBuf> {
     }
     std::fs::write(share_dir.join("chunks.jsonl"), &jsonl)?;
 
+    // Carry the upstream LICENSE text verbatim (stashed at ingest time) so
+    // recipients can fulfill MIT/Apache notice retention and CC-BY-4.0
+    // attribution. Omitted when the source had no license file.
+    let license_path = cache::license_text_path(&docset);
+    if license_path.is_file() {
+        std::fs::write(share_dir.join("LICENSE"), std::fs::read(&license_path)?)?;
+    }
+    // Human-readable NOTICE synthesized from manifest legal + source fields.
+    std::fs::write(share_dir.join("NOTICE"), build_notice(&m))?;
+
     Ok(share_dir)
+}
+
+/// Build a human-readable NOTICE for a share bundle from the manifest's
+/// legal and source fields. Satisfies CC-BY-4.0's attribution requirement
+/// and MIT/Apache's notice-retention requirement for downstream recipients.
+fn build_notice(m: &manifest::Manifest) -> String {
+    let mut s = String::new();
+    s.push_str("nowdocs docset: ");
+    s.push_str(&m.docset);
+    s.push('\n');
+    s.push_str("Source: ");
+    s.push_str(&m.source.source_url);
+    s.push('\n');
+    s.push_str("Entry: ");
+    s.push_str(&m.source.entry_url);
+    s.push('\n');
+    s.push_str("License: ");
+    s.push_str(&m.legal.license);
+    s.push('\n');
+    if !m.legal.copyright_holder.trim().is_empty() {
+        s.push_str("Copyright: ");
+        s.push_str(&m.legal.copyright_holder);
+        s.push('\n');
+    }
+    if !m.legal.attribution.trim().is_empty() {
+        s.push_str("Attribution: ");
+        s.push_str(&m.legal.attribution);
+        s.push('\n');
+    }
+    s.push_str("\nThis bundle is a derived work produced by nowdocs (prep + chunk + embed)\n");
+    s.push_str("from the upstream documentation source cited above.\n");
+    s
 }
 
 #[derive(serde::Deserialize)]

@@ -228,6 +228,50 @@ fn test_install_from_file_url() {
     assert_eq!(chunks[1].text, "world");
 }
 
+// --- Test: install persists bundled LICENSE so re-share carries it ---
+
+#[test]
+fn test_install_persists_license_for_reshare() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "test_install_lic";
+    let license_body = "MIT license body, upstream notice\n";
+
+    // Build an archive that includes a LICENSE entry alongside manifest + chunks.
+    let mut archive = Vec::new();
+    for (name, data) in [
+        ("manifest.json", test_manifest_json().as_bytes()),
+        ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+        ("LICENSE", license_body.as_bytes()),
+    ] {
+        archive.extend_from_slice(&make_tar_entry(name, data));
+    }
+    archive.extend_from_slice(&[0u8; 512]);
+    archive.extend_from_slice(&[0u8; 512]);
+
+    let tar_path = dir.path().join("archive_lic.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    let url = format!("file://{}", tar_path.display());
+    nowdocs::registry::install(docset, &url).unwrap();
+
+    // install should have stashed the LICENSE at license_text_path (same path
+    // share reads from), even though this docset was never locally ingested.
+    assert!(
+        nowdocs::cache::license_text_path(docset).is_file(),
+        "install should persist bundled LICENSE to license_text_path"
+    );
+
+    // Re-sharing the installed docset must carry the upstream LICENSE forward.
+    let out_dir = dir.path().join("share_out_lic");
+    let share_path = nowdocs::registry::share(docset, &out_dir).unwrap();
+    let shared = std::fs::read_to_string(share_path.join("LICENSE")).unwrap();
+    assert_eq!(
+        shared, license_body,
+        "re-share of installed docset must carry upstream LICENSE verbatim"
+    );
+}
+
 // --- Test: share produces no vectors ---
 
 #[test]
@@ -277,6 +321,97 @@ fn test_share_produces_no_vectors() {
             "chunk should NOT have vector field"
         );
     }
+}
+
+// --- Test: share carries upstream LICENSE + synthesized NOTICE ---
+
+fn write_custom_manifest(docset: &str, json: &str) {
+    let manifest_path = nowdocs::cache::manifest_path(docset);
+    std::fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+    std::fs::write(&manifest_path, json).unwrap();
+}
+
+#[test]
+fn test_share_carries_license_and_notice() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "test_share_lic";
+    write_test_manifest(dir.path(), docset);
+    populate_test_store(docset);
+
+    // Stash a source LICENSE text, exactly as ingest would.
+    let license_body = "MIT License\n\nCopyright (c) Example\n";
+    std::fs::write(nowdocs::cache::license_text_path(docset), license_body).unwrap();
+
+    let out_dir = dir.path().join("share_out");
+    let share_path = nowdocs::registry::share(docset, &out_dir).unwrap();
+
+    let license = std::fs::read_to_string(share_path.join("LICENSE")).unwrap();
+    assert_eq!(
+        license, license_body,
+        "LICENSE must be the verbatim upstream text"
+    );
+
+    let notice = std::fs::read_to_string(share_path.join("NOTICE")).unwrap();
+    assert!(notice.contains("MIT"), "NOTICE must state the license");
+    assert!(
+        notice.contains("https://example.com"),
+        "NOTICE must carry the source URL"
+    );
+}
+
+#[test]
+fn test_share_notice_without_license_text() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "test_share_nolic";
+    write_test_manifest(dir.path(), docset);
+    populate_test_store(docset);
+    // No license_text_path stashed — source had no LICENSE file.
+
+    let out_dir = dir.path().join("share_out");
+    let share_path = nowdocs::registry::share(docset, &out_dir).unwrap();
+
+    assert!(
+        !share_path.join("LICENSE").exists(),
+        "no LICENSE file when the source had none"
+    );
+    assert!(
+        share_path.join("NOTICE").is_file(),
+        "NOTICE is still synthesized from manifest fields"
+    );
+}
+
+#[test]
+fn test_share_notice_carries_ccby_attribution() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "test_share_ccby";
+    // CC-BY-4.0 with non-empty attribution (validate enforces this).
+    let json = test_manifest_json()
+        .replace("\"license\": \"MIT\"", "\"license\": \"CC-BY-4.0\"")
+        .replace(
+            "\"attribution\": \"\"",
+            "\"attribution\": \"Derived from the Example docs, https://example.com\"",
+        );
+    write_custom_manifest(docset, &json);
+    populate_test_store(docset);
+
+    let out_dir = dir.path().join("share_out");
+    let share_path = nowdocs::registry::share(docset, &out_dir).unwrap();
+
+    let notice = std::fs::read_to_string(share_path.join("NOTICE")).unwrap();
+    assert!(
+        notice.contains("CC-BY-4.0"),
+        "NOTICE must state the CC-BY-4.0 license"
+    );
+    assert!(
+        notice.contains("Derived from the Example docs"),
+        "NOTICE must carry the attribution text (CC-BY-4.0 requirement)"
+    );
 }
 
 // --- Test: update refreshes manifest ---

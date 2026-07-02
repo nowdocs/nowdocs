@@ -153,3 +153,29 @@ fn test_ingest_cc_by_without_attribution_fails_validation() {
         "failed ingest must not leave a manifest"
     );
 }
+
+#[test]
+#[ignore = "needs real embedder (~66MB download, ~30s)"]
+fn test_ingest_stashes_source_license() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    fs::write(
+        dir.path().join("intro.md"),
+        "# Intro\n\nzzzunique_license_probe content.\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("LICENSE"),
+        "MIT License\n\nCopyright (c) Test Holder\n",
+    )
+    .unwrap();
+
+    ingest_dir(dir.path(), "test_ingest_lic", &IngestMeta::default()).unwrap();
+
+    // The verbatim upstream LICENSE text must be stashed in the cache so that
+    // `nowdocs share` can carry it in the bundle (MIT notice retention /
+    // CC-BY-4.0 attribution travel with the derived work).
+    let stashed = fs::read_to_string(cache::license_text_path("test_ingest_lic")).unwrap();
+    assert_eq!(stashed, "MIT License\n\nCopyright (c) Test Holder\n");
+}

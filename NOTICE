@@ -1,0 +1,101 @@
+NOTICE
+======
+
+nowdocs
+Copyright (c) 2026 GWMM LLC.
+
+Licensed under MIT OR Apache-2.0 (see LICENSE, LICENSE-MIT, LICENSE-APACHE).
+SPDX identifier: MIT OR Apache-2.0.
+
+This product includes software developed by third parties. Each third-party
+crate retains its own license; the obligations of those licenses (mostly
+attribution/notice retention) apply to the redistributable binary. The
+dependency tree was audited with `cargo deny` (616 crates, zero strong
+copyleft — see deny.toml). The full license inventory is reproducible with:
+
+    cargo metadata --format-version 1 | jq -r '.packages[] | "\(.name)\t\(.version)\t\(.license)"'
+
+This NOTICE satisfies Apache-2.0 §4(a) notice retention. The crates below
+carry licenses other than plain MIT/Apache-2.0 and are listed explicitly
+because their terms require or warrant explicit attribution. All are
+permissive or file-level-copyleft (no GPL/AGPL/LGPL in the resolved tree
+except r-efi, whose LGPL clause is offered as one of an OR-alternative and
+is never the chosen license).
+
+File-level copyleft (MPL-2.0)
+-----------------------------
+MPL-2.0 is file-level copyleft: it does NOT infect the whole binary. Its
+notice is retained here and in the source of the crate.
+
+  - option-ext v0.2.0 — MPL-2.0
+    https://github.com/soc/option-ext
+
+Boost License (BSL-1.0)
+-----------------------
+  - ryu v1.0.23 — Apache-2.0 OR BSL-1.0
+  - xxhash-rust v0.8.15 — BSL-1.0
+
+ISC License
+-----------
+  - ring v0.17.14 — Apache-2.0 AND ISC
+  - rustls-webpki v0.103.13 — ISC
+  - untrusted v0.9.0 — ISC
+
+BSD Licenses
+------------
+  - alloc-no-stdlib v2.0.4 — BSD-3-Clause
+  - alloc-stdlib v0.2.4 — BSD-3-Clause
+  - arrayref v0.3.9 — BSD-2-Clause
+  - brotli v8.0.4 — BSD-3-Clause AND MIT
+  - brotli-decompressor v5.0.3 — BSD-3-Clause/MIT
+  - cedarwood v0.4.6 — BSD-2-Clause
+  - encoding_rs v0.8.35 — (Apache-2.0 OR MIT) AND BSD-3-Clause
+  - rust-stemmers v1.2.0 — MIT/BSD-3-Clause
+  - subtle v2.6.1 — BSD-3-Clause
+  - zerocopy v0.8.52 — BSD-2-Clause OR Apache-2.0 OR MIT
+  - zerocopy-derive v0.8.52 — BSD-2-Clause OR Apache-2.0 OR MIT
+
+Zlib License
+------------
+  - foldhash v0.1.5, v0.2.0 — Zlib
+  - bytemuck v1.25.0 — Zlib OR Apache-2.0 OR MIT
+  - bytemuck_derive v1.10.2 — Zlib OR Apache-2.0 OR MIT
+
+CC0 / Public Domain Dedication
+------------------------------
+  - blake3 v1.8.5 — CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception
+  - constant_time_eq v0.4.2 — CC0-1.0 OR MIT-0 OR Apache-2.0
+  - tiny-keccak v2.0.2 — CC0-1.0
+
+Unicode License
+---------------
+The ICU4X components use the Unicode License v3.
+  - icu_* v2.2.0, litemap v0.8.2, potential_utf v0.1.5, tinystr v0.8.3,
+    writeable v0.6.3, yoke v0.8.3, yoke-derive v0.8.2, zerofrom v0.1.8,
+    zerofrom-derive v0.1.7, zerotrie v0.2.4, zerovec v0.11.6,
+    zerovec-derive v0.11.3, tinyvec v1.11.0, tinyvec_macros v0.1.1,
+    unicode-ident v1.0.24 — Unicode-3.0 (or MIT OR Apache-2.0)
+
+CDLA-Permissive-2.0 (data license)
+----------------------------------
+  - webpki-roots v0.26.11, v1.0.8 — CDLA-Permissive-2.0
+
+LGPL (OR-alternative, never the chosen license)
+-----------------------------------------------
+  - r-efi v5.3.0, v6.0.0 — MIT OR Apache-2.0 OR LGPL-2.1-or-later
+    (LGPL is offered as an alternative; the binary complies with MIT or
+    Apache-2.0, so LGPL obligations do not attach.)
+
+Unlicense / MIT
+---------------
+  - aho-corasick, byteorder, csv, csv-core, fst, jiff*, memchr, same-file,
+    utf8-ranges, walkdir, winapi-util — Unlicense OR MIT
+
+All remaining dependencies (the large majority, including tokio, serde,
+serde_json, clap, anyhow, thiserror, reqwest, lancedb, lance, candle,
+hf-hub, etc.) are licensed under MIT OR Apache-2.0 (or MIT / Apache-2.0
+individually) and are used under those permissive terms.
+
+---
+Generated from the resolved dependency tree at v0.1.0. Regenerate when
+dependencies change.
