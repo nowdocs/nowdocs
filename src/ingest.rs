@@ -95,6 +95,14 @@ pub fn ingest_dir(dir: &Path, docset: &str, meta: &IngestMeta) -> Result<IngestS
     let manifest = build_manifest(&docset, chunks.len() as u32, meta);
     manifest::validate(&manifest)?;
 
+    // Ingest is full-rebuild semantics: the manifest (below) and the stashed
+    // license text (above) are overwritten on every run, so the lance table
+    // must be too. Without this wipe, re-ingesting the same docset appends to
+    // the existing table via `Store::insert` (`table.add`), doubling every
+    // chunk_idx and polluting hybrid search with duplicate hits. Tests miss
+    // this because every ingest test isolates with a fresh `tempdir()` cache.
+    wipe_store(&docset)?;
+
     // Embed + insert. Empty dir skips embedder load but still opens (empty) store.
     if !chunks.is_empty() {
         let emb = embedder::Embedder::load()?;
@@ -118,6 +126,25 @@ pub fn ingest_dir(dir: &Path, docset: &str, meta: &IngestMeta) -> Result<IngestS
         files,
         chunks: chunks.len() as u32,
     })
+}
+
+/// Remove an existing docset's lance table so the next `Store::open` recreates
+/// it empty. Ingest is full-rebuild semantics — see `ingest_dir`. A missing
+/// path is a no-op (first ingest); an existing path is removed whether it is a
+/// directory (the normal `.lance` case) or a stray file.
+fn wipe_store(docset: &str) -> Result<()> {
+    let path = cache::db_path(docset);
+    if !path.exists() {
+        return Ok(());
+    }
+    if path.is_dir() {
+        std::fs::remove_dir_all(&path)
+            .with_context(|| format!("failed to wipe stale store at {}", path.display()))?;
+    } else {
+        std::fs::remove_file(&path)
+            .with_context(|| format!("failed to remove stale store file at {}", path.display()))?;
+    }
+    Ok(())
 }
 
 /// Recursively collect `*.md` paths under `dir`, sorted for determinism.
