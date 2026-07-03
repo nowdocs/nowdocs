@@ -49,6 +49,56 @@ fn test_ingest_end_to_end() {
 }
 
 #[test]
+#[ignore = "needs real embedder (~66MB download, ~30s)"]
+fn test_ingest_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    fs::write(
+        dir.path().join("api.md"),
+        "# API\n\n## Auth\n\nAuthentication uses zzzunique_idempotent_token for bearer flow.\n",
+    )
+    .unwrap();
+
+    let stats1 = ingest_dir(dir.path(), "test_idem", &IngestMeta::default()).unwrap();
+    let n1 = Store::open("test_idem")
+        .unwrap()
+        .dump_chunks()
+        .unwrap()
+        .len();
+    assert_eq!(n1, stats1.chunks as usize);
+
+    // Re-ingest the same dir: must NOT append duplicates. Before the wipe fix
+    // `table.add` appended to the existing table, doubling chunk_idx on every
+    // run and polluting hybrid search with duplicate hits.
+    let stats2 = ingest_dir(dir.path(), "test_idem", &IngestMeta::default()).unwrap();
+    assert_eq!(stats2.chunks, stats1.chunks);
+    let n2 = Store::open("test_idem")
+        .unwrap()
+        .dump_chunks()
+        .unwrap()
+        .len();
+    assert_eq!(
+        n2, n1,
+        "re-ingest must not accumulate duplicate chunks: got {n2}, expected {n1}"
+    );
+
+    // The unique keyword is still recalled after re-ingest (not drowned out by
+    // duplicates inflating the table).
+    let emb = Embedder::load().unwrap();
+    let qv = emb.embed("zzzunique_idempotent_token").unwrap();
+    let store = Store::open("test_idem").unwrap();
+    let hits = store
+        .hybrid_search(&qv, "zzzunique_idempotent_token", 5)
+        .unwrap();
+    assert!(
+        hits.iter()
+            .any(|h| h.text.contains("zzzunique_idempotent_token")),
+        "unique-keyword chunk should still be recalled after re-ingest"
+    );
+}
+
+#[test]
 fn test_ingest_rejects_bad_docset() {
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
