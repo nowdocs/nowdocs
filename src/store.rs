@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use arrow_array::{FixedSizeListArray, Float16Array, RecordBatch, StringArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
@@ -180,6 +180,21 @@ impl Store {
         query_text: &str,
         top_k: usize,
     ) -> Result<Vec<SearchHit>> {
+        self.hybrid_search_k(query_vector, query_text, top_k, 60.0)
+    }
+
+    /// Hybrid search with a configurable RRF fusion constant. `hybrid_search`
+    /// delegates with the default k=60 (paper-recommended, near-optimal per
+    /// Cormack et al. 2009); this variant lets diagnostics probe how the fusion
+    /// constant shifts recall. k is the constant in `score = 1/(rank + k)`:
+    /// smaller k makes the top ranks dominate, larger k flattens scores.
+    pub fn hybrid_search_k(
+        &self,
+        query_vector: &[f32],
+        query_text: &str,
+        top_k: usize,
+        rrf_k: f32,
+    ) -> Result<Vec<SearchHit>> {
         let table = self
             .runtime
             .block_on(self.conn.open_table(&self.table_name).execute())
@@ -193,7 +208,7 @@ impl Store {
                 .query()
                 .full_text_search(fts_query)
                 .nearest_to(&*qv_f16)?
-                .rerank(Arc::new(lancedb::rerankers::rrf::RRFReranker::default()))
+                .rerank(Arc::new(lancedb::rerankers::rrf::RRFReranker::new(rrf_k)))
                 .execute_hybrid(QueryExecutionOptions::default())
                 .await
                 .context("hybrid search execution failed")?;
@@ -203,6 +218,69 @@ impl Store {
                 .context("failed to collect hybrid search results")
         })?;
 
+        let mut hits = parse_search_hits_with_score(&batches)?;
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        hits.truncate(top_k);
+        Ok(hits)
+    }
+
+    /// Pure FTS (BM25) search, no vector, no reranker. For diagnostics: isolates
+    /// the FTS channel's recall/ranking from the vector channel and RRF fusion.
+    /// Hits are ordered by descending BM25 `_score`.
+    pub fn fts_search(&self, query_text: &str, top_k: usize) -> Result<Vec<SearchHit>> {
+        let table = self
+            .runtime
+            .block_on(self.conn.open_table(&self.table_name).execute())
+            .context("failed to open table for FTS search")?;
+        let fts_query = FullTextSearchQuery::new(query_text.to_string());
+        let batches: Vec<RecordBatch> = self.runtime.block_on(async {
+            let stream = table
+                .query()
+                .full_text_search(fts_query)
+                .execute()
+                .await
+                .context("FTS search execution failed")?;
+            stream
+                .try_collect::<Vec<RecordBatch>>()
+                .await
+                .context("failed to collect FTS search results")
+        })?;
+        let mut hits = parse_search_hits_with_score(&batches)?;
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        hits.truncate(top_k);
+        Ok(hits)
+    }
+
+    /// Pure vector (k-NN) search, no FTS, no reranker. For diagnostics: isolates
+    /// the vector channel's recall/ranking. Hits are ordered by ascending
+    /// `_distance` (smaller = more similar), surfaced as descending score via
+    /// the negation in `parse_search_hits_with_score`.
+    pub fn vector_search(&self, query_vector: &[f32], top_k: usize) -> Result<Vec<SearchHit>> {
+        let table = self
+            .runtime
+            .block_on(self.conn.open_table(&self.table_name).execute())
+            .context("failed to open table for vector search")?;
+        let qv_f16: Vec<f16> = query_vector.iter().map(|&v| f16::from_f32(v)).collect();
+        let batches: Vec<RecordBatch> = self.runtime.block_on(async {
+            let stream = table
+                .query()
+                .nearest_to(&*qv_f16)?
+                .execute()
+                .await
+                .context("vector search execution failed")?;
+            stream
+                .try_collect::<Vec<RecordBatch>>()
+                .await
+                .context("failed to collect vector search results")
+        })?;
         let mut hits = parse_search_hits_with_score(&batches)?;
         hits.sort_by(|a, b| {
             b.score
@@ -272,19 +350,20 @@ fn parse_search_hits_with_score(batches: &[RecordBatch]) -> Result<Vec<SearchHit
         if batch.column_by_name("chunk_idx").is_none() {
             continue;
         }
-        // Prefer the reranker's fused relevance score (_relevance_score, written
-        // by RRFReranker) over the raw FTS BM25 score (_score). Sorting by the
-        // raw _score ignores vector relevance entirely and discards the reranker
-        // output — fall back to _score only when no reranker ran.
-        let score_col = batch
+        // Score: prefer the RRF fused _relevance_score (hybrid), then raw FTS
+        // BM25 _score (pure FTS), then negated vector _distance (pure vector
+        // k-NN). Negating distance lets every caller sort by score descending
+        // uniformly — hybrid/FTS rank high-is-better, vector ranks
+        // low-distance-is-better, so -distance sorts the most-similar first.
+        let rel_col = batch
             .column_by_name("_relevance_score")
-            .and_then(|c| c.as_any().downcast_ref::<arrow_array::Float32Array>())
-            .or_else(|| {
-                batch
-                    .column_by_name("_score")
-                    .and_then(|c| c.as_any().downcast_ref::<arrow_array::Float32Array>())
-            })
-            .context("missing _relevance_score/_score column")?;
+            .and_then(|c| c.as_any().downcast_ref::<arrow_array::Float32Array>());
+        let fts_col = batch
+            .column_by_name("_score")
+            .and_then(|c| c.as_any().downcast_ref::<arrow_array::Float32Array>());
+        let dist_col = batch
+            .column_by_name("_distance")
+            .and_then(|c| c.as_any().downcast_ref::<arrow_array::Float32Array>());
         let idx_col = batch
             .column_by_name("chunk_idx")
             .and_then(|c| c.as_any().downcast_ref::<UInt32Array>())
@@ -315,7 +394,14 @@ fn parse_search_hits_with_score(batches: &[RecordBatch]) -> Result<Vec<SearchHit
                 _ => ChunkType::Info,
             };
             hits.push(SearchHit {
-                score: score_col.value(row),
+                score: match (rel_col, fts_col, dist_col) {
+                    (Some(r), _, _) => r.value(row),
+                    (None, Some(f), _) => f.value(row),
+                    (None, None, Some(d)) => -d.value(row),
+                    (None, None, None) => {
+                        bail!("missing _relevance_score/_score/_distance column")
+                    }
+                },
                 chunk_idx: idx_col.value(row),
                 heading_path: heading_col.value(row).to_string(),
                 source_url: url_col.value(row).to_string(),
