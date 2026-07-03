@@ -158,8 +158,13 @@ fn golden_nextjs() -> Vec<GoldenQuery> {
             expected_source_url: "01-app/01-getting-started/06-fetching-data.md".into(),
         },
         GoldenQuery {
+            // `force-cache`/`no-store` are fetch cache options from the *previous*
+            // caching model — they live in caching-without-cache-components.md
+            // (20 occurrences), not 08-caching.md (Cache Components, 0 occurrences).
+            // The old golden pointed at 08-caching.md and was unreachable by any
+            // channel (FTS/vector both None) — a label error, not a retrieval bug.
             query: "caching fetch requests cache options force-cache no-store".into(),
-            expected_source_url: "01-app/01-getting-started/08-caching.md".into(),
+            expected_source_url: "01-app/02-guides/caching-without-cache-components.md".into(),
         },
         GoldenQuery {
             query: "revalidating data revalidateTag revalidatePath ISR".into(),
@@ -322,26 +327,80 @@ fn test_eval_nextjs_diagnose() {
 
     let raw_topn = 15usize;
     let golden = golden_nextjs();
+    // RRF k proved inert on this corpus (5/10/20/60 give identical ranks — see
+    // git history), and the FTS index already runs stem + stop-word removal
+    // (`InvertedIndexParams::default`), so neither fusion tuning nor tokenizer
+    // config explains the misses. Pivot to the hub-chunk hypothesis: a few
+    // generic chunks (installation.md, getting-started overviews) match
+    // moderately on *both* channels for many queries, so RRF fusion floats
+    // them into the top-5 and squeezes the specific expected chunk to rank 9+
+    // or out of top-15. For each miss we print (a) the expected chunk's rank
+    // in top-50 — distinguishing "weak ranking" (in top-50) from "no recall"
+    // (absent from top-50) — and (b) the top-15 source_urls + unique count, so
+    // repeated source_urls reveal whether per-source_url dedup would lift the
+    // expected chunk into the top-5.
     for q in &golden {
         let qv = embedder.embed(&q.query).expect("embed query");
         let hits = store
-            .hybrid_search(&qv, &q.query, raw_topn)
+            .hybrid_search_k(&qv, &q.query, raw_topn, 60.0)
             .expect("hybrid search");
         let raw_rank = hits
             .iter()
             .position(|h| h.source_url == q.expected_source_url)
             .map(|p| p + 1);
-        eprintln!(
-            "  q={:?} expected={:?} raw_hybrid_rank={:?} (of top {})",
-            q.query, q.expected_source_url, raw_rank, raw_topn
-        );
-        eprintln!(
-            "    top-{}: {}",
-            raw_topn,
-            hits.iter()
-                .map(|h| format!("{}@{}({:.3})", h.source_url, h.chunk_idx, h.score))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        let miss = raw_rank.is_none_or(|r| r > 5);
+        let tag = if miss { "MISS" } else { "ok  " };
+        eprintln!("  [{}] q={:?} expected rank={:?}", tag, q.query, raw_rank);
+        if miss {
+            // Pure-channel ranks isolate whether FTS or vector recall is weak.
+            // hybrid = FTS ∪ vector + RRF; a miss absent from both pure top-50
+            // is a recall failure, while present-in-one-but-squeezed-from-hybrid
+            // is an RRF fusion issue.
+            let fts_hits = store.fts_search(&q.query, 50).expect("fts search");
+            let fts_rank = fts_hits
+                .iter()
+                .position(|h| h.source_url == q.expected_source_url)
+                .map(|p| p + 1);
+            let vec_hits = store.vector_search(&qv, 50).expect("vector search");
+            let vec_rank = vec_hits
+                .iter()
+                .position(|h| h.source_url == q.expected_source_url)
+                .map(|p| p + 1);
+            eprintln!(
+                "        pure FTS rank@50: {:?} | pure vector rank@50: {:?}",
+                fts_rank, vec_rank
+            );
+            eprintln!(
+                "        FTS top-5: {}",
+                fts_hits
+                    .iter()
+                    .take(5)
+                    .map(|h| h.source_url.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            eprintln!(
+                "        vector top-5: {}",
+                vec_hits
+                    .iter()
+                    .take(5)
+                    .map(|h| h.source_url.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            let hits50 = store
+                .hybrid_search_k(&qv, &q.query, 50, 60.0)
+                .expect("hybrid search top-50");
+            let rank50 = hits50
+                .iter()
+                .position(|h| h.source_url == q.expected_source_url)
+                .map(|p| p + 1);
+            eprintln!("        hybrid rank in top-50: {:?}", rank50);
+            let urls: Vec<&str> = hits.iter().map(|h| h.source_url.as_str()).collect();
+            eprintln!("        top-15: {}", urls.join(", "));
+            let mut seen = std::collections::HashSet::new();
+            let unique = urls.iter().filter(|u| seen.insert(**u)).count();
+            eprintln!("        unique source_urls in top-15: {}/15", unique);
+        }
     }
 }
