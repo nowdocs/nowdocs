@@ -129,10 +129,21 @@ fn test_window_ids_upper_bound_no_next() {
 #[test]
 fn test_window_ids_dedup_keeps_higher_ranked_hit_first() {
     // Two hits: idx 2 (score 0.9, rank 1), idx 1 (score 0.8, rank 2).
-    // rank-1 window [2,1,3]; rank-2 window [1,0,2] → 1 and 2 already seen.
-    // Result: [2, 1, 3, 0] — the rank-1 hit (2) leads.
+    // Pass 1 places hits [2, 1]; pass 2 adds neighbors: hit 2's [1,3] → 3
+    // (1 already seen), hit 1's [0,2] → 0 (2 already seen). Result
+    // [2, 1, 3, 0] — both hits lead, neighbors follow.
     let hits = vec![hit(2, 0.9), hit(1, 0.8)];
     assert_eq!(window_ids_for(&hits, 10), vec![2, 1, 3, 0]);
+}
+
+#[test]
+fn test_window_ids_all_hits_lead_before_neighbors() {
+    // Three non-adjacent hits: idx 2, 5, 8 (ranks 1, 2, 3). Hit-first ordering
+    // places all hits [2, 5, 8] before any neighbor, so hit3 stays at rank 3
+    // instead of being pushed to ~7 by hit1/hit2's neighbors — this is the
+    // recall@5 squeeze fix. Pass 2 appends neighbors [1,3, 4,6, 7,9].
+    let hits = vec![hit(2, 0.9), hit(5, 0.8), hit(8, 0.7)];
+    assert_eq!(window_ids_for(&hits, 10), vec![2, 5, 8, 1, 3, 4, 6, 7, 9]);
 }
 
 #[test]
