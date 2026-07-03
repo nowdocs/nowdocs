@@ -65,13 +65,12 @@ pub fn search(
         });
     }
 
-    // Build the neighbor window in relevance-first order: for each hit
-    // (already ranked by score desc from `hybrid_search`), emit
-    // `[hit, hit-1, hit+1]` so the hit itself leads and its adjacent chunks
-    // follow as context. Dedup keeps first-seen position, so a higher-ranked
-    // hit's chunk precedes a lower-ranked hit's context. This fixes bug#1: the
-    // old code sorted window_ids by chunk_idx, discarding relevance and making
-    // output order independent of the query (MRR 0.65 was pure idx luck).
+    // Build the neighbor window hit-first: all hybrid hits lead (rank 1..N),
+    // then their `[hit-1, hit+1]` neighbors follow as context. This keeps a
+    // hit recalled by hybrid inside the top-K — the earlier per-hit interleave
+    // (`[hit, hit-1, hit+1]`) let hit1..4's neighbors push hit5 from hybrid
+    // rank 5 to retrieve rank ~7, squeezing it out of recall@5. See
+    // `window_ids_for`.
     let chunk_count = manifest.source.chunk_count as u32;
     let window_ids = window_ids_for(&hits, chunk_count);
 
@@ -97,16 +96,31 @@ pub fn search(
 
 /// Build the relevance-ordered neighbor-window index list from hybrid search
 /// hits. `hits` must be in score-descending order (as returned by
-/// `Store::hybrid_search`). For each hit, emits `[hit, hit-1, hit+1]` so the
-/// hit itself leads and its adjacent chunks follow as context. Deduplication
-/// keeps the first-seen position, so a higher-ranked hit's chunk always
-/// precedes a lower-ranked hit's context. Indices are clamped to
-/// `[0, chunk_count)`.
+/// `Store::hybrid_search`).
+///
+/// Two passes keep every hybrid hit inside the top-K: (1) all hits in
+/// relevance order, then (2) each hit's `[hit-1, hit+1]` neighbors as context.
+/// The earlier per-hit interleave (`[hit, hit-1, hit+1]`) let hit1..4's
+/// neighbors push hit5 from hybrid rank 5 to retrieve rank ~7 — a hit recalled
+/// by hybrid was squeezed out of the top-K window by *other hits'* context.
+/// Hit-first ordering guarantees `recall@K(retrieve) >= recall@K(hybrid)`: the
+/// window only ever adds context below the hits, never displaces them. Indices
+/// are clamped to `[0, chunk_count)`.
 pub fn window_ids_for(hits: &[SearchHit], chunk_count: u32) -> Vec<u32> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
+
+    // Pass 1: hits in relevance order so rank 1..N lead the result.
     for hit in hits {
-        for delta in [0i32, -1, 1] {
+        let idx = hit.chunk_idx;
+        if idx < chunk_count && seen.insert(idx) {
+            out.push(idx);
+        }
+    }
+
+    // Pass 2: neighbor context [hit-1, hit+1] per hit, relevance order.
+    for hit in hits {
+        for delta in [-1i32, 1] {
             let idx = hit.chunk_idx as i32 + delta;
             if idx >= 0 && (idx as u32) < chunk_count {
                 let u = idx as u32;

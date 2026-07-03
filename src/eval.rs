@@ -51,6 +51,15 @@ pub fn compute_metrics(ranks: &[Option<usize>]) -> (f32, f32) {
     (recall, mrr)
 }
 
+/// Recall@K cutoff: a hit beyond this rank counts as a miss.
+///
+/// `retrieve::search` expands each hybrid hit into a 3-chunk neighbor window
+/// (`[hit, hit-1, hit+1]`), so `result.chunks` may hold more than `RECALL_K`
+/// chunks. `evaluate()` therefore only looks at the first `RECALL_K` chunks
+/// (relevance-first order from `reorder_to_window`) — a hit beyond rank K
+/// counts as a miss, so `recall_at_5` measures true recall@5, not recall@N.
+const RECALL_K: usize = 5;
+
 /// Run the golden set against an already-ingested docset and report quality.
 pub fn evaluate(docset: &str, golden: &[GoldenQuery]) -> Result<EvalReport> {
     if golden.is_empty() {
@@ -63,11 +72,12 @@ pub fn evaluate(docset: &str, golden: &[GoldenQuery]) -> Result<EvalReport> {
 
     let mut ranks: Vec<Option<usize>> = Vec::with_capacity(golden.len());
     for q in golden {
-        let result = retrieve::search(docset, &q.query, Some(4000), Some(5))
+        let result = retrieve::search(docset, &q.query, Some(4000), Some(RECALL_K as u32))
             .with_context(|| format!("search failed for query {:?}", q.query))?;
         let rank = result
             .chunks
             .iter()
+            .take(RECALL_K)
             .position(|c| c.source_url == q.expected_source_url)
             .map(|p| p + 1); // 1-indexed
         ranks.push(rank);

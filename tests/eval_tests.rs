@@ -136,47 +136,10 @@ fn test_evaluate_meets_threshold() {
     assert_eq!(report.n, golden.len(), "report.n must equal golden.len()");
 }
 
-/// Exploratory: ingest the rebuilt Next.js corpus (437 files / ~7480 chunks)
-/// and run concept-level golden queries to probe retrieval quality on a real
-/// large docset — the 3-file synthetic fixture's MRR 1.0 does not generalize
-/// by itself. Prints per-query rank + recall/MRR. No hard gate (exploratory);
-/// only asserts recall stays reasonable for a real corpus.
-#[test]
-#[ignore = "needs real embedder + rebuilt nextjs corpus (~minutes)"]
-fn test_eval_nextjs_real() {
-    use nowdocs::ingest::{ingest_dir, IngestMeta};
-    use nowdocs::{eval::compute_metrics, retrieve};
-
-    let cache_dir = tempfile::tempdir().unwrap();
-    unsafe { std::env::set_var("XDG_CACHE_HOME", cache_dir.path()) };
-
-    let corpus: PathBuf = [
-        env!("CARGO_MANIFEST_DIR"),
-        "seed-crates",
-        "tmp",
-        "nextjs_rebuilt",
-    ]
-    .iter()
-    .collect();
-    assert!(
-        corpus.exists(),
-        "run `uv run python3 seed-crates/tmp/rebuild_nextjs.py` first"
-    );
-
-    let meta = IngestMeta {
-        license: "MIT".into(),
-        copyright_holder: "Vercel, Inc.".into(),
-        source_url: "https://github.com/vercel/next.js".into(),
-        entry_url: "https://nextjs.org/docs".into(),
-        attribution: String::new(),
-    };
-    let stats = ingest_dir(&corpus, "nextjs_real", &meta).expect("ingest nextjs corpus");
-    eprintln!(
-        "nextjs-real ingest: {} files, {} chunks",
-        stats.files, stats.chunks
-    );
-
-    let golden = vec![
+/// Shared Next.js golden query set — concept-level questions whose expected
+/// `source_url` is the getting-started / guide page that answers them.
+fn golden_nextjs() -> Vec<GoldenQuery> {
+    vec![
         GoldenQuery {
             query: "how to install create-next-app CLI setup new project".into(),
             expected_source_url: "01-app/01-getting-started/01-installation.md".into(),
@@ -218,7 +181,50 @@ fn test_eval_nextjs_real() {
             query: "environment variables env files NODE_ENV".into(),
             expected_source_url: "01-app/02-guides/environment-variables.md".into(),
         },
-    ];
+    ]
+}
+
+/// Exploratory: ingest the rebuilt Next.js corpus (437 files / ~7480 chunks)
+/// and run concept-level golden queries to probe retrieval quality on a real
+/// large docset — the 3-file synthetic fixture's MRR 1.0 does not generalize
+/// by itself. Prints per-query rank + recall/MRR. No hard gate (exploratory);
+/// only asserts recall stays reasonable for a real corpus.
+#[test]
+#[ignore = "needs real embedder + rebuilt nextjs corpus (~minutes)"]
+fn test_eval_nextjs_real() {
+    use nowdocs::ingest::{ingest_dir, IngestMeta};
+    use nowdocs::{eval::compute_metrics, retrieve};
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache_dir.path()) };
+
+    let corpus: PathBuf = [
+        env!("CARGO_MANIFEST_DIR"),
+        "seed-crates",
+        "tmp",
+        "nextjs_rebuilt",
+    ]
+    .iter()
+    .collect();
+    assert!(
+        corpus.exists(),
+        "run `uv run python3 seed-crates/tmp/rebuild_nextjs.py` first"
+    );
+
+    let meta = IngestMeta {
+        license: "MIT".into(),
+        copyright_holder: "Vercel, Inc.".into(),
+        source_url: "https://github.com/vercel/next.js".into(),
+        entry_url: "https://nextjs.org/docs".into(),
+        attribution: String::new(),
+    };
+    let stats = ingest_dir(&corpus, "nextjs_real", &meta).expect("ingest nextjs corpus");
+    eprintln!(
+        "nextjs-real ingest: {} files, {} chunks",
+        stats.files, stats.chunks
+    );
+
+    let golden = golden_nextjs();
 
     let mut ranks: Vec<Option<usize>> = Vec::with_capacity(golden.len());
     for q in &golden {
@@ -227,6 +233,7 @@ fn test_eval_nextjs_real() {
         let rank = result
             .chunks
             .iter()
+            .take(5)
             .position(|c| c.source_url == q.expected_source_url)
             .map(|p| p + 1);
         eprintln!(
@@ -254,4 +261,87 @@ fn test_eval_nextjs_real() {
         recall >= 0.5,
         "recall@5 {recall} too low on real nextjs corpus"
     );
+}
+
+/// Diagnostic: bypass `retrieve::search`'s window expansion and probe the raw
+/// hybrid search (FTS + vector + RRF) top-15 for each golden query. This
+/// separates two miss root causes:
+/// - "hybrid never recalled" — expected absent from raw top-15 → fix
+///   FTS/vector/RRF recall.
+/// - "window squeezed out" — expected present in raw top-5 but pushed beyond
+///   rank 5 by hub-chunk neighbor windows → fix window assembly.
+#[test]
+#[ignore = "needs real embedder + rebuilt nextjs corpus (~minutes)"]
+fn test_eval_nextjs_diagnose() {
+    use nowdocs::cache::manifest_path;
+    use nowdocs::embedder::{Embedder, EmbedderSpec};
+    use nowdocs::ingest::{ingest_dir, IngestMeta};
+    use nowdocs::manifest::{parse_manifest, validate};
+    use nowdocs::store::Store;
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache_dir.path()) };
+
+    let corpus: PathBuf = [
+        env!("CARGO_MANIFEST_DIR"),
+        "seed-crates",
+        "tmp",
+        "nextjs_rebuilt",
+    ]
+    .iter()
+    .collect();
+    assert!(
+        corpus.exists(),
+        "run `uv run python3 seed-crates/tmp/rebuild_nextjs.py` first"
+    );
+
+    let meta = IngestMeta {
+        license: "MIT".into(),
+        copyright_holder: "Vercel, Inc.".into(),
+        source_url: "https://github.com/vercel/next.js".into(),
+        entry_url: "https://nextjs.org/docs".into(),
+        attribution: String::new(),
+    };
+    let stats = ingest_dir(&corpus, "nextjs_real", &meta).expect("ingest nextjs corpus");
+    eprintln!(
+        "nextjs-diagnose ingest: {} files, {} chunks",
+        stats.files, stats.chunks
+    );
+
+    // Load manifest + embedder once (mirror retrieve::search's setup).
+    let manifest_json = std::fs::read_to_string(manifest_path("nextjs_real")).unwrap();
+    let manifest = parse_manifest(&manifest_json).unwrap();
+    validate(&manifest).unwrap();
+    let spec = EmbedderSpec {
+        model_id: manifest.embedder.model_id.clone(),
+        model_revision: manifest.embedder.model_revision.clone(),
+        model_sha256: manifest.embedder.model_sha256.clone(),
+    };
+    let embedder = Embedder::load_for(&spec).expect("load embedder");
+    let store = Store::open("nextjs_real").expect("open store");
+
+    let raw_topn = 15usize;
+    let golden = golden_nextjs();
+    for q in &golden {
+        let qv = embedder.embed(&q.query).expect("embed query");
+        let hits = store
+            .hybrid_search(&qv, &q.query, raw_topn)
+            .expect("hybrid search");
+        let raw_rank = hits
+            .iter()
+            .position(|h| h.source_url == q.expected_source_url)
+            .map(|p| p + 1);
+        eprintln!(
+            "  q={:?} expected={:?} raw_hybrid_rank={:?} (of top {})",
+            q.query, q.expected_source_url, raw_rank, raw_topn
+        );
+        eprintln!(
+            "    top-{}: {}",
+            raw_topn,
+            hits.iter()
+                .map(|h| format!("{}@{}({:.3})", h.source_url, h.chunk_idx, h.score))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
 }
