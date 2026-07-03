@@ -55,7 +55,18 @@ pub fn search(
     // Embed query and run hybrid search.
     let query_vector = embedder.embed(&query)?;
     let store = Store::open(&docset)?;
-    let hits = store.hybrid_search(&query_vector, &query, top_k as usize)?;
+    // Over-fetch then de-dup by source_url: hybrid often returns multiple
+    // chunks from the same hub file (installation.md, glossary.md,
+    // backend-for-frontend.md) that match moderately on both channels — RRF
+    // fusion floats them into the top-K and squeezes the specific expected
+    // chunk to rank 9+ (see eval `test_eval_nextjs_diagnose`). Keeping only the
+    // highest-scoring chunk per source_url lets diverse files reach the top-K.
+    // The window pass below re-attaches same-file neighbor chunks as context,
+    // so per-file coverage is preserved.
+    let raw_k = (top_k * 3).max(15) as usize;
+    let hits = store.hybrid_search(&query_vector, &query, raw_k)?;
+    let hits = dedup_by_source_url(hits);
+    let hits: Vec<SearchHit> = hits.into_iter().take(top_k as usize).collect();
 
     if hits.is_empty() {
         return Ok(SearchResult {
@@ -94,6 +105,17 @@ pub fn search(
     assemble_result(window_chunks, max_tokens)
 }
 
+/// Keep only the highest-scoring hit per `source_url`. `hits` must be in
+/// score-descending order (as returned by `Store::hybrid_search`), so the first
+/// occurrence of each source_url is the best — later duplicates from the same
+/// file are dropped. See `search` for why hub-file dedup lifts recall.
+fn dedup_by_source_url(hits: Vec<SearchHit>) -> Vec<SearchHit> {
+    let mut seen = std::collections::HashSet::new();
+    hits.into_iter()
+        .filter(|h| seen.insert(h.source_url.clone()))
+        .collect()
+}
+
 /// Build the relevance-ordered neighbor-window index list from hybrid search
 /// hits. `hits` must be in score-descending order (as returned by
 /// `Store::hybrid_search`).
@@ -103,9 +125,11 @@ pub fn search(
 /// The earlier per-hit interleave (`[hit, hit-1, hit+1]`) let hit1..4's
 /// neighbors push hit5 from hybrid rank 5 to retrieve rank ~7 — a hit recalled
 /// by hybrid was squeezed out of the top-K window by *other hits'* context.
-/// Hit-first ordering guarantees `recall@K(retrieve) >= recall@K(hybrid)`: the
-/// window only ever adds context below the hits, never displaces them. Indices
-/// are clamped to `[0, chunk_count)`.
+/// Hit-first ordering keeps the window additive: it only ever appends context
+/// below the hits, never displaces them. (Note: `search` de-dups hits by
+/// source_url before this, so the hits here are already one-per-file; the
+/// window then re-expands per-file coverage via neighbors.) Indices are
+/// clamped to `[0, chunk_count)`.
 pub fn window_ids_for(hits: &[SearchHit], chunk_count: u32) -> Vec<u32> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
