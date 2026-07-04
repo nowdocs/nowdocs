@@ -24,7 +24,7 @@ pub fn update(docset: &str) -> anyhow::Result<()>;
 pub fn uninstall(docset: &str) -> anyhow::Result<()>;
 ```
 **install(docset, url)**：从 `url` 下载归档到临时文件 → 验证内含 `manifest.json` 且过 `manifest::validate` → 解包文本+manifest 到 `db_path(docset)` 与 `manifest_path(docset)`。
-- **安全闸门（强制）**：生产 URL 必须在 `https://github.com/nowdocs-registry/...` 或 `https://registry.nowdocs.rs/...` 域下，其它域明确拒绝报错。测试用 `file://` scheme 特判放行。
+- **安全闸门（强制）**：生产 URL 必须在 `https://github.com/nowdocs-registry/...` 或 `https://registry.nowdocs.dev/...` 域下，其它域明确拒绝报错。测试用 `file://` scheme 特判放行。
 **share(docset, out_dir)**：读已装 docset 的 manifest + 全部文本块 → 写 share 包到 out_dir，含 `manifest.json` + `chunks.jsonl`（每行一 chunk 的文本+元数据，**绝不含向量**，D10）→ 返回包目录路径。manifest 必须过 validate。
 **update(docset)**：解析最新版 registry URL（测试用本地 fixture，生产用域内 URL pattern）→ 调 install 替换。下载 manifest 的 `model_sha256` 与现装不符时仍允许但明确提示。
 **uninstall(docset)**：删 `db_path(docset)` + `manifest_path(docset)`（存在才删）。

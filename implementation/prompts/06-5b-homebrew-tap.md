@@ -13,7 +13,7 @@
 ## 要做
 1. 在仓库内放 formula 草稿（如 `dist/homebrew/nowdocs.rb`）+ tap 仓库（`nowdocs-homebrew`）设置说明文档。
 2. formula 内容：
-   - `desc` / `homepage`（nowdocs.rs）/ `license "MIT OR Apache-2.0"`。
+   - `desc` / `homepage`（nowdocs.dev）/ `license "MIT OR Apache-2.0"`。
    - 多平台 `url` + `sha256`：从 GitHub Releases 拉 5a 产出的 darwin (arm64/x86_64) tgz；用 `on_macos` + `on_arm`/`on_intel` 分支选资产。
    - `def install; bin.install "nowdocs"; end`。
    - `test do; system "#{bin}/nowdocs", "--version"; end`。
