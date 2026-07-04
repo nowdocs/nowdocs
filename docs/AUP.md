@@ -1,6 +1,7 @@
 # Acceptable Use Policy
 
 > Copyright (c) 2026 GWMM LLC.
+> 最后更新：2026-07-04
 > 适用范围：nowdocs 公共 registry 与 nowdocs 软件
 
 ## registry 性质
@@ -19,6 +20,8 @@ nowdocs 公共 registry 实行**策展制**（curated），非开放提交。GWM
 - **专有文档**：如 Clerk、Tailwind 等非开源许可文档（设计评审 §6.10）
 - **ToS 禁止爬取/再分发**的网站文档
 - **未授权爬取内容**：无明确许可的抓取产物
+- **ShareAlike 类许可（暂不收录）**：CC-BY-SA / GFDL 等（如 MDN）。
+  ShareAlike 义务会传染到衍生 docset，处理成本高，暂缓收录，未来评估
 - **恶意/误导/投毒内容**：向量投毒、误导性文本、植入性内容
 
 ## 贡献者行为

@@ -102,7 +102,7 @@
 - **TDD**：先写失败测试 → 验证失败 → 最小实现 → 验证通过 → commit。
 - **隔离工作树**：写代码 agent 必须独立 worktree，禁止共用主树。
 - **不擅自 push**：所有 `git push` 需用户显式批准。
-- **网络防线**：本地服务绑 `127.0.0.1`；唯二允许的外部域 = `github.com/nowdocs-registry/*` 与 `registry.nowdocs.rs/*`；禁硬编码其它公网 IP。
+- **网络防线**：本地服务绑 `127.0.0.1`；唯二允许的外部域 = `github.com/nowdocs-registry/*` 与 `registry.nowdocs.dev/*`；禁硬编码其它公网 IP。
 - **密钥防线**：凭证只入 `.env`/`*.local`，写前确认已 gitignore。
 - **命令输出管控**：build/test 一律 `> xxx.log 2>&1` 后看 tail，禁 dump 全量日志进上下文。
 - **Cargo.toml 红线**：除非 prompt 明确授权，任何 agent 改 Cargo.toml 视为越界——遇缺依赖列 Open Question 上报。

@@ -61,24 +61,15 @@ Wave 1 基础层已落地（manifest / chunker / token / cache / sanitize / inpu
 
 ## 商标
 
-"nowdocs" 及 nowdocs logo 为 GWMM LLC 的商标。MIT/Apache-2.0 授予的是代码使用权，
-**不授予商标权**。你不可用 "nowdocs" 名称或 logo 来命名、推广或标识衍生产品。
-描述来源时合理使用（"基于 nowdocs"）不受限制。
+"nowdocs"™ 名称及 logo 为 GWMM LLC 的商标（common-law，未注册）。MIT/Apache-2.0
+授予代码使用权，**不授予商标权**；分发未修改的官方版本可使用原名。完整政策见
+[TRADEMARK.md](docs/TRADEMARK.md)（English）。
 
 ## 隐私与遥测
 
-**nowdocs 不收集任何遥测数据，不向任何分析服务 phone-home。** 代码中无
-telemetry/analytics/tracking。
-
-网络访问仅限以下用户主动触发的场景：
-
-- `nowdocs ingest`：**不联网**。仅读取本地目录（用户自行 clone 官方 repo，连接
-  的是 GitHub 等源站，属用户行为，与 nowdocs 无关）。
-- `nowdocs install` / `update`：从 registry 下载 docset，仅限白名单域
-  `github.com/nowdocs-registry/*` 与 `registry.nowdocs.rs/*`。
-- 首次 embed 时从 HuggingFace 下载 embedder 模型（`hf-hub`），之后本地缓存。
-
-无任何使用数据、分析或追踪离开你的机器。
+nowdocs 本地运行，**query、embedding、文档内容永不出网**，无遥测、无分析、无
+追踪。联网仅限用户主动触发的 `install` / `update`（registry 白名单）与首次
+embedder 模型下载（HuggingFace）。完整政策见 [PRIVACY.md](docs/PRIVACY.md)。
 
 ## 安全漏洞披露
 
@@ -88,13 +79,21 @@ telemetry/analytics/tracking。
 报告；或邮件 `legal@gwmmai.com`（标题加 `[nowdocs security]`）。详见
 [SECURITY.md](.github/SECURITY.md)。响应窗口：3 个工作日内确认，高危 30 天内修复。
 
-## 侵权下架（Takedown）
+## 侵权下架（DMCA Takedown）
 
-公共 registry 为**策展制**（curated），非开放提交，但我们仍提供侵权下架流程。
-若认为 registry 上某 docset 侵犯你的版权，请邮件 `legal@gwmmai.com`，附：
+公共 registry 为**策展制**（curated），上架前审核许可证。侵权举报走 **GitHub
+内置 DMCA 流程**（[github.com/contact/dmca](https://github.com/contact/dmca)），
+备用邮箱 `legal@gwmmai.com`（标题 `[nowdocs DMCA]`）。通知要件与响应流程见
+[DMCA.md](docs/DMCA.md)（English）。
 
-1. 被侵权作品的标识与权属证明；
-2. 被指控的 docset 名称及位置；
-3. 善意声明（你有权主张、且确信对方未授权）。
+## 法务与合规
 
-我们将在合理期限内（高危版权争议数日内）先行下架，待反通知后再行处理。
+| 文件 | 内容 |
+|---|---|
+| [DMCA.md](docs/DMCA.md) | DMCA takedown 流程 + registry 上架许可证审核（English） |
+| [PRIVACY.md](docs/PRIVACY.md) | 隐私政策：本地运行，软件不收集数据 |
+| [TRADEMARK.md](docs/TRADEMARK.md) | 商标政策（English） |
+| [AUP.md](docs/AUP.md) | Acceptable Use Policy：registry 准入与软件使用边界 |
+| [SECURITY.md](.github/SECURITY.md) | 安全漏洞披露流程 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献流程：DCO + 质量门禁 + 策展审核 |
+| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | 行为准则（Contributor Covenant 2.1） |

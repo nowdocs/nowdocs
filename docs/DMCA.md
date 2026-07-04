@@ -1,67 +1,107 @@
 # DMCA Takedown Policy
 
-> Copyright (c) 2026 GWMM LLC.
-> 适用管辖区：Wyoming, USA（US 联邦法 DMCA 17 U.S.C. §512）
+> Copyright (c) 2026 GWMM LLC. Last updated: 2026-07-04
+> Jurisdiction: Wyoming, USA (Digital Millennium Copyright Act, 17 U.S.C. § 512)
 
-## 政策适用范围
+## Scope
 
-本政策适用于 nowdocs 公共 registry 托管的 docset，当前位于：
+This policy applies to docsets hosted on the public nowdocs registry:
 
-- `github.com/nowdocs-registry/*`（GitHub 托管）
-- 未来：`registry.nowdocs.rs/*`（自建镜像，届时另行通告）
+- `github.com/nowdocs-registry/*` (hosted on GitHub) — current
+- `registry.nowdocs.dev/*` (self-hosted mirror) — domain reserved, **not yet
+  active**; a separate notice will be published when it launches
 
-nowdocs 是聚合第三方开发文档的本地 MCP server。我们尊重第三方版权，对
-registry 实行**策展制**（curated）——上架前审核许可证，收到通知后响应下架。
+nowdocs is a local MCP server that aggregates third-party developer
+documentation. We respect third-party copyright. The registry is **curated**:
+licenses are reviewed before publication, and takedown notices are acted on
+after publication.
 
-## 举报渠道（GitHub 内置）
+## How to Report Infringement
 
-registry repo 托管于 GitHub，侵权举报走 **GitHub 内置 DMCA takedown 流程**：
+Registry repositories are hosted on GitHub, so takedown requests go through
+**GitHub's built-in DMCA process**:
 
-- **主渠道**：[GitHub DMCA Takedown](https://github.com/contact/dmca)
-  - GitHub 收到合规通知后直接处理其托管内容，nowdocs 维护者配合执行下架。
-- **备用**：`legal@gwmmai.com`（标题 `[nowdocs DMCA]`）
-  - 收到后我们转交 GitHub 流程；不能替代 GitHub 官方渠道。
+- **Primary channel**: [GitHub DMCA Takedown](https://github.com/contact/dmca)
+  — GitHub processes compliant notices for content it hosts; nowdocs
+  maintainers cooperate with removal.
+- **Secondary**: `legal@gwmmai.com` (subject line `[nowdocs DMCA]`) — we
+  forward it into the GitHub process. This channel does not replace GitHub's
+  official channel.
 
-## 有效的 DMCA 通知须包含（17 U.S.C. §512(c)(3)）
+## Elements of a Valid Notice (17 U.S.C. § 512(c)(3))
 
-1. 被侵权作品的权属证明（如原作品 URL、版权登记号）。
-2. 被指控侵权的 docset 名称及其在 registry 中的位置（repo URL）。
-3. 善意声明："我善意确信该使用方式未获版权所有人或其代理人授权。"
-4. 伪证处罚声明："我确信通知中信息准确，且我是版权所有人或授权代表，伪证愿受处罚。"
-5. 物理或电子签名。
+A complete notice must include all of the following:
 
-## 响应流程
+1. Identification of the copyrighted work claimed to have been infringed
+   (e.g., URL of the original work or copyright registration number).
+2. Identification of the allegedly infringing material: the docset name and
+   its location in the registry (repository URL).
+3. Your contact information: name, mailing address, telephone number, and
+   email address.
+4. A statement that you have a good-faith belief that use of the material in
+   the manner complained of is not authorized by the copyright owner, its
+   agent, or the law.
+5. A statement, under penalty of perjury, that the information in the notice
+   is accurate and that you are the copyright owner or authorized to act on
+   the owner's behalf.
+6. Your physical or electronic signature.
 
-1. **下架**：GitHub 下达 takedown 判定 → 涉事 docset 立即从 registry 下架
-   （不等待 GWMM LLC 复核，遵循 GitHub 判定）。
-2. **反通知**（counter-notification，§512(g)(3)）：贡献者可经 GitHub 提交反通知，
-   须包含反通知法定要件。
-3. **恢复**：反通知后 10-14 个工作日内决定是否恢复，除非原举报方声明已提起诉讼。
+## Response Process
 
-## 事前防线：registry 上架许可证审核 checklist
+1. **Removal**: when GitHub issues a takedown determination, the affected
+   docset is removed from the registry immediately (we follow GitHub's
+   determination without a separate GWMM LLC review).
+2. **Counter-notification** (§ 512(g)(3)): the contributor may submit a
+   counter-notification through GitHub, containing the statutory elements.
+3. **Restoration**: content is restored within 10–14 business days after a
+   valid counter-notification, unless the original complainant notifies us
+   that it has filed a court action seeking to restrain the activity.
 
-策展制下，每个 docset 上架前由 GWMM LLC 策展人审核：
+Note: § 512(f) provides liability for knowingly and materially
+misrepresenting that material is infringing, or that it was removed by
+mistake.
 
-**✅ 可入许可证**：
+## Preventive Review: Registry Admission Checklist
+
+Under the curated model, every docset is reviewed by a GWMM LLC curator
+before publication.
+
+**✅ Accepted licenses**:
 MIT / Apache-2.0 / CC-BY-4.0 / CC0 / BSD-2-Clause / BSD-3-Clause / ISC
 
-**❌ 禁入**：
-- 专有文档（如 Clerk、Tailwind 等非开源许可文档）
-- 服务条款（ToS）禁止再分发或禁止爬取的网站文档
-- 未授权爬取内容
-- 许可证不明或无法核实
+**❌ Rejected**:
 
-**审核记录**：docset 的 `manifest.json` 的 `legal` 块必填：
+- Proprietary documentation (e.g., Clerk, Tailwind — documentation not
+  published under an open license)
+- Documentation from sites whose Terms of Service prohibit scraping or
+  redistribution
+- Content scraped without authorization
+- ShareAlike-family licenses (CC-BY-SA, GFDL): **not accepted for now** —
+  share-alike obligations propagate to derived docsets; this position may be
+  re-evaluated in the future
+- License unclear or unverifiable
 
-- `license`：SPDX 标识符
-- `copyright_holder`：版权方
-- `attribution`：署名文本（CC-BY-4.0 必填）
+**Review record**: the `legal` block in each docset's `manifest.json` is
+mandatory:
 
-## 重复侵权
+- `license`: SPDX identifier
+- `copyright_holder`: copyright owner
+- `attribution`: attribution text (mandatory for CC-BY-4.0)
 
-策展制下，三次提交侵权 docset 的贡献者将被禁止再向 registry 提交。
+## Repeat Infringers
 
-## 法律联络
+Contributors who submit infringing docsets three times are permanently barred
+from further registry submissions.
 
-GWMM LLC（Wyoming, USA）
-邮箱：`legal@gwmmai.com`
+## Self-Hosted Registry (Future)
+
+The current registry relies on GitHub as the hosting service provider. If
+GWMM LLC self-hosts the registry at `registry.nowdocs.dev` in the future,
+GWMM LLC will register a DMCA designated agent with the U.S. Copyright Office
+before launch, and this policy will be updated with the agent's contact
+information.
+
+## Legal Contact
+
+GWMM LLC (Wyoming, USA)
+Email: `legal@gwmmai.com`

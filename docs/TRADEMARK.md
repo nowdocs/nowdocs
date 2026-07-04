@@ -1,45 +1,54 @@
 # Trademark Policy
 
-> Copyright (c) 2026 GWMM LLC.
+> Copyright (c) 2026 GWMM LLC. Last updated: 2026-07-04
 
-## 商标权属
+## Ownership
 
-"nowdocs" 名称及 nowdocs logo 为 **GWMM LLC**（Wyoming, USA）的商标。
+The "nowdocs" name and the nowdocs logo are trademarks of **GWMM LLC**
+(Wyoming, USA).
 
-## 商标状态
+## Status
 
-"nowdocs" **未在美国专利商标局（USPTO）注册**，依 common-law 商标权保护
-（Lanham Act §43(a)）。
+"nowdocs" is **not registered** with the United States Patent and Trademark
+Office (USPTO). It is protected as a common-law trademark under Lanham Act
+§ 43(a). We use the **™** symbol, not ®. Common-law trademark rights arise
+from actual use and are limited to the geographic scope of that use.
 
-我们使用 **™** 标记，不使用 ®。common-law 商标权基于实际使用产生，保护范围
-限于实际使用地域。
+## Code License ≠ Trademark License
 
-## 代码许可 ≠ 商标许可
+nowdocs code is released under `MIT OR Apache-2.0`. Those licenses grant
+rights to **the code**; they do **not** grant any trademark rights.
 
-nowdocs 代码以 `MIT OR Apache-2.0` 双许可发布。该许可授予**代码使用权**，
-**不授予商标权**。
+## Prohibited Without Written Permission
 
-## 禁止
+Without prior written permission from GWMM LLC, you may not:
 
-未经 GWMM LLC 书面许可，不得：
+- Use "nowdocs" to name, promote, or identify a derived product or service
+- Use the nowdocs logo as the identifier of a project, product, or service
+- Imply official affiliation with, sponsorship by, or endorsement from
+  GWMM LLC in any way
 
-- 用 "nowdocs" 命名、推广或标识衍生产品
-- 用 nowdocs logo 作为项目、产品或服务的标识
-- 以任何方式暗示与 GWMM LLC 有官方关联、赞助或背书
+## Permitted (No Permission Needed)
 
-## 合理使用（允许）
+The following descriptive, factual uses require no permission:
 
-以下描述性、事实性使用无需许可：
+- Nominative references: "based on nowdocs", "compatible with nowdocs", and
+  factual references to this upstream project
+- **Unmodified redistribution**: distributing official, unmodified nowdocs
+  binaries or source code through package managers (e.g., Homebrew, AUR,
+  cargo-binstall) using "nowdocs" as the package name. Trivial patches
+  strictly required by packaging policy do not count as modification,
+  provided program behavior is unchanged. Modified builds must be
+  distributed under a different name, though describing them as a
+  "fork of nowdocs" is fine.
 
-- "基于 nowdocs"（描述衍生自本项目的代码）
-- "兼容 nowdocs"（描述互操作关系）
-- 指代本上游项目时的事实性引用
+## Future Registration
 
-## 未来注册
+GWMM LLC reserves the right to apply to register "nowdocs" with the USPTO.
+If registered, this policy and the marking (™ → ®) will be updated
+accordingly.
 
-GWMM LLC 保留未来向 USPTO 申请注册 "nowdocs" 商标的权利。注册后本政策与标记
-将相应更新（™ → ®）。
+## Reporting Misuse
 
-## 侵权报告
-
-发现 "nowdocs" 商标侵权，请邮件 `legal@gwmmai.com`（标题 `[nowdocs trademark]`）。
+If you believe the "nowdocs" trademark is being misused, email
+`legal@gwmmai.com` (subject line `[nowdocs trademark]`).
