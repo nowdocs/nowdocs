@@ -1,6 +1,7 @@
 [config]
 model = "moonshot/kimi2.7"
 max_model_tokens = 100000
+temperature = 1
 
 [litellm]
 timeout = 120
