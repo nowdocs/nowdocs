@@ -208,6 +208,7 @@ impl Store {
                 .query()
                 .full_text_search(fts_query)
                 .nearest_to(&*qv_f16)?
+                .limit(top_k)
                 .rerank(Arc::new(lancedb::rerankers::rrf::RRFReranker::new(rrf_k)))
                 .execute_hybrid(QueryExecutionOptions::default())
                 .await
@@ -241,6 +242,7 @@ impl Store {
             let stream = table
                 .query()
                 .full_text_search(fts_query)
+                .limit(top_k)
                 .execute()
                 .await
                 .context("FTS search execution failed")?;
@@ -273,6 +275,7 @@ impl Store {
             let stream = table
                 .query()
                 .nearest_to(&*qv_f16)?
+                .limit(top_k)
                 .execute()
                 .await
                 .context("vector search execution failed")?;
