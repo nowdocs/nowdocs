@@ -1,6 +1,5 @@
 [config]
-model = "custom_openai/gpt-5.5"
-fallback_models = ["moonshot/kimi2.7"]
+model = "custom_openai/kimi2.7"
 
 [litellm]
 timeout = 120

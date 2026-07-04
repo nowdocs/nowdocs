@@ -22,11 +22,11 @@ jobs:
         id: pragent
         uses: Codium-ai/pr-agent@main
         env:
-          MOONSHOT_API_KEY: ${{ secrets.KIMI_API_KEY }}
-          MOONSHOT_API_BASE: ${{ secrets.KIMI_API_BASE || 'https://api.moonshot.cn/v1' }}
+          OPENAI_KEY: ${{ secrets.KIMI_API_KEY }}
+          OPENAI__API_BASE: ${{ secrets.KIMI_API_BASE || 'https://api.moonshot.cn/v1' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CONFIG__USE_REPO_SETTINGS_FILE: "true"
-          CONFIG__MODEL: "moonshot/kimi2.7"
+          CONFIG__MODEL: "custom_openai/kimi2.7"
           LITELLM_REQUEST_TIMEOUT: "120"
           CONFIG__LITELLM__TIMEOUT: "120"
           CONFIG__LITELLM__NUM_RETRIES: "5"
