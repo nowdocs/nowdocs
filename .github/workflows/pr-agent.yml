@@ -22,6 +22,8 @@ jobs:
         id: pragent
         uses: Codium-ai/pr-agent@bd09b6cf89c6d6f3d16b159fa7603fa0e7768cf2 # main
         env:
+          OPENAI_KEY: ${{ secrets.KIMI_API_KEY }}
+          OPENAI__API_BASE: "https://api.kimi.com/coding/v1"
           MOONSHOT_API_KEY: ${{ secrets.KIMI_API_KEY }}
           MOONSHOT_API_BASE: "https://api.kimi.com/coding/v1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
