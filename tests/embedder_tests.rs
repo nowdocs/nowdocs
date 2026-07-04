@@ -1,9 +1,36 @@
 use nowdocs::embedder::{Embedder, EmbedderSpec};
+use std::sync::Mutex;
 
 // S0 provenance constants (pinned for reproducibility)
 const S0_MODEL_ID: &str = "jinaai/jina-embeddings-v2-small-en";
 const S0_REVISION: &str = "44e7d1d6caec8c883c2d4b207588504d519788d0";
 const S0_SHA256: &str = "c9a9a7ec012d01efd780474fbb65e25917f3a2aebdff84b5f87daa00f7e90b27";
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct EnvGuard {
+    key: &'static str,
+    old: Option<String>,
+    _g: std::sync::MutexGuard<'static, ()>,
+}
+
+impl EnvGuard {
+    fn set(key: &'static str, val: &str) -> Self {
+        let g = ENV_LOCK.lock().unwrap();
+        let old = std::env::var(key).ok();
+        std::env::set_var(key, val);
+        Self { key, old, _g: g }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match &self.old {
+            Some(v) => std::env::set_var(self.key, v),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
@@ -20,6 +47,7 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
 
 #[test]
 fn test_embed_dim_is_512() {
+    let _g = ENV_LOCK.lock().unwrap();
     let spec = EmbedderSpec {
         model_id: S0_MODEL_ID.to_string(),
         model_revision: S0_REVISION.to_string(),
@@ -32,6 +60,7 @@ fn test_embed_dim_is_512() {
 
 #[test]
 fn test_embed_semantic_self_consistency() {
+    let _g = ENV_LOCK.lock().unwrap();
     let spec = EmbedderSpec {
         model_id: S0_MODEL_ID.to_string(),
         model_revision: S0_REVISION.to_string(),
@@ -48,6 +77,7 @@ fn test_embed_semantic_self_consistency() {
 #[test]
 #[ignore] // requires tests/fixtures/jina_ref.json from gen_reference.py
 fn test_embed_matches_reference_above_0_99() {
+    let _g = ENV_LOCK.lock().unwrap();
     let spec = EmbedderSpec {
         model_id: S0_MODEL_ID.to_string(),
         model_revision: S0_REVISION.to_string(),
@@ -76,6 +106,9 @@ fn test_embed_matches_reference_above_0_99() {
 
 #[test]
 fn test_load_for_rejects_tampered_sha() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+
     let spec = EmbedderSpec {
         model_id: S0_MODEL_ID.to_string(),
         model_revision: S0_REVISION.to_string(),
@@ -98,6 +131,7 @@ fn test_load_for_rejects_tampered_sha() {
 
 #[test]
 fn test_load_delegates_to_load_for() {
+    let _g = ENV_LOCK.lock().unwrap();
     // load() should work with DEFAULT_SPEC (S0 provenance constants)
     let e = Embedder::load().expect("load() should succeed with DEFAULT_SPEC");
     let v = e.embed("test").expect("embed");
