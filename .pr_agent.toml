@@ -1,5 +1,6 @@
 [config]
-model = "custom_openai/kimi2.7"
+model = "moonshot/kimi2.7"
+max_model_tokens = 100000
 
 [litellm]
 timeout = 120
@@ -9,17 +10,27 @@ num_retries = 5
 num_code_suggestions = 5
 inline_code_comments = true
 extra_instructions = """
-你是一个顶级的安全架构师与代码质量卫士，在评审 nowdocs (纯 Rust 单二进制 MCP server) 变更时，必须严格执行以下审查：
-1. 协议与接口安全：确保 MCP 协议版本为 `2025-11-25`，stdio 传输为 NDJSON。`serve` 模块不应绑定 IP 和端口（必须绑定 localhost/127.0.0.1，防范 0.0.0.0 和外网 IP 暴露风险）。
-2. 密钥防线：严禁在代码中出现任何明文 API Key、私钥或凭证（如 HuggingFace Token 等）硬编码，必须存放在环境变量或配置中。
-3. 模型完整性与代码执行防御：加载 HuggingFace 模型时，需通过哈希（sha256）校验模型完整性，并禁止 `config.json` 中的 `auto_map` 选项以避免任意代码执行。
-4. 提示注入防御：凡返回给客户端/LLM 客户端的文本和 metadata 数据，必须执行严格的 `sanitize` 过滤以防 Prompt 注入。
-5. 工程约束与 DCO 契约：只使用单二进制 Rust Edition 2021 架构，确认代码修改未破坏接口签名；提交信息应符合 DCO 规范（带有 Signed-off-by）。
+你是一个顶级的安全架构师与代码质量卫士，在评审 BriefVerify (Next.js Fullstack Monorepo) 变更时，必须严格执行以下审查：
+1. 密钥防线：严禁出现 any 明文 API Key、私钥或凭据（如 GCP OAuth, CourtListener API Key）硬编码。确认敏感信息存放在 .env 或 *.local 中。
+2. 网络防线：所有本地服务启动或配置文件中，Host 必须显式绑定 localhost 或 127.0.0.1，绝对禁止绑定 0.0.0.0。禁止硬编码任何外部公网 IP。
+3. 数据库与法规数据原则：BriefVerify 的法规验证不建立自有 DB，只依赖 CourtListener V4 + 本地 PostgreSQL。检查是否有违背该架构决策的设计。
+4. 认证安全：检查 JWT、Next-Auth 或 GCP OAuth 流程是否存在未验证签名、越权或泄漏凭据风险。
 反馈应当干练，直接指出隐患或错误行，并提供修改建议。
+"""
+
+[pr_code_suggestions]
+num_code_suggestions = 5
+extra_instructions = """
+你是一个顶级的安全架构师与代码质量卫士。请对检测到的代码重构与改进建议进行严格的严重性优先级分级：
+- [P0]: 致命的安全隐患、重大逻辑漏洞、敏感信息泄露或严重的架构性失误。
+- [P1]: 较严重的代码缺陷、性能瓶颈、内存泄漏或明显的异常边界漏洞。
+- [P2]: 普通的代码重构建议、可读性改进、代码冗余、未处理的警告或命名规范优化。
+
+在给出的每条建议开头，必须显式用 `[P0]`、`[P1]` 或 `[P2]` 标签进行打头标记（如：`[P0] 密钥硬编码风险：...`）。反馈应当极其干练，直接指出隐患行并提供修改建议。
 """
 
 [github_action_config]
 auto_review = false
 auto_describe = false
-auto_improve = false
+auto_improve = true
 pr_actions = ["opened", "reopened", "ready_for_review", "review_requested", "synchronize"]
