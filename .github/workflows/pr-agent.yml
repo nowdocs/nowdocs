@@ -16,22 +16,21 @@ jobs:
     if: ${{ github.event.sender.type != 'Bot' && github.event.issue.pull_request }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
 
       - name: PR Agent Action Step
         id: pragent
-        uses: Codium-ai/pr-agent@main
+        uses: Codium-ai/pr-agent@bd09b6cf89c6d6f3d16b159fa7603fa0e7768cf2 # main
         env:
-          OPENAI_KEY: ${{ secrets.PUMPKIN_API_KEY }}
-          OPENAI__API_BASE: ${{ secrets.PUMPKIN_API_BASE || 'https://api.openai.com/v1' }}
+          OPENAI_KEY: ${{ secrets.KIMI_API_KEY }}
+          OPENAI__API_BASE: "https://api.kimi.com/coding/v1"
           MOONSHOT_API_KEY: ${{ secrets.KIMI_API_KEY }}
-          MOONSHOT_API_BASE: ${{ secrets.KIMI_API_BASE || 'https://api.moonshot.cn/v1' }}
+          MOONSHOT_API_BASE: "https://api.kimi.com/coding/v1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CONFIG__USE_REPO_SETTINGS_FILE: "true"
-          CONFIG__MODEL: "custom_openai/gpt-5.5"
-          CONFIG__FALLBACK_MODELS: "['moonshot/kimi2.7']"
-          CONFIG__FALLBACK_MODEL: "moonshot/kimi2.7"
+          CONFIG__MODEL: "moonshot/kimi2.7"
           LITELLM_REQUEST_TIMEOUT: "120"
           CONFIG__LITELLM__TIMEOUT: "120"
           CONFIG__LITELLM__NUM_RETRIES: "5"
-          CONFIG__CUSTOM_MODEL_MAX_TOKENS: 32000
+          CONFIG__CUSTOM_MODEL_MAX_TOKENS: 100000
+          CONFIG__TEMPERATURE: 1

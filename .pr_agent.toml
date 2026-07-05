@@ -1,6 +1,7 @@
 [config]
-model = "custom_openai/gpt-5.5"
-fallback_models = ["moonshot/kimi2.7"]
+model = "moonshot/kimi2.7"
+max_model_tokens = 100000
+temperature = 1
 
 [litellm]
 timeout = 120
@@ -10,17 +11,29 @@ num_retries = 5
 num_code_suggestions = 5
 inline_code_comments = true
 extra_instructions = """
-你是一个顶级的安全架构师与代码质量卫士，在评审 nowdocs (纯 Rust 单二进制 MCP server) 变更时，必须严格执行以下审查：
-1. 协议与接口安全：确保 MCP 协议版本为 `2025-11-25`，stdio 传输为 NDJSON。`serve` 模块不应绑定 IP 和端口（必须绑定 localhost/127.0.0.1，防范 0.0.0.0 和外网 IP 暴露风险）。
-2. 密钥防线：严禁在代码中出现任何明文 API Key、私钥或凭证（如 HuggingFace Token 等）硬编码，必须存放在环境变量或配置中。
-3. 模型完整性与代码执行防御：加载 HuggingFace 模型时，需通过哈希（sha256）校验模型完整性，并禁止 `config.json` 中的 `auto_map` 选项以避免任意代码执行。
-4. 提示注入防御：凡返回给客户端/LLM 客户端的文本和 metadata 数据，必须执行严格的 `sanitize` 过滤以防 Prompt 注入。
-5. 工程约束与 DCO 契约：只使用单二进制 Rust Edition 2021 架构，确认代码修改未破坏接口签名；提交信息应符合 DCO 规范（带有 Signed-off-by）。
+你是一个顶级的安全架构师与代码质量卫士，在评审 nowdocs（纯 Rust 单二进制本地 MCP server）变更时，必须严格执行以下审查：
+1. 密钥与凭据防线：严禁硬编码任何 API Key、HuggingFace token、私钥或 registry 凭据。所有凭据必须从用户本地环境或交互式输入获取。
+2. 网络防线：nowdocs 是本地离线工具，`serve` 命令不得出现 `--host`/`--port` 或任何 TCP/HTTP 监听逻辑。install/update 的下载 URL 必须严格限定在 `github.com/nowdocs-registry/*` 与 `registry.nowdocs.rs/*` 白名单，禁止访问外部未知域。
+3. 模型完整性：嵌入器下载后必须校验 `model_sha256` 与 pin 的 `model_revision`（HF commit SHA）；不符即删。`config.json` 中的 `auto_map` 必须移除，防止任意代码执行。
+4. 数据安全：share 只发送文本与 metadata，严禁上传向量。返回给 LLM 的内容必须经 `sanitize` 处理，防御 prompt injection、HTML 注释、零宽字符与 display:none 等攻击面。
+5. 法律闸门：进入社区 registry 的 doc crate 必须核实文档站许可（仅 MIT/Apache-2.0/CC-BY-4.0），Clerk/Tailwind 等专有/禁爬文档不得入 registry。
+6. Rust 工程质量：生产路径禁止裸 `unwrap`/`expect`；新增 `unsafe` 必须有充分理由并显式标注。遵循 `MIT OR Apache-2.0` 许可与 DCO `Signed-off-by` 提交规范。
 反馈应当干练，直接指出隐患或错误行，并提供修改建议。
+"""
+
+[pr_code_suggestions]
+num_code_suggestions = 5
+extra_instructions = """
+你是一个顶级的安全架构师与代码质量卫士。请对检测到的代码重构与改进建议进行严格的严重性优先级分级：
+- [P0]: 致命的安全隐患、重大逻辑漏洞、敏感信息泄露或严重的架构性失误。
+- [P1]: 较严重的代码缺陷、性能瓶颈、内存泄漏或明显的异常边界漏洞。
+- [P2]: 普通的代码重构建议、可读性改进、代码冗余、未处理的警告或命名规范优化。
+
+在给出的每条建议开头，必须显式用 `[P0]`、`[P1]` 或 `[P2]` 标签进行打头标记（如：`[P0] 密钥硬编码风险：...`）。反馈应当极其干练，直接指出隐患行并提供修改建议。
 """
 
 [github_action_config]
 auto_review = false
 auto_describe = false
-auto_improve = false
+auto_improve = true
 pr_actions = ["opened", "reopened", "ready_for_review", "review_requested", "synchronize"]
