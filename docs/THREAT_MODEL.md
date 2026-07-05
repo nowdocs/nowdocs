@@ -68,7 +68,7 @@ bash scripts/ci-check-manifest.sh path/to/manifest.json
 
 **Allowed domains**:
 - `github.com/nowdocs-registry/*` (with `/nowdocs-registry/` path prefix — prevents lookalike domains like `github.com/nowdocs-registry.evil.com`)
-- `registry.nowdocs.rs/*`
+- `registry.nowdocs.dev/*`
 
 **Why (A2)**: Prevents SSRF attacks and malicious content sources. If a contributor could point `source_url` to an arbitrary URL, they could:
 - Redirect CI downloads to attacker-controlled servers

@@ -39,16 +39,25 @@ if [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BRANCH" != "master" ]; then
     fi
     if [ -n "$BASE_BRANCH" ]; then
         git fetch origin $(echo $BASE_BRANCH | cut -d'/' -f2) --quiet || true
-        CHANGES=$(git diff --numstat "$BASE_BRANCH...HEAD" | grep -v '\.md$' | awk '{add+=$1; del+=$2} END {print add+del}')
-        if [ -z "$CHANGES" ]; then
-            CHANGES=0
-        fi
-        if [ "$CHANGES" -lt 15 ]; then
-            echo "❌ ERROR: Total code lines changed compared to $BASE_BRANCH is $CHANGES (less than 15 lines)."
-            echo "Pushing changes under 15 lines is prohibited on feature branches."
+        # Separate code (non-.md) from documentation (.md) changes. The 15-line
+        # floor targets trivial CODE pushes; pure documentation commits
+        # (legal/README/spec) are legitimate and must NOT be blocked. Guard
+        # every grep with `|| true` so set -e + pipefail don't abort on the
+        # no-match case (a pure-.md push has zero non-.md lines, which made
+        # grep return 1 and killed the script before the floor ran).
+        NUMSTAT=$(git diff --numstat "$BASE_BRANCH...HEAD")
+        CODE_CHANGES=$(echo "$NUMSTAT" | grep -v '\.md$' | awk '{add+=$1; del+=$2} END {print add+del+0}' || true)
+        DOC_FILES=$(echo "$NUMSTAT" | grep -c '\.md$' || true)
+        if [ "$CODE_CHANGES" -eq 0 ]; then
+            echo "ℹ️  Documentation-only push ($DOC_FILES .md file(s), 0 code lines) — skipping 15-line code floor."
+        elif [ "$CODE_CHANGES" -lt 15 ]; then
+            echo "❌ ERROR: Total code lines changed compared to $BASE_BRANCH is $CODE_CHANGES (less than 15 lines)."
+            echo "Pushing code changes under 15 lines is prohibited on feature branches."
+            echo "Documentation-only pushes (.md) are exempt; if this is docs-only, remove non-.md changes."
             exit 1
+        else
+            echo "✅ Feature branch code changes: $CODE_CHANGES lines (>= 15 lines)."
         fi
-        echo "✅ Feature branch code changes: $CHANGES lines (>= 15 lines)."
     fi
 fi
 

@@ -174,7 +174,7 @@ jobs:
           p.write_text(s)
           "
           git config user.name "nowdocs-bump-bot"
-          git config user.email "bump@nowdocs.rs"
+          git config user.email "bump@nowdocs.dev"
           git checkout -b "bump-v${VERSION}"
           git add Formula/nowdocs.rb
           git commit -m "build(tap): bump nowdocs to v${VERSION}"

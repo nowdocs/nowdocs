@@ -14,7 +14,7 @@
 1. **manifest schema 校验**：每个提交的 docset manifest 过 `manifest::validate`（schema 版本=1）。
 2. **模型版本匹配**：`model_id` + `model_version` + `model_sha256` 必须等于锁定值（jinaai/jina-embeddings-v2-small-en / 512 / candle / f16）。
 3. **法律白名单**：`legal.license ∈ {MIT, Apache-2.0, CC-BY-4.0}`；CC-BY-4.0 必须 `attribution` 非空。
-4. **下载 URL 域校验**：manifest/source 内所有 URL 必须指向 `github.com/nowdocs-registry/*` 或 `registry.nowdocs.rs/*`。
+4. **下载 URL 域校验**：manifest/source 内所有 URL 必须指向 `github.com/nowdocs-registry/*` 或 `registry.nowdocs.dev/*`。
 5. **CI 从文本重建（D10）**：拒绝 contributor 提交的向量文件；CI 从 `chunks.jsonl` 文本本地重新 embed+build 表，确保向量可信。
 6. **golden eval 门禁**：跑 3b 的 `evaluate`，recall@5/MRR 必须达阈值（embedder/chunking 改动必过）。
 7. **DCO 检查**：每个 commit 必须有 `Signed-off-by:`（D8，DCO 非 CLA）。

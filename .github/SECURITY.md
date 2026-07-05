@@ -34,7 +34,7 @@ If GitHub Security Advisories are unavailable to you, email
 
 nowdocs is a local single-binary MCP server. Its network surface is limited
 (see the Privacy section in the README): registry docset downloads
-(`github.com/nowdocs-registry/*`, `registry.nowdocs.rs/*`) and the one-time
+(`github.com/nowdocs-registry/*`, `registry.nowdocs.dev/*`) and the one-time
 embedder model download from HuggingFace. Vulnerabilities in these paths,
 in the MCP stdio protocol handling, in path-traversal / docset-name
 validation, or in the cache layout are in scope.

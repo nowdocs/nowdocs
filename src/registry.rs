@@ -35,7 +35,7 @@ fn is_allowed_registry_url(url: &str) -> bool {
             let path = after_scheme.strip_prefix(host).unwrap_or(after_scheme);
             path.starts_with("/nowdocs-registry/") || path == "/nowdocs-registry"
         }
-        "registry.nowdocs.rs" => true,
+        "registry.nowdocs.dev" => true,
         _ => false,
     }
 }
@@ -43,7 +43,7 @@ fn is_allowed_registry_url(url: &str) -> bool {
 fn download_to_temp(url: &str) -> Result<PathBuf> {
     if !is_allowed_registry_url(url) {
         anyhow::bail!(
-            "registry URL not in allowed domains: {} (allowed: github.com/nowdocs-registry, registry.nowdocs.rs)",
+            "registry URL not in allowed domains: {} (allowed: github.com/nowdocs-registry, registry.nowdocs.dev)",
             url
         );
     }
