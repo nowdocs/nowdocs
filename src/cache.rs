@@ -21,6 +21,14 @@ const LAYOUT_VERSION_FILE: &str = ".layout_version";
 /// `<cache_dir>/nowdocs`. Returns the path even if the cache dir does not yet
 /// exist; callers use `ensure_layout` to materialize it.
 pub fn cache_root() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+        if !xdg.trim().is_empty() {
+            let path = PathBuf::from(xdg);
+            if path.is_absolute() {
+                return path.join(APP_DIR);
+            }
+        }
+    }
     dirs::cache_dir()
         .expect("no OS cache dir — set XDG_CACHE_HOME or HOME")
         .join(APP_DIR)

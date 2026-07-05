@@ -11,11 +11,13 @@ num_retries = 5
 num_code_suggestions = 5
 inline_code_comments = true
 extra_instructions = """
-你是一个顶级的安全架构师与代码质量卫士，在评审 BriefVerify (Next.js Fullstack Monorepo) 变更时，必须严格执行以下审查：
-1. 密钥防线：严禁出现 any 明文 API Key、私钥或凭据（如 GCP OAuth, CourtListener API Key）硬编码。确认敏感信息存放在 .env 或 *.local 中。
-2. 网络防线：所有本地服务启动或配置文件中，Host 必须显式绑定 localhost 或 127.0.0.1，绝对禁止绑定 0.0.0.0。禁止硬编码任何外部公网 IP。
-3. 数据库与法规数据原则：BriefVerify 的法规验证不建立自有 DB，只依赖 CourtListener V4 + 本地 PostgreSQL。检查是否有违背该架构决策的设计。
-4. 认证安全：检查 JWT、Next-Auth 或 GCP OAuth 流程是否存在未验证签名、越权或泄漏凭据风险。
+你是一个顶级的安全架构师与代码质量卫士，在评审 nowdocs（纯 Rust 单二进制本地 MCP server）变更时，必须严格执行以下审查：
+1. 密钥与凭据防线：严禁硬编码任何 API Key、HuggingFace token、私钥或 registry 凭据。所有凭据必须从用户本地环境或交互式输入获取。
+2. 网络防线：nowdocs 是本地离线工具，`serve` 命令不得出现 `--host`/`--port` 或任何 TCP/HTTP 监听逻辑。install/update 的下载 URL 必须严格限定在 `github.com/nowdocs-registry/*` 与 `registry.nowdocs.rs/*` 白名单，禁止访问外部未知域。
+3. 模型完整性：嵌入器下载后必须校验 `model_sha256` 与 pin 的 `model_revision`（HF commit SHA）；不符即删。`config.json` 中的 `auto_map` 必须移除，防止任意代码执行。
+4. 数据安全：share 只发送文本与 metadata，严禁上传向量。返回给 LLM 的内容必须经 `sanitize` 处理，防御 prompt injection、HTML 注释、零宽字符与 display:none 等攻击面。
+5. 法律闸门：进入社区 registry 的 doc crate 必须核实文档站许可（仅 MIT/Apache-2.0/CC-BY-4.0），Clerk/Tailwind 等专有/禁爬文档不得入 registry。
+6. Rust 工程质量：生产路径禁止裸 `unwrap`/`expect`；新增 `unsafe` 必须有充分理由并显式标注。遵循 `MIT OR Apache-2.0` 许可与 DCO `Signed-off-by` 提交规范。
 反馈应当干练，直接指出隐患或错误行，并提供修改建议。
 """
 
