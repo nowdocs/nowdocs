@@ -2,50 +2,142 @@
 
 > 纯 Rust 单二进制 MCP server，本地运行，给 LLM coding agent（Cursor / Claude Code / Aider）提供最新第三方开发文档，治 LLM 对快变库的幻觉。
 
-**状态**：🟢 Wave 1 完成（8 task / 48 tests 绿，在 `feat/1a-cargo-skeleton` 分支）→ S0 命门 spike 进行中。
+**状态**：v0.1.0 pre-release — 源码可用（`cargo install --git`）；预编译二进制与 Homebrew 待正式 release。
 
 ---
 
-## 这是什么
+## 为什么需要
 
 LLM 训练有截止日期，对快速变化的库（Next.js 15 / React 19 / Vue 3.5）会产生幻觉。nowdocs 在本地跑一个 MCP server，把官方文档做成本地可混合检索（hybrid search：向量语义 + BM25 关键词 + RRF）的 docset，LLM agent 通过 MCP 工具 `nowdocs_search` 查到**最新且精确**的 API——零 API 费用、完全离线、query 永不离开设备。
 
-核心定位（5 维度唯一命中）：MCP 协议 + 本地嵌入（candle + jina-v2-small）+ 本地混合检索（lancedb）+ 单一自包含二进制 + 社区 registry。
+核心定位：MCP 协议 + 本地嵌入（candle + jina-v2-small）+ 本地混合检索（lancedb）+ 单一自包含二进制 + 社区 registry。
 
-## 当前阶段
+## 安装
 
-| 产物 | 路径 | 说明 |
-|---|---|---|
-| 设计 spec | [`docs/superpowers/specs/2026-06-28-nowdocs-design-review.md`](docs/superpowers/specs/2026-06-28-nowdocs-design-review.md) | 定稿，逐环节决策 + ground-truth 核实 |
-| 实施 plan | [`docs/superpowers/plans/2026-06-28-nowdocs-impl.md`](docs/superpowers/plans/2026-06-28-nowdocs-impl.md) | 6 wave TDD task |
-| 派发手册 | [`docs/superpowers/plans/2026-06-28-nowdocs-dispatch.md`](docs/superpowers/plans/2026-06-28-nowdocs-dispatch.md) | 每 task 一份 agent prompt |
+### 当前可用（从源码构建）
+
+```bash
+cargo install --git https://github.com/nowdocs/nowdocs
+```
+
+需 Rust 工具链（stable）与 `protoc`（prost-build 依赖）。首次 `serve` 会从 HuggingFace 下载 embedder 模型（jina-v2-small-en，约 66 MB），之后本地缓存。
+
+### 待正式 release（预编译二进制）
+
+release 产物就绪后，免编译安装：
+
+```bash
+# cargo-binstall（推荐）
+cargo binstall nowdocs
+
+# Homebrew（macOS / Linux）
+brew tap nowdocs-registry/nowdocs
+brew install nowdocs
+```
+
+release 二进制覆盖 linux musl（x86_64 / aarch64）、macOS（arm64 / x86_64）、Windows（msvc）。不做代码签名，完整性靠 SHA-256 checksum + `cargo-binstall` 校验。
 
 ## 快速开始
 
-**给实现 agent**：先读 [`AGENTS.md`](AGENTS.md)，再按 `docs/superpowers/plans/2026-06-28-nowdocs-dispatch.md` 找到分配给你的 task。
+1. **导入本地文档**（Markdown 目录）：
+   ```bash
+   nowdocs ingest ./my-docs my-docset --license MIT --source-url https://github.com/org/repo
+   ```
+   或从 registry 安装（registry 早期，可用 docset 有限）：
+   ```bash
+   nowdocs install <docset>
+   ```
 
-**给人**：读 spec 评审稿了解全貌；看 plan §7 进度看板跟踪状态。
+2. **启动 MCP server**：
+   ```bash
+   nowdocs serve
+   ```
+   `serve` 通过 stdio 通信，不绑定端口/Host。
 
-## 仓库结构
+3. **配置 MCP client**：将 `nowdocs serve` 注册为 stdio MCP server。示例（多数 client 兼容的 `mcp.json` 格式）：
+   ```json
+   {
+     "mcpServers": {
+       "nowdocs": { "command": "nowdocs", "args": ["serve"] }
+     }
+   }
+   ```
+   配好后，LLM agent 可调用 `nowdocs_search`（语义检索）与 `nowdocs_list`（列出已装 docset）两个工具。
+
+## CLI 命令
+
+| 命令 | 说明 |
+|---|---|
+| `nowdocs serve` | 启动 MCP stdio server |
+| `nowdocs ingest <dir> <name>` | 导入本地 Markdown 目录为 docset |
+| `nowdocs install <docset>` | 从 registry 安装预构建 docset |
+| `nowdocs update <docset>` | 更新 docset 至最新 registry 版本 |
+| `nowdocs uninstall <docset>` | 卸载 docset |
+| `nowdocs list-installed` | 列出已安装 docset |
+| `nowdocs share <docset>` | 打包 docset 供 registry 贡献（文本 + manifest，不含向量） |
+
+`ingest` 参数：`--license`（MIT / Apache-2.0 / CC-BY-4.0，默认 MIT）、`--copyright-holder`、`--attribution`（CC-BY-4.0 必填）、`--source-url`、`--entry-url`。
+
+## 工作原理
 
 ```
-nowdocs/
-├── AGENTS.md                     # agent 必读：约束 + 工作流
-├── README.md                     # 本文件
-└── docs/superpowers/
-    ├── specs/                    # 设计文档
-    └── plans/                    # 实施计划 + 派发手册
+ingest → chunk（按 token 切分，保留 source_url / heading 等 metadata）
+       → embed（candle + jina-v2-small-en，512 维 f16）
+       → store（lancedb：FTS + 向量列）
+
+serve  ← MCP stdio
+       ← nowdocs_search(query → embed → hybrid search[FTS BM25 + 向量 + RRF] → top-k)
+       ← nowdocs_list(列出已装 docset)
 ```
 
-Wave 1 基础层已落地（manifest / chunker / token / cache / sanitize / input / mcp 共 8 module，48 tests 全绿）。S0 命门（candle + jina 验证）进行中，green 后开 Wave 2 引擎层。
+- **chunk**：按 token 边界切分，保留 metadata（source_url / line / heading）
+- **embed**：candle 纯 Rust 推理，jina-v2-small-en（512 维，Apache-2.0），结果缓存在 `~/.cache/huggingface/`
+- **retrieve**：lancedb 0.30 hybrid search（FTS Tantivy BM25 + 向量近邻 + RRFReranker 融合）
+- **share**：只发文本 + manifest，向量由 registry CI 重建（关闭向量投毒与模型漂移两个攻击面）
+
+## 局限性（v0.1.0）
+
+- **pre-release**：预编译二进制与 Homebrew 未发布，当前需从源码编译
+- **registry 早期**：策展制，初始可用 docset 有限
+- **embedding 模型固定**：jina-v2-small-en（512 维），暂不可配置
+- **embedding backend 固定**：candle（纯 Rust），无 ONNX / 远程 API 选项
+- **eval 覆盖有限**：仅 nextjs-corpus 验证（recall@5 = 0.8，MRR = 0.587）
+- **平台**：CI 构建 linux musl（x86_64 / aarch64）+ macOS（arm64 / x86_64）+ Windows，未在所有平台广泛实测
 
 ## 技术栈
 
 - **语言**：Rust（Edition 2021），lib + bin 双 target
 - **嵌入**：candle（纯 Rust）+ jina-embeddings-v2-small-en（512 维，Apache-2.0）
-- **检索**：lancedb（内置 hybrid + RRF，砍 tantivy）
-- **协议**：MCP 2025-11-25 over stdio（NDJSON）
-- **分发**：cargo-binstall + Homebrew，不签名
+- **检索**：lancedb 0.30（内置 hybrid + RRF）
+- **协议**：MCP over stdio（NDJSON）
+- **分发**：cargo-binstall + Homebrew，不签名（完整性靠 SHA-256 + cargo-binstall 校验）
+
+## 贡献
+
+贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)：DCO（非 CLA）+ L1-L4 质量门禁 + registry 策展审核。行为准则见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
+
+### 开发文档
+
+- [设计 spec](docs/superpowers/specs/2026-06-28-nowdocs-design-review.md) — 逐环节决策 + ground-truth 核实
+- [实施 plan](docs/superpowers/plans/2026-06-28-nowdocs-impl.md) — 6 wave TDD task
+- [派发手册](docs/superpowers/plans/2026-06-28-nowdocs-dispatch.md) — 每 task 一份 agent prompt
+
+## 仓库结构
+
+```
+nowdocs/
+├── src/                 # Rust 源码（lib + bin）
+│   ├── cli.rs           # 7 子命令
+│   ├── store.rs         # lancedb hybrid search
+│   ├── embedder.rs      # candle + jina 推理
+│   ├── registry.rs      # install / share / update / uninstall
+│   └── mcp.rs           # MCP stdio server
+├── tests/               # 集成测试
+├── docs/                # 法务政策 + 设计文档
+├── dist/homebrew/       # Homebrew formula + tap 设置
+├── scripts/             # CI / 门禁脚本
+└── .github/workflows/   # gates / release / weekly-audit
+```
 
 ## 许可证
 
