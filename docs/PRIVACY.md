@@ -45,9 +45,9 @@ IP 地址、User-Agent 等标准连接元数据，由其按各自隐私政策处
 
 | 数据 | 位置 |
 |---|---|
-| docset 数据 | `~/.local/share/nowdocs/`（或平台等价路径） |
-| embedder 模型缓存 | `~/.cache/huggingface/` |
-| 配置 | `~/.config/nowdocs/` |
+| docset 数据（lance 表 + manifest + license） | `~/.cache/nowdocs/db/`（或平台等价路径） |
+| embedder 模型缓存 | `~/.cache/nowdocs/models/` |
+| 配置 | 无（nowdocs 不写 config 目录；MCP 客户端配置在客户端侧 `mcp.json`） |
 
 ## GDPR / CCPA
 

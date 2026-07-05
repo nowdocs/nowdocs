@@ -11,8 +11,7 @@ nowdocs 公共 registry 实行**策展制**（curated），非开放提交。GWM
 
 ## 可入文档类型
 
-- **开源许可文档**：MIT / Apache-2.0 / CC-BY-4.0 / CC0 / BSD-2-Clause /
-  BSD-3-Clause / ISC
+- **开源许可文档**：MIT / Apache-2.0 / CC-BY-4.0
 - **官方文档且其许可明确允许再分发**
 
 ## 禁入文档类型
