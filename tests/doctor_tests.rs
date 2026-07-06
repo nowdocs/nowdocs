@@ -100,9 +100,22 @@ fn test_doctor_mcp_check() {
     // MCP check should succeed without network
     assert_eq!(output.status, doctor::Severity::Ok);
 
-    // Should have MCP handler check
-    let mcp_check = output.checks.iter().find(|c| c.id == "mcp-handler");
-    assert!(mcp_check.is_some(), "should have mcp-handler check");
+    // Should have MCP initialize and tools checks
+    let init_check = output.checks.iter().find(|c| c.id == "mcp-initialize");
+    assert!(init_check.is_some(), "should have mcp-initialize check");
+    assert_eq!(init_check.unwrap().severity, doctor::Severity::Ok);
+    let tools_check = output.checks.iter().find(|c| c.id == "mcp-tools");
+    assert!(tools_check.is_some(), "should have mcp-tools check");
+    assert_eq!(tools_check.unwrap().severity, doctor::Severity::Ok);
+    // Tools check should mention the expected tool names
+    assert!(
+        tools_check.unwrap().message.contains("nowdocs_search"),
+        "tools check should mention nowdocs_search"
+    );
+    assert!(
+        tools_check.unwrap().message.contains("nowdocs_list"),
+        "tools check should mention nowdocs_list"
+    );
 }
 
 #[test]

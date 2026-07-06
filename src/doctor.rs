@@ -186,18 +186,78 @@ pub fn run_docset_checks(docset: &str) -> DoctorOutput {
 }
 
 /// Run MCP smoke test (in-process, no network).
+///
+/// Verifies the MCP handler can produce a valid initialize response and
+/// a non-empty tools list. No I/O, no subprocess — calls the handler
+/// functions directly.
 pub fn run_mcp_check() -> DoctorOutput {
-    let checks = vec![Check {
-        id: "mcp-handler".to_string(),
-        severity: Severity::Ok,
-        message: "MCP handler is available".to_string(),
-        remediation: None,
-    }];
+    let mut checks = Vec::new();
 
-    DoctorOutput {
-        status: Severity::Ok,
-        checks,
+    // Check 1: initialize handler returns valid response
+    let init = crate::mcp::handle_initialize();
+    if init.get("protocolVersion").is_some()
+        && init.get("capabilities").is_some()
+        && init.get("serverInfo").is_some()
+    {
+        checks.push(Check {
+            id: "mcp-initialize".to_string(),
+            severity: Severity::Ok,
+            message: format!(
+                "MCP initialize ok (protocol {}, server {})",
+                init["protocolVersion"], init["serverInfo"]["name"]
+            ),
+            remediation: None,
+        });
+    } else {
+        checks.push(Check {
+            id: "mcp-initialize".to_string(),
+            severity: Severity::Fail,
+            message: "MCP initialize handler returned unexpected shape".to_string(),
+            remediation: Some("Check nowdocs build integrity".to_string()),
+        });
     }
+
+    // Check 2: tools/list returns expected tools
+    let tools_list = crate::mcp::handle_tools_list();
+    let tool_names: Vec<String> = tools_list
+        .get("tools")
+        .and_then(|t| t.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.get("name").and_then(|n| n.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let has_search = tool_names.iter().any(|n| n == "nowdocs_search");
+    let has_list = tool_names.iter().any(|n| n == "nowdocs_list");
+
+    if has_search && has_list {
+        checks.push(Check {
+            id: "mcp-tools".to_string(),
+            severity: Severity::Ok,
+            message: format!("MCP tools ok: {}", tool_names.join(", ")),
+            remediation: None,
+        });
+    } else {
+        checks.push(Check {
+            id: "mcp-tools".to_string(),
+            severity: Severity::Fail,
+            message: format!(
+                "MCP tools incomplete: expected nowdocs_search + nowdocs_list, got {}",
+                tool_names.join(", ")
+            ),
+            remediation: Some("Check nowdocs build integrity".to_string()),
+        });
+    }
+
+    let status = if checks.iter().any(|c| c.severity == Severity::Fail) {
+        Severity::Fail
+    } else {
+        Severity::Ok
+    };
+
+    DoctorOutput { status, checks }
 }
 
 /// Run model cache check.

@@ -284,3 +284,95 @@ fn test_install_shows_next_step_hint() {
         "install output should suggest next step (smoke), got: {stdout}"
     );
 }
+
+// Test: install output includes version/chunks/license metadata
+#[test]
+fn test_install_shows_metadata() {
+    let cache = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let tar = write_tarball(cache.path(), "1.0.0");
+    let url = format!("file://{}", tar.display());
+
+    let out =
+        run_nowdocs_with_test_url(cwd.path(), cache.path(), &url, &["install", "meta-test-99"]);
+    assert!(out.status.success(), "install failed");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("1.0.0"),
+        "install output should show version, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("chunks"),
+        "install output should show chunk count, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("MIT"),
+        "install output should show license, got: {stdout}"
+    );
+}
+
+// Test: list-installed shows table with version/chunks/license columns
+#[test]
+fn test_list_installed_shows_table() {
+    let cache = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let tar = write_tarball(cache.path(), "2.1.0");
+    let url = format!("file://{}", tar.display());
+
+    let out = run_nowdocs_with_test_url(
+        cwd.path(),
+        cache.path(),
+        &url,
+        &["install", "table-test-77"],
+    );
+    assert!(out.status.success());
+
+    let out = run_nowdocs(cwd.path(), cache.path(), &["list-installed"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("DOCSET"),
+        "list-installed should have header, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("VERSION"),
+        "list-installed should have VERSION column, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("table-test-77"),
+        "list-installed should show docset name, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("2.1.0"),
+        "list-installed should show version, got: {stdout}"
+    );
+}
+
+// Test: share output includes no-vector reminder
+#[test]
+fn test_share_shows_no_vector_reminder() {
+    let cache = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let tar = write_tarball(cache.path(), "1.0.0");
+    let url = format!("file://{}", tar.display());
+
+    let out = run_nowdocs_with_test_url(
+        cwd.path(),
+        cache.path(),
+        &url,
+        &["install", "vector-test-55"],
+    );
+    assert!(out.status.success());
+
+    let out = run_nowdocs(cwd.path(), cache.path(), &["share", "vector-test-55"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("vectors excluded") || stdout.contains("no-vector"),
+        "share output should remind about no vectors, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("nowdocs-registry"),
+        "share output should mention registry PR, got: {stdout}"
+    );
+}

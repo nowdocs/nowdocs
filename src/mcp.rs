@@ -83,7 +83,7 @@ pub fn run_loop() -> io::Result<()> {
     Ok(())
 }
 
-fn handle_initialize() -> Value {
+pub fn handle_initialize() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": {
@@ -96,7 +96,7 @@ fn handle_initialize() -> Value {
     })
 }
 
-fn handle_tools_list() -> Value {
+pub fn handle_tools_list() -> Value {
     json!({
         "tools": [
             {
