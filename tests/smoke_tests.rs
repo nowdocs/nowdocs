@@ -376,3 +376,62 @@ fn test_share_shows_no_vector_reminder() {
         "share output should mention registry PR, got: {stdout}"
     );
 }
+
+// Test: update output says "updated" not "installed"
+#[test]
+fn test_update_says_updated_not_installed() {
+    let cache = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let v1 = write_tarball(cache.path(), "1.0.0");
+    let v1_url = format!("file://{}", v1.display());
+
+    // install v1
+    let out = run_nowdocs_with_test_url(
+        cwd.path(),
+        cache.path(),
+        &v1_url,
+        &["install", "upd-verb-88"],
+    );
+    assert!(out.status.success());
+
+    // update to v2
+    let v2 = write_tarball(cache.path(), "2.0.0");
+    let v2_url = format!("file://{}", v2.display());
+    let out = run_nowdocs_with_test_url(
+        cwd.path(),
+        cache.path(),
+        &v2_url,
+        &["update", "upd-verb-88"],
+    );
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("updated"),
+        "update output should say 'updated', got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("installed"),
+        "update output should NOT say 'installed', got: {stdout}"
+    );
+}
+
+// Test: list-installed shows "broken" for unparseable manifest
+#[test]
+fn test_list_installed_shows_broken_for_bad_manifest() {
+    let cache = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+
+    // Create a .lance directory and a broken manifest
+    let db_dir = cache.path().join("nowdocs").join("db");
+    std::fs::create_dir_all(db_dir.join("bad-docset.lance")).unwrap();
+    let manifest_path = db_dir.join("bad-docset.manifest.json");
+    std::fs::write(&manifest_path, "{ invalid json !!!").unwrap();
+
+    let out = run_nowdocs(cwd.path(), cache.path(), &["list-installed"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("broken"),
+        "list-installed should show 'broken' for bad manifest, got: {stdout}"
+    );
+}

@@ -80,7 +80,7 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
         }
         Commands::Update { docset } => {
             nowdocs::registry::update(&docset)?;
-            print_install_success(&docset);
+            print_update_success(&docset);
             Ok(())
         }
         Commands::Smoke {
@@ -203,10 +203,28 @@ fn read_docset_meta(docset: &str) -> (String, String, String) {
     ("?".into(), "?".into(), "?".into())
 }
 
-/// Print enriched success output after install or update.
+/// Check if a docset manifest parses and validates successfully.
+fn is_docset_healthy(docset: &str) -> bool {
+    let manifest_path = nowdocs::cache::manifest_path(docset);
+    if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
+        if let Ok(m) = nowdocs::manifest::parse_manifest(&raw) {
+            return nowdocs::manifest::validate(&m).is_ok();
+        }
+    }
+    false
+}
+
+/// Print enriched success output after install.
 fn print_install_success(docset: &str) {
     let (version, chunks, license) = read_docset_meta(docset);
     println!("installed {docset} v{version} ({chunks} chunks, {license})");
+    println!("next: nowdocs smoke {docset}");
+}
+
+/// Print enriched success output after update.
+fn print_update_success(docset: &str) {
+    let (version, chunks, license) = read_docset_meta(docset);
+    println!("updated {docset} v{version} ({chunks} chunks, {license})");
     println!("next: nowdocs smoke {docset}");
 }
 
@@ -236,8 +254,10 @@ fn list_installed() -> std::io::Result<Vec<InstalledDocset>> {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if let Some(stem) = name.strip_suffix(".lance") {
                         let (version, chunks, license) = read_docset_meta(stem);
-                        let status = if nowdocs::cache::manifest_path(stem).is_file() {
+                        let status = if is_docset_healthy(stem) {
                             "ok"
+                        } else if nowdocs::cache::manifest_path(stem).is_file() {
+                            "broken"
                         } else {
                             "no-manifest"
                         };
