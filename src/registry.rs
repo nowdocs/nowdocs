@@ -248,14 +248,14 @@ pub fn validate_archive(entries: &[(String, Vec<u8>)]) -> Result<(), NowdocsErro
         }
 
         // Duplicate guard for security-sensitive basenames.
-        if DUPLICATE_GUARD_BASENAMES.contains(&basename.as_str()) {
-            if !seen_duplicates.insert(basename.clone()) {
-                return Err(archive_error(
-                    "ARCHIVE_DUPLICATE_ENTRY",
-                    format!("archive contains duplicate entry: {}", basename),
-                    "report the broken registry release",
-                ));
-            }
+        if DUPLICATE_GUARD_BASENAMES.contains(&basename.as_str())
+            && !seen_duplicates.insert(basename.clone())
+        {
+            return Err(archive_error(
+                "ARCHIVE_DUPLICATE_ENTRY",
+                format!("archive contains duplicate entry: {}", basename),
+                "report the broken registry release",
+            ));
         }
 
         // Track required entries.
