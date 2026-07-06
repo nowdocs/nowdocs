@@ -50,6 +50,19 @@ pub enum Commands {
     ListInstalled,
     /// Update a docset to the latest registry version
     Update { docset: String },
+    /// Smoke-test a docset with real retrieval to verify installation
+    Smoke {
+        /// Docset to smoke-test
+        docset: String,
+        /// Query to search for (default: "installation configuration example")
+        query: Option<String>,
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+        /// Number of top results to return
+        #[arg(long)]
+        top_k: Option<u32>,
+    },
     /// Run read-only diagnostics on nowdocs environment
     Doctor {
         /// Output in JSON format

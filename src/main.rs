@@ -22,6 +22,7 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             let url = registry_url_for(&docset);
             nowdocs::registry::install(&docset, &url)?;
             println!("installed {docset}");
+            println!("next: nowdocs smoke {docset}");
             Ok(())
         }
         Commands::Ingest {
@@ -42,6 +43,7 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             };
             let stats = nowdocs::ingest::ingest_dir(Path::new(&dir), &name, &meta)?;
             println!("ingested {} files, {} chunks", stats.files, stats.chunks);
+            println!("next: nowdocs smoke {name}");
             Ok(())
         }
         Commands::Share { docset, out_dir } => {
@@ -51,6 +53,7 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             };
             let product = nowdocs::registry::share(&docset, &out_dir)?;
             println!("wrote {}", product.display());
+            println!("next: submit to nowdocs-registry via PR");
             Ok(())
         }
         Commands::Uninstall { docset } => {
@@ -70,8 +73,54 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
         Commands::Update { docset } => {
             nowdocs::registry::update(&docset)?;
             println!("updated {docset}");
+            println!("next: nowdocs smoke {docset}");
             Ok(())
         }
+        Commands::Smoke {
+            docset,
+            query,
+            json,
+            top_k,
+        } => match nowdocs::smoke::smoke(&docset, query.as_deref(), top_k) {
+            Ok(result) => {
+                if result.result_count == 0 {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "docset": docset,
+                                "error": "no results",
+                                "hint": format!("nowdocs doctor --docset {docset}")
+                            })
+                        );
+                    } else {
+                        eprintln!("smoke: no results for {docset} — try `nowdocs doctor --docset {docset}`");
+                    }
+                    std::process::exit(1);
+                }
+                if json {
+                    println!("{}", nowdocs::smoke::format_json(&result)?);
+                } else {
+                    print!("{}", nowdocs::smoke::format_human(&result));
+                }
+                Ok(())
+            }
+            Err(e) => {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "docset": docset,
+                            "error": format!("{e:#}"),
+                            "hint": "nowdocs doctor --model"
+                        })
+                    );
+                } else {
+                    eprintln!("error: {e:#}");
+                }
+                std::process::exit(1);
+            }
+        },
         Commands::Doctor {
             json,
             docset,

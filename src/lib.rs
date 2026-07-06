@@ -14,6 +14,7 @@ pub mod eval;
 pub mod ingest;
 pub mod registry;
 pub mod retrieve;
+pub mod smoke;
 pub mod store;
 pub mod tools;
 
