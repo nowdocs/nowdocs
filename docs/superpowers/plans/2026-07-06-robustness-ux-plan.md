@@ -92,31 +92,31 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 
 **Tasks:**
 
-- [ ] R3.1 Add `Doctor` CLI subcommand.
+- [x] R3.1 Add `Doctor` CLI subcommand.
   - Flags: `--json`, `--docset <name>`, `--mcp`, `--model`, `--repair`.
   - Initial implementation may reject `--repair` with a clear "not implemented yet" until R4.
 
-- [ ] R3.2 Implement read-only check model.
+- [x] R3.2 Implement read-only check model.
   - Check ID, severity, status, message, remediation.
   - Aggregate exit code: fail if any fail.
 
-- [ ] R3.3 Implement default checks.
+- [x] R3.3 Implement default checks.
   - cache root exists/writable.
   - db/manifest directories exist or can be created.
   - installed docsets have matching manifest/store presence.
   - manifest validates.
   - stale staging paths detected.
 
-- [ ] R3.4 Implement `doctor --docset`.
+- [x] R3.4 Implement `doctor --docset`.
   - Validate docset name.
   - Check manifest, store path, license/notice metadata presence where expected.
   - Print repair hint for missing/corrupt pieces.
 
-- [ ] R3.5 Implement `doctor --mcp` smoke.
+- [x] R3.5 Implement `doctor --mcp` smoke.
   - In-process initialize/tools-list check or equivalent direct MCP handler check.
   - Must not require a network or an external MCP client.
 
-- [ ] R3.6 Implement `doctor --json`.
+- [x] R3.6 Implement `doctor --json`.
   - Stable top-level shape: `{ "status": "ok|warn|fail", "checks": [...] }`.
   - Tests parse JSON and assert check IDs.
 
