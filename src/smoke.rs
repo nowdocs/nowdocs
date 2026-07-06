@@ -51,15 +51,18 @@ pub fn smoke(docset: &str, query: Option<&str>, top_k: Option<u32>) -> Result<Sm
 
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
+    // retrieve::search returns hit-first window (hits + neighbor context).
+    // Limit to the requested top_k hits — neighbors are context, not results.
     let results: Vec<SmokeHit> = search_result
         .chunks
         .into_iter()
+        .take(top_k as usize)
         .enumerate()
         .map(|(i, c)| {
             let preview = truncate_text(&c.text, 120);
             SmokeHit {
                 rank: i + 1,
-                score: 0.0, // retrieve::search doesn't expose per-chunk scores
+                score: c.score.unwrap_or(0.0),
                 heading: c.heading_path,
                 source_url: c.source_url,
                 chunk_idx: c.chunk_idx,
@@ -84,7 +87,12 @@ fn truncate_text(text: &str, max_len: usize) -> String {
     if text.len() <= max_len {
         text.to_string()
     } else {
-        format!("{}...", &text[..max_len])
+        // Find a char boundary at or before max_len to avoid panic on multi-byte UTF-8.
+        let mut end = max_len;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &text[..end])
     }
 }
 
