@@ -61,9 +61,13 @@ fn download_to_temp(url: &str) -> Result<PathBuf> {
 }
 
 /// Minimal ustar tar reader (no GNU extensions, no PAX).
+///
+/// Rejects unsafe entries and enforces size/count guardrails *before* allocating
+/// content buffers, so a malicious header cannot cause unbounded memory use.
 fn extract_tar<R: Read>(reader: &mut R) -> Result<Vec<(String, Vec<u8>)>> {
     let mut files = Vec::new();
     let mut header = [0u8; 512];
+    let mut total_bytes: u64 = 0;
 
     loop {
         match reader.read_exact(&mut header) {
@@ -86,7 +90,31 @@ fn extract_tar<R: Read>(reader: &mut R) -> Result<Vec<(String, Vec<u8>)>> {
         let typeflag = header[156];
 
         if typeflag == 0 || typeflag == b'0' {
-            // Regular file — extract content.
+            // P1: reject per-entry size and total count BEFORE allocating.
+            if size > MAX_ENTRY_BYTES {
+                // Still need to skip the declared content to leave reader in a
+                // consistent state for potential callers that ignore this error.
+                skip_tar_content(reader, size)?;
+                let err = archive_error(
+                    "ARCHIVE_TOO_LARGE",
+                    format!(
+                        "entry '{}' is {} bytes, exceeds limit of {} bytes",
+                        name, size, MAX_ENTRY_BYTES
+                    ),
+                    "use a smaller archive or report the broken registry release",
+                );
+                return Err(anyhow::anyhow!("{}", err));
+            }
+            if files.len() >= MAX_ENTRY_COUNT {
+                skip_tar_content(reader, size)?;
+                let err = archive_error(
+                    "ARCHIVE_TOO_LARGE",
+                    format!("archive exceeds entry count limit of {}", MAX_ENTRY_COUNT),
+                    "use a smaller archive or report the broken registry release",
+                );
+                return Err(anyhow::anyhow!("{}", err));
+            }
+
             let mut content = vec![0u8; size as usize];
             let mut read = 0usize;
             while read < size as usize {
@@ -102,6 +130,19 @@ fn extract_tar<R: Read>(reader: &mut R) -> Result<Vec<(String, Vec<u8>)>> {
             if padded > size as usize {
                 let mut skip = vec![0u8; padded - size as usize];
                 let _ = reader.read_exact(&mut skip);
+            }
+
+            total_bytes += size;
+            if total_bytes > MAX_ARCHIVE_BYTES {
+                let err = archive_error(
+                    "ARCHIVE_TOO_LARGE",
+                    format!(
+                        "archive is at least {} bytes after '{}', exceeds limit of {} bytes",
+                        total_bytes, name, MAX_ARCHIVE_BYTES
+                    ),
+                    "use a smaller archive or report the broken registry release",
+                );
+                return Err(anyhow::anyhow!("{}", err));
             }
 
             files.push((name, content));
@@ -140,6 +181,22 @@ fn extract_tar<R: Read>(reader: &mut R) -> Result<Vec<(String, Vec<u8>)>> {
         }
     }
     Ok(files)
+}
+
+/// Skip `size` bytes + padding from a tar entry without allocating a buffer.
+fn skip_tar_content<R: Read>(reader: &mut R, size: u64) -> Result<()> {
+    let padded = (size as usize).div_ceil(512) * 512;
+    let mut skip = vec![0u8; std::cmp::min(padded, 8192)];
+    let mut remaining = padded;
+    while remaining > 0 {
+        let to_read = std::cmp::min(remaining, skip.len());
+        let n = reader.read(&mut skip[..to_read]).context("tar skip")?;
+        if n == 0 {
+            break;
+        }
+        remaining -= n;
+    }
+    Ok(())
 }
 
 fn parse_octal(s: &[u8]) -> Option<u64> {
@@ -230,16 +287,21 @@ pub fn validate_archive(entries: &[(String, Vec<u8>)]) -> Result<(), NowdocsErro
             }
         }
 
-        // Vector artifact detection.
+        // Vector artifact detection — check every path component, not just the
+        // full name suffix.  LanceDB stores are directories like
+        // `index.lance/data.bin` where child files don't end in `.lance`.
         let basename = path
             .file_name()
             .map(|f| f.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if name.ends_with(".lance")
-            || name.ends_with(".faiss")
-            || basename.starts_with("vectors.")
-            || basename.starts_with("embeddings.")
-        {
+        let has_vector_component = path.components().any(|c| {
+            let s = c.as_os_str().to_string_lossy();
+            s.ends_with(".lance")
+                || s.ends_with(".faiss")
+                || s.starts_with("vectors.")
+                || s.starts_with("embeddings.")
+        });
+        if has_vector_component {
             return Err(archive_error(
                 "ARCHIVE_VECTOR_ARTIFACT",
                 format!("archive contains vector artifact: {}", name),

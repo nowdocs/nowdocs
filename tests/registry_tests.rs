@@ -741,6 +741,38 @@ fn test_r1_faiss_artifact_rejected() {
     );
 }
 
+// --- R1: file inside .lance directory rejected (P2) ---
+
+#[test]
+fn test_r1_file_inside_lance_dir_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    // LanceDB stores are directories: `mydb.lance/data.bin`.
+    // The child file doesn't end in `.lance`, so the old check missed it.
+    let url = write_archive_to_tar(
+        dir.path(),
+        "lance_dir.tar",
+        &[
+            ("manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+            ("mydb.lance/data.bin", b"vector data inside lance dir"),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_lance_dir", &url);
+    assert!(
+        result.is_err(),
+        "file inside .lance directory should be rejected"
+    );
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_VECTOR_ARTIFACT"),
+        "error should contain ARCHIVE_VECTOR_ARTIFACT, got: {}",
+        err_str
+    );
+}
+
 // --- R1: vectors.* artifact rejected ---
 
 #[test]
