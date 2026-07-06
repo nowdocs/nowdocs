@@ -59,6 +59,53 @@ pub fn license_text_path(docset: &str) -> PathBuf {
         .join(format!("{docset}.license.txt"))
 }
 
+/// `<cache>/nowdocs/staging/` — root for staging directories during install/update.
+pub fn staging_root() -> PathBuf {
+    cache_root().join("staging")
+}
+
+/// Check if a path is under the cache root (for security validation).
+pub fn is_under_cache_root(path: &std::path::Path) -> bool {
+    let root = cache_root();
+    path.starts_with(&root)
+}
+
+/// List all staging directories (for stale staging detection).
+pub fn list_staging_dirs() -> anyhow::Result<Vec<PathBuf>> {
+    let staging_root = staging_root();
+    let mut dirs = Vec::new();
+    if staging_root.exists() {
+        for entry in std::fs::read_dir(&staging_root)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                dirs.push(entry.path());
+            }
+        }
+    }
+    Ok(dirs)
+}
+
+/// Create a unique staging path for a docset install/update.
+/// Format: `<staging_root>/<docset>-<pid>-<timestamp>/`
+pub fn new_staging_path(docset: &str) -> PathBuf {
+    let pid = std::process::id();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    staging_root().join(format!("{}-{}-{}", docset, pid, timestamp))
+}
+
+/// `<cache>/nowdocs/rollback/<docset>-<pid>-<timestamp>/` — rollback path for active replacement.
+pub fn rollback_path(docset: &str) -> PathBuf {
+    let pid = std::process::id();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    cache_root().join("rollback").join(format!("{}-{}-{}", docset, pid, timestamp))
+}
+
 /// Create the cache tree if absent and gate on the layout version.
 ///
 /// - First run (no `.layout_version`): create `db/` + `models/`, write version.
@@ -83,6 +130,8 @@ pub fn ensure_layout() -> anyhow::Result<()> {
     } else {
         std::fs::create_dir_all(root.join("db"))?;
         std::fs::create_dir_all(root.join("models"))?;
+        std::fs::create_dir_all(root.join("staging"))?;
+        std::fs::create_dir_all(root.join("rollback"))?;
         std::fs::write(&version_file, CACHE_LAYOUT_VERSION.to_string())?;
     }
     Ok(())

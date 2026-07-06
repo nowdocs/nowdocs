@@ -136,6 +136,45 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
     let docset = input::validate_docset(docset)?;
     cache::ensure_layout()?;
 
+    // Check if there's an existing active docset for rollback
+    let has_existing = cache::manifest_path(&docset).is_file();
+    let existing_backup = if has_existing {
+        Some(backup_existing(&docset)?)
+    } else {
+        None
+    };
+
+    // Install to staging first
+    let staging_path = install_to_staging(&docset, url)?;
+
+    // Promote staging to active
+    match promote_staging(&docset, &staging_path) {
+        Ok(()) => {
+            // Success: cleanup staging and any rollback backup
+            cleanup_staging(&staging_path)?;
+            if let Some(backup) = existing_backup {
+                cleanup_rollback(&backup)?;
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // Promotion failed: try to restore from backup if we had one
+            if let Some(backup) = existing_backup {
+                if let Err(restore_err) = restore_from_backup(&docset, &backup) {
+                    eprintln!("warning: failed to restore from backup: {}", restore_err);
+                }
+            }
+            // Leave staging for diagnostics
+            Err(e)
+        }
+    }
+}
+
+/// Install a docset to a staging directory (not active paths).
+fn install_to_staging(docset: &str, url: &str) -> Result<PathBuf> {
+    let staging_path = cache::new_staging_path(docset);
+    std::fs::create_dir_all(&staging_path)?;
+
     let (archive_path, is_temp) = if is_test_file_url(url) {
         let path = url.strip_prefix("file://").unwrap();
         (PathBuf::from(path), false)
@@ -150,6 +189,7 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
         let _ = std::fs::remove_file(&archive_path);
     }
 
+    // Validate archive has manifest
     let manifest_entry = entries
         .iter()
         .find(|(name, _)| name.ends_with("manifest.json"))
@@ -159,16 +199,11 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
     let m = manifest::parse_manifest(manifest_json)?;
     manifest::validate(&m)?;
 
-    let db_dir = cache::db_path(&docset).parent().unwrap().to_path_buf();
-    std::fs::create_dir_all(&db_dir)?;
+    // Write manifest to staging
+    let staging_manifest = staging_path.join("manifest.json");
+    std::fs::write(&staging_manifest, &manifest_entry.1)?;
 
-    std::fs::write(cache::manifest_path(&docset), &manifest_entry.1)?;
-
-    // Persist the upstream LICENSE bundled in the archive (if present) so a
-    // later `share` of this docset carries the notice text forward. Without
-    // this, docsets installed from a registry tar lose their LICENSE on
-    // re-share even though the archive contained it — mirror what `ingest`
-    // stashes at cache::license_text_path for locally-ingested docsets.
+    // Persist LICENSE to staging if present
     let license_entry = entries.iter().find(|(name, _)| {
         std::path::Path::new(name)
             .file_name()
@@ -176,20 +211,67 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
             .unwrap_or(false)
     });
     if let Some((_, data)) = license_entry {
-        let license_path = cache::license_text_path(&docset);
-        if let Some(parent) = license_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&license_path, data)?;
+        let staging_license = staging_path.join("license.txt");
+        std::fs::write(&staging_license, data)?;
     }
 
-    // Materialize chunks into the LanceDB store so retrieve::search works.
-    // Uses zero vectors as placeholders; real vectors are rebuilt by CI (D10).
+    // Save chunks to staging for later materialization
     let chunks_entry = entries
         .iter()
         .find(|(name, _)| name.ends_with("chunks.jsonl"));
     if let Some((_, data)) = chunks_entry {
-        let jsonl = std::str::from_utf8(data).context("chunks.jsonl utf8")?;
+        let staging_chunks = staging_path.join("chunks.jsonl");
+        std::fs::write(&staging_chunks, data)?;
+    }
+
+    // Verify staged manifest
+    verify_staging(&staging_path)?;
+
+    Ok(staging_path)
+}
+
+/// Verify that staging contains valid manifest.
+fn verify_staging(staging_path: &Path) -> Result<()> {
+    let manifest_path = staging_path.join("manifest.json");
+    if !manifest_path.is_file() {
+        anyhow::bail!("staging missing manifest.json");
+    }
+
+    let raw = std::fs::read_to_string(&manifest_path)?;
+    let m = manifest::parse_manifest(&raw)?;
+    manifest::validate(&m)?;
+
+    Ok(())
+}
+
+/// Promote staging to active cache.
+fn promote_staging(docset: &str, staging_path: &Path) -> Result<()> {
+    let active_manifest = cache::manifest_path(docset);
+    let active_db = cache::db_path(docset);
+    let active_license = cache::license_text_path(docset);
+
+    // Ensure parent directories exist
+    if let Some(parent) = active_manifest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Copy manifest from staging to active
+    let staging_manifest = staging_path.join("manifest.json");
+    std::fs::copy(&staging_manifest, &active_manifest)?;
+
+    // Copy license if present
+    let staging_license = staging_path.join("license.txt");
+    if staging_license.is_file() {
+        if let Some(parent) = active_license.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(&staging_license, &active_license)?;
+    }
+
+    // Materialize chunks from staging to active store
+    let staging_chunks = staging_path.join("chunks.jsonl");
+    if staging_chunks.is_file() {
+        let jsonl = std::fs::read_to_string(&staging_chunks)?;
         let parsed: Vec<JsonlChunk> = jsonl
             .lines()
             .filter(|l| !l.trim().is_empty())
@@ -213,10 +295,101 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
             .collect();
 
         let zero_vectors: Vec<Vec<f32>> = vec![vec![0.0f32; 512]; chunks.len()];
-        let store = Store::open(&docset)?;
+        let store = Store::open(docset)?;
         store.insert(&chunks, &zero_vectors)?;
     }
 
+    Ok(())
+}
+
+/// Backup existing active docset for rollback.
+fn backup_existing(docset: &str) -> Result<PathBuf> {
+    let backup_path = cache::rollback_path(docset);
+    std::fs::create_dir_all(&backup_path)?;
+
+    let active_manifest = cache::manifest_path(docset);
+    let active_db = cache::db_path(docset);
+    let active_license = cache::license_text_path(docset);
+
+    // Backup manifest
+    if active_manifest.is_file() {
+        std::fs::copy(&active_manifest, backup_path.join("manifest.json"))?;
+    }
+
+    // Backup license
+    if active_license.is_file() {
+        std::fs::copy(&active_license, backup_path.join("license.txt"))?;
+    }
+
+    // Backup store (db directory)
+    if active_db.exists() {
+        copy_dir_all(&active_db, &backup_path.join("store.lance"))?;
+    }
+
+    Ok(backup_path)
+}
+
+/// Restore from backup.
+fn restore_from_backup(docset: &str, backup_path: &Path) -> Result<()> {
+    let active_manifest = cache::manifest_path(docset);
+    let active_db = cache::db_path(docset);
+    let active_license = cache::license_text_path(docset);
+
+    // Restore manifest
+    let backup_manifest = backup_path.join("manifest.json");
+    if backup_manifest.is_file() {
+        std::fs::copy(&backup_manifest, &active_manifest)?;
+    }
+
+    // Restore license
+    let backup_license = backup_path.join("license.txt");
+    if backup_license.is_file() {
+        if let Some(parent) = active_license.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(&backup_license, &active_license)?;
+    }
+
+    // Restore store (db directory)
+    let backup_store = backup_path.join("store.lance");
+    if backup_store.exists() {
+        if active_db.exists() {
+            std::fs::remove_dir_all(&active_db)?;
+        }
+        copy_dir_all(&backup_store, &active_db)?;
+    }
+
+    Ok(())
+}
+
+/// Cleanup staging directory.
+fn cleanup_staging(staging_path: &Path) -> Result<()> {
+    if staging_path.exists() {
+        std::fs::remove_dir_all(staging_path)?;
+    }
+    Ok(())
+}
+
+/// Cleanup rollback directory.
+fn cleanup_rollback(rollback_path: &Path) -> Result<()> {
+    if rollback_path.exists() {
+        std::fs::remove_dir_all(rollback_path)?;
+    }
+    Ok(())
+}
+
+/// Copy directory recursively.
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
     Ok(())
 }
 
