@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod chunker;
 pub mod cli;
+pub mod errors;
 pub mod input;
 pub mod manifest;
 pub mod mcp;

@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use crate::cache;
 use crate::chunker::{Chunk, ChunkType};
+use crate::errors::{archive_error, NowdocsError};
 use crate::input;
 use crate::manifest;
 use crate::store::Store;
@@ -60,9 +61,13 @@ fn download_to_temp(url: &str) -> Result<PathBuf> {
 }
 
 /// Minimal ustar tar reader (no GNU extensions, no PAX).
+///
+/// Rejects unsafe entries and enforces size/count guardrails *before* allocating
+/// content buffers, so a malicious header cannot cause unbounded memory use.
 fn extract_tar<R: Read>(reader: &mut R) -> Result<Vec<(String, Vec<u8>)>> {
     let mut files = Vec::new();
     let mut header = [0u8; 512];
+    let mut total_bytes: u64 = 0;
 
     loop {
         match reader.read_exact(&mut header) {
@@ -85,6 +90,31 @@ fn extract_tar<R: Read>(reader: &mut R) -> Result<Vec<(String, Vec<u8>)>> {
         let typeflag = header[156];
 
         if typeflag == 0 || typeflag == b'0' {
+            // P1: reject per-entry size and total count BEFORE allocating.
+            if size > MAX_ENTRY_BYTES {
+                // Still need to skip the declared content to leave reader in a
+                // consistent state for potential callers that ignore this error.
+                skip_tar_content(reader, size)?;
+                let err = archive_error(
+                    "ARCHIVE_TOO_LARGE",
+                    format!(
+                        "entry '{}' is {} bytes, exceeds limit of {} bytes",
+                        name, size, MAX_ENTRY_BYTES
+                    ),
+                    "use a smaller archive or report the broken registry release",
+                );
+                return Err(anyhow::anyhow!("{}", err));
+            }
+            if files.len() >= MAX_ENTRY_COUNT {
+                skip_tar_content(reader, size)?;
+                let err = archive_error(
+                    "ARCHIVE_TOO_LARGE",
+                    format!("archive exceeds entry count limit of {}", MAX_ENTRY_COUNT),
+                    "use a smaller archive or report the broken registry release",
+                );
+                return Err(anyhow::anyhow!("{}", err));
+            }
+
             let mut content = vec![0u8; size as usize];
             let mut read = 0usize;
             while read < size as usize {
@@ -102,15 +132,71 @@ fn extract_tar<R: Read>(reader: &mut R) -> Result<Vec<(String, Vec<u8>)>> {
                 let _ = reader.read_exact(&mut skip);
             }
 
+            total_bytes += size;
+            if total_bytes > MAX_ARCHIVE_BYTES {
+                let err = archive_error(
+                    "ARCHIVE_TOO_LARGE",
+                    format!(
+                        "archive is at least {} bytes after '{}', exceeds limit of {} bytes",
+                        total_bytes, name, MAX_ARCHIVE_BYTES
+                    ),
+                    "use a smaller archive or report the broken registry release",
+                );
+                return Err(anyhow::anyhow!("{}", err));
+            }
+
             files.push((name, content));
-        } else {
-            // Skip non-regular entries.
+        } else if typeflag == b'5' {
+            // Directory entry — skip silently (safe, needed for nested paths).
             let padded = (size as usize).div_ceil(512) * 512;
             let mut skip = vec![0u8; padded];
             let _ = reader.read_exact(&mut skip);
+        } else {
+            // Symlink (b'2'), hardlink (b'1'), device (b'3'/'4'), or other
+            // unsafe non-regular entry — reject.
+            let padded = (size as usize).div_ceil(512) * 512;
+            let mut skip = vec![0u8; padded];
+            let _ = reader.read_exact(&mut skip);
+
+            let type_name = match typeflag {
+                b'1' => "hardlink",
+                b'2' => "symlink",
+                b'3' => "character device",
+                b'4' => "block device",
+                b'6' => "fifo",
+                b'7' => "contiguous file",
+                _ => "unknown",
+            };
+            return Err(anyhow::anyhow!(
+                "{}",
+                archive_error(
+                    "ARCHIVE_UNSUPPORTED_ENTRY",
+                    format!(
+                        "archive contains unsupported entry type '{}' ({}): {}",
+                        typeflag as char, type_name, name
+                    ),
+                    "report the broken registry release",
+                )
+            ));
         }
     }
     Ok(files)
+}
+
+/// Skip `size` bytes + padding from a tar entry without allocating a buffer.
+fn skip_tar_content<R: Read>(reader: &mut R, size: u64) -> Result<()> {
+    let padded = (size as usize).div_ceil(512) * 512;
+    let mut skip = vec![0u8; std::cmp::min(padded, 8192)];
+    let mut remaining = padded;
+    while remaining > 0 {
+        let to_read = std::cmp::min(remaining, skip.len());
+        let n = reader.read(&mut skip[..to_read]).context("tar skip")?;
+        if n == 0 {
+            break;
+        }
+        remaining -= n;
+    }
+    Ok(())
 }
 
 fn parse_octal(s: &[u8]) -> Option<u64> {
@@ -126,6 +212,152 @@ fn parse_octal(s: &[u8]) -> Option<u64> {
     std::str::from_utf8(&trimmed)
         .ok()
         .and_then(|s| u64::from_str_radix(s, 8).ok())
+}
+
+// --- R1: Archive validation guardrails ---
+
+/// Max total archive bytes (512 MiB).
+pub const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+/// Max single entry bytes (256 MiB).
+pub const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
+/// Max entry count.
+pub const MAX_ENTRY_COUNT: usize = 100_000;
+
+/// Basenames that must appear at most once in the archive.
+const DUPLICATE_GUARD_BASENAMES: &[&str] = &["manifest.json", "chunks.jsonl", "LICENSE", "NOTICES"];
+
+/// Validate archive entries before writing active cache.
+///
+/// Returns `Ok(())` if the archive passes all safety checks, or a structured
+/// `NowdocsError` with a stable code and actionable hint.
+pub fn validate_archive(entries: &[(String, Vec<u8>)]) -> Result<(), NowdocsError> {
+    // Entry count guardrail.
+    if entries.len() > MAX_ENTRY_COUNT {
+        return Err(archive_error(
+            "ARCHIVE_TOO_LARGE",
+            format!(
+                "archive has {} entries, exceeds limit of {}",
+                entries.len(),
+                MAX_ENTRY_COUNT
+            ),
+            "use a smaller archive or report the broken registry release",
+        ));
+    }
+
+    let mut total_bytes: u64 = 0;
+    let mut seen_duplicates: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut has_manifest = false;
+    let mut has_chunks = false;
+
+    for (name, data) in entries {
+        total_bytes += data.len() as u64;
+
+        // Per-entry size guardrail.
+        if data.len() as u64 > MAX_ENTRY_BYTES {
+            return Err(archive_error(
+                "ARCHIVE_TOO_LARGE",
+                format!(
+                    "entry '{}' is {} bytes, exceeds limit of {} bytes",
+                    name,
+                    data.len(),
+                    MAX_ENTRY_BYTES
+                ),
+                "use a smaller archive or report the broken registry release",
+            ));
+        }
+
+        // Path safety: reject absolute paths.
+        if name.starts_with('/') {
+            return Err(archive_error(
+                "ARCHIVE_UNSAFE_PATH",
+                format!("archive contains absolute path: {}", name),
+                "report the broken registry release",
+            ));
+        }
+
+        // Path safety: reject .. components.
+        let path = std::path::Path::new(name);
+        for component in path.components() {
+            if matches!(component, std::path::Component::ParentDir) {
+                return Err(archive_error(
+                    "ARCHIVE_UNSAFE_PATH",
+                    format!("archive contains path traversal (..): {}", name),
+                    "report the broken registry release",
+                ));
+            }
+        }
+
+        // Vector artifact detection — check every path component, not just the
+        // full name suffix.  LanceDB stores are directories like
+        // `index.lance/data.bin` where child files don't end in `.lance`.
+        let basename = path
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let has_vector_component = path.components().any(|c| {
+            let s = c.as_os_str().to_string_lossy();
+            s.ends_with(".lance")
+                || s.ends_with(".faiss")
+                || s.starts_with("vectors.")
+                || s.starts_with("embeddings.")
+        });
+        if has_vector_component {
+            return Err(archive_error(
+                "ARCHIVE_VECTOR_ARTIFACT",
+                format!("archive contains vector artifact: {}", name),
+                "share must not include vector data; rebuild vectors with CI",
+            ));
+        }
+
+        // Duplicate guard for security-sensitive basenames.
+        if DUPLICATE_GUARD_BASENAMES.contains(&basename.as_str())
+            && !seen_duplicates.insert(basename.clone())
+        {
+            return Err(archive_error(
+                "ARCHIVE_DUPLICATE_ENTRY",
+                format!("archive contains duplicate entry: {}", basename),
+                "report the broken registry release",
+            ));
+        }
+
+        // Track required entries.
+        if name.ends_with("manifest.json") {
+            has_manifest = true;
+        }
+        if name.ends_with("chunks.jsonl") {
+            has_chunks = true;
+        }
+    }
+
+    // Total archive size guardrail.
+    if total_bytes > MAX_ARCHIVE_BYTES {
+        return Err(archive_error(
+            "ARCHIVE_TOO_LARGE",
+            format!(
+                "archive is {} bytes, exceeds limit of {} bytes",
+                total_bytes, MAX_ARCHIVE_BYTES
+            ),
+            "use a smaller archive or report the broken registry release",
+        ));
+    }
+
+    if !has_manifest {
+        return Err(archive_error(
+            "ARCHIVE_MISSING_MANIFEST",
+            "registry archive is missing manifest.json",
+            "retry install, or report the broken registry release",
+        ));
+    }
+
+    if !has_chunks {
+        return Err(archive_error(
+            "ARCHIVE_MISSING_CHUNKS",
+            "registry archive is missing chunks.jsonl",
+            "retry install, or report the broken registry release",
+        ));
+    }
+
+    Ok(())
 }
 
 /// Install a docset from an archive URL.
@@ -149,6 +381,9 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
     if is_temp {
         let _ = std::fs::remove_file(&archive_path);
     }
+
+    // R1: validate archive before writing any active cache paths.
+    validate_archive(&entries).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let manifest_entry = entries
         .iter()

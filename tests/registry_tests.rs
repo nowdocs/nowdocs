@@ -464,3 +464,532 @@ fn test_update_refreshes_manifest() {
         "manifest should be refreshed to v2.0.0"
     );
 }
+
+// ============================================================
+// R1: Archive validation tests
+// ============================================================
+
+/// Helper: make a tar entry with a custom typeflag (e.g. symlink = b'2').
+fn make_tar_entry_with_typeflag(name: &str, data: &[u8], typeflag: u8) -> Vec<u8> {
+    let mut header = [0u8; 512];
+    let name_bytes = name.as_bytes();
+    header[0..name_bytes.len()].copy_from_slice(name_bytes);
+    header[100..107].copy_from_slice(b"000644\0");
+    header[108..115].copy_from_slice(b"000000\0");
+    header[116..123].copy_from_slice(b"000000\0");
+    let size_str = format!("{:011o}\0", data.len());
+    header[124..136].copy_from_slice(size_str.as_bytes());
+    header[136..148].copy_from_slice(b"00000000000\0");
+    header[156] = typeflag;
+    header[257..263].copy_from_slice(b"ustar\0");
+    header[265..267].copy_from_slice(b"00");
+
+    let mut sum: u32 = 0;
+    for (i, &b) in header.iter().enumerate() {
+        sum += if (148..156).contains(&i) {
+            b' ' as u32
+        } else {
+            b as u32
+        };
+    }
+    let chk_str = format!("{:06o}\0 ", sum);
+    header[148..156].copy_from_slice(chk_str.as_bytes());
+
+    let mut entry = header.to_vec();
+    entry.extend_from_slice(data);
+    let padded = data.len().div_ceil(512) * 512;
+    if padded > data.len() {
+        entry.extend_from_slice(&vec![0u8; padded - data.len()]);
+    }
+    entry
+}
+
+fn write_archive_to_tar(dir: &std::path::Path, name: &str, entries: &[(&str, &[u8])]) -> String {
+    let mut archive = Vec::new();
+    for (entry_name, data) in entries {
+        archive.extend_from_slice(&make_tar_entry(entry_name, data));
+    }
+    archive.extend_from_slice(&[0u8; 512]);
+    archive.extend_from_slice(&[0u8; 512]);
+    let tar_path = dir.join(name);
+    std::fs::write(&tar_path, &archive).unwrap();
+    format!("file://{}", tar_path.display())
+}
+
+fn write_archive_to_tar_with_flags(
+    dir: &std::path::Path,
+    name: &str,
+    entries: &[(&str, &[u8], u8)],
+) -> String {
+    let mut archive = Vec::new();
+    for (entry_name, data, flag) in entries {
+        archive.extend_from_slice(&make_tar_entry_with_typeflag(entry_name, data, *flag));
+    }
+    archive.extend_from_slice(&[0u8; 512]);
+    archive.extend_from_slice(&[0u8; 512]);
+    let tar_path = dir.join(name);
+    std::fs::write(&tar_path, &archive).unwrap();
+    format!("file://{}", tar_path.display())
+}
+
+// --- R1: missing manifest rejected ---
+
+#[test]
+fn test_r1_missing_manifest_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let url = write_archive_to_tar(
+        dir.path(),
+        "no_manifest.tar",
+        &[("chunks.jsonl", test_chunks_jsonl().as_bytes())],
+    );
+
+    let result = nowdocs::registry::install("r1_no_manifest", &url);
+    assert!(result.is_err(), "missing manifest should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_MISSING_MANIFEST"),
+        "error should contain ARCHIVE_MISSING_MANIFEST code, got: {}",
+        err_str
+    );
+}
+
+// --- R1: missing chunks rejected ---
+
+#[test]
+fn test_r1_missing_chunks_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let url = write_archive_to_tar(
+        dir.path(),
+        "no_chunks.tar",
+        &[("manifest.json", test_manifest_json().as_bytes())],
+    );
+
+    let result = nowdocs::registry::install("r1_no_chunks", &url);
+    assert!(result.is_err(), "missing chunks should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_MISSING_CHUNKS"),
+        "error should contain ARCHIVE_MISSING_CHUNKS code, got: {}",
+        err_str
+    );
+}
+
+// --- R1: path traversal rejected ---
+
+#[test]
+fn test_r1_path_traversal_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let url = write_archive_to_tar(
+        dir.path(),
+        "traversal.tar",
+        &[
+            ("../escape/manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_traversal", &url);
+    assert!(result.is_err(), "path traversal should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_UNSAFE_PATH"),
+        "error should contain ARCHIVE_UNSAFE_PATH code, got: {}",
+        err_str
+    );
+}
+
+// --- R1: absolute path rejected ---
+
+#[test]
+fn test_r1_absolute_path_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let url = write_archive_to_tar(
+        dir.path(),
+        "absolute.tar",
+        &[
+            ("/etc/passwd", b"bad"),
+            ("manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_absolute", &url);
+    assert!(result.is_err(), "absolute path should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_UNSAFE_PATH"),
+        "error should contain ARCHIVE_UNSAFE_PATH code, got: {}",
+        err_str
+    );
+}
+
+// --- R1: duplicate manifest rejected ---
+
+#[test]
+fn test_r1_duplicate_manifest_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let manifest_data = test_manifest_json().as_bytes();
+    let url = write_archive_to_tar(
+        dir.path(),
+        "dup_manifest.tar",
+        &[
+            ("manifest.json", manifest_data),
+            ("subdir/manifest.json", manifest_data),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_dup_manifest", &url);
+    assert!(result.is_err(), "duplicate manifest should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_DUPLICATE_ENTRY"),
+        "error should contain ARCHIVE_DUPLICATE_ENTRY code, got: {}",
+        err_str
+    );
+}
+
+// --- R1: duplicate chunks rejected ---
+
+#[test]
+fn test_r1_duplicate_chunks_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let chunks_data = test_chunks_jsonl().as_bytes();
+    let url = write_archive_to_tar(
+        dir.path(),
+        "dup_chunks.tar",
+        &[
+            ("manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", chunks_data),
+            ("copy/chunks.jsonl", chunks_data),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_dup_chunks", &url);
+    assert!(result.is_err(), "duplicate chunks should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_DUPLICATE_ENTRY"),
+        "error should contain ARCHIVE_DUPLICATE_ENTRY code, got: {}",
+        err_str
+    );
+}
+
+// --- R1: vector artifact rejected ---
+
+#[test]
+fn test_r1_vector_artifact_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let url = write_archive_to_tar(
+        dir.path(),
+        "vector.tar",
+        &[
+            ("manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+            ("data.lance", b"vector data"),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_vector", &url);
+    assert!(result.is_err(), "vector artifact should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_VECTOR_ARTIFACT"),
+        "error should contain ARCHIVE_VECTOR_ARTIFACT code, got: {}",
+        err_str
+    );
+}
+
+// --- R1: .faiss artifact rejected ---
+
+#[test]
+fn test_r1_faiss_artifact_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let url = write_archive_to_tar(
+        dir.path(),
+        "faiss.tar",
+        &[
+            ("manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+            ("index.faiss", b"faiss data"),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_faiss", &url);
+    assert!(result.is_err(), ".faiss artifact should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_VECTOR_ARTIFACT"),
+        "error should contain ARCHIVE_VECTOR_ARTIFACT code, got: {}",
+        err_str
+    );
+}
+
+// --- R1: file inside .lance directory rejected (P2) ---
+
+#[test]
+fn test_r1_file_inside_lance_dir_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    // LanceDB stores are directories: `mydb.lance/data.bin`.
+    // The child file doesn't end in `.lance`, so the old check missed it.
+    let url = write_archive_to_tar(
+        dir.path(),
+        "lance_dir.tar",
+        &[
+            ("manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+            ("mydb.lance/data.bin", b"vector data inside lance dir"),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_lance_dir", &url);
+    assert!(
+        result.is_err(),
+        "file inside .lance directory should be rejected"
+    );
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_VECTOR_ARTIFACT"),
+        "error should contain ARCHIVE_VECTOR_ARTIFACT, got: {}",
+        err_str
+    );
+}
+
+// --- R1: vectors.* artifact rejected ---
+
+#[test]
+fn test_r1_vectors_star_artifact_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let url = write_archive_to_tar(
+        dir.path(),
+        "vectors_star.tar",
+        &[
+            ("manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+            ("vectors.bin", b"vector data"),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_vectors_star", &url);
+    assert!(result.is_err(), "vectors.* artifact should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_VECTOR_ARTIFACT"),
+        "error should contain ARCHIVE_VECTOR_ARTIFACT code, got: {}",
+        err_str
+    );
+}
+
+// --- R1: embeddings.* artifact rejected ---
+
+#[test]
+fn test_r1_embeddings_star_artifact_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let url = write_archive_to_tar(
+        dir.path(),
+        "embeddings_star.tar",
+        &[
+            ("manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+            ("embeddings.bin", b"embedding data"),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_embeddings_star", &url);
+    assert!(result.is_err(), "embeddings.* artifact should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_VECTOR_ARTIFACT"),
+        "error should contain ARCHIVE_VECTOR_ARTIFACT code, got: {}",
+        err_str
+    );
+}
+
+// --- R1: duplicate NOTICES rejected ---
+
+#[test]
+fn test_r1_duplicate_notices_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let notices_data = b"notice text";
+    let url = write_archive_to_tar(
+        dir.path(),
+        "dup_notices.tar",
+        &[
+            ("manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+            ("NOTICES", notices_data),
+            ("subdir/NOTICES", notices_data),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_dup_notices", &url);
+    assert!(result.is_err(), "duplicate NOTICES should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_DUPLICATE_ENTRY"),
+        "error should contain ARCHIVE_DUPLICATE_ENTRY code, got: {}",
+        err_str
+    );
+}
+
+// --- R1: unsupported entry (symlink) rejected ---
+
+#[test]
+fn test_r1_symlink_entry_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let url = write_archive_to_tar_with_flags(
+        dir.path(),
+        "symlink.tar",
+        &[
+            ("manifest.json", test_manifest_json().as_bytes(), b'0'),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes(), b'0'),
+            // typeflag b'2' = symlink
+            ("link_to_manifest", b"manifest.json", b'2'),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_symlink", &url);
+    assert!(result.is_err(), "symlink entry should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_UNSUPPORTED_ENTRY"),
+        "error should contain ARCHIVE_UNSUPPORTED_ENTRY code, got: {}",
+        err_str
+    );
+}
+
+// --- R1: oversized entry rejected ---
+
+#[test]
+fn test_r1_oversized_entry_rejected() {
+    // Construct an entry that exceeds MAX_ENTRY_BYTES and verify rejection.
+    let oversized = vec![0u8; nowdocs::registry::MAX_ENTRY_BYTES as usize + 1];
+    let entries = vec![
+        (
+            "manifest.json".to_string(),
+            test_manifest_json().as_bytes().to_vec(),
+        ),
+        (
+            "chunks.jsonl".to_string(),
+            test_chunks_jsonl().as_bytes().to_vec(),
+        ),
+        ("big.bin".to_string(), oversized),
+    ];
+    let result = nowdocs::registry::validate_archive(&entries);
+    assert!(result.is_err(), "oversized entry should be rejected");
+    assert_eq!(result.unwrap_err().code, "ARCHIVE_TOO_LARGE");
+}
+
+// --- R1: error display includes code and hint ---
+
+#[test]
+fn test_r1_error_display_includes_code_and_hint() {
+    let err = nowdocs::errors::NowdocsError {
+        code: "TEST_CODE",
+        category: nowdocs::errors::ErrorCategory::Archive,
+        message: "test message".to_string(),
+        hint: "test hint".to_string(),
+    };
+    let display = format!("{}", err);
+    assert!(display.contains("TEST_CODE"), "display should include code");
+    assert!(display.contains("test hint"), "display should include hint");
+    assert!(
+        display.contains("next:"),
+        "display should include next: prefix"
+    );
+}
+
+// --- R1: valid archive still installs (regression) ---
+
+#[test]
+fn test_r1_valid_archive_installs() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "r1_valid_install";
+    let archive = make_tar_archive(dir.path());
+    let tar_path = dir.path().join("valid.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+
+    let url = format!("file://{}", tar_path.display());
+    nowdocs::registry::install(docset, &url).unwrap();
+
+    let mp = nowdocs::cache::manifest_path(docset);
+    assert!(mp.is_file(), "manifest should be installed");
+
+    let store = Store::open(docset).unwrap();
+    let chunks = store.dump_chunks().unwrap();
+    assert_eq!(chunks.len(), 2, "store should have 2 chunks");
+}
+
+// --- R1: validate_archive public API test ---
+
+#[test]
+fn test_r1_validate_archive_accepts_valid() {
+    let entries = vec![
+        (
+            "manifest.json".to_string(),
+            test_manifest_json().as_bytes().to_vec(),
+        ),
+        (
+            "chunks.jsonl".to_string(),
+            test_chunks_jsonl().as_bytes().to_vec(),
+        ),
+    ];
+    let result = nowdocs::registry::validate_archive(&entries);
+    assert!(
+        result.is_ok(),
+        "valid entries should pass: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_r1_validate_archive_rejects_missing_manifest() {
+    let entries = vec![(
+        "chunks.jsonl".to_string(),
+        test_chunks_jsonl().as_bytes().to_vec(),
+    )];
+    let result = nowdocs::registry::validate_archive(&entries);
+    assert!(result.is_err(), "missing manifest should fail");
+    let err = result.unwrap_err();
+    assert_eq!(err.code, "ARCHIVE_MISSING_MANIFEST");
+}
+
+#[test]
+fn test_r1_validate_archive_rejects_missing_chunks() {
+    let entries = vec![(
+        "manifest.json".to_string(),
+        test_manifest_json().as_bytes().to_vec(),
+    )];
+    let result = nowdocs::registry::validate_archive(&entries);
+    assert!(result.is_err(), "missing chunks should fail");
+    let err = result.unwrap_err();
+    assert_eq!(err.code, "ARCHIVE_MISSING_CHUNKS");
+}
