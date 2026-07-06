@@ -249,19 +249,19 @@ Suggested categories:
 Human message format:
 
 ```text
-error[ARCHIVE_MISSING_CHUNKS]: registry archive is missing chunks.jsonl
-why: nowdocs cannot build a searchable local docset without chunk text
-next: retry install, or report the broken registry release
+error[CACHE_DOCSET_INCOMPLETE]: installed docset is missing required cache files
+why: nowdocs cannot search a docset unless both manifest and store data are present
+next: run `nowdocs doctor --docset <name>` or reinstall the docset
 ```
 
 JSON message format for future commands:
 
 ```json
 {
-  "code": "ARCHIVE_MISSING_CHUNKS",
-  "category": "archive",
-  "message": "registry archive is missing chunks.jsonl",
-  "hint": "retry install, or report the broken registry release"
+  "code": "CACHE_DOCSET_INCOMPLETE",
+  "category": "cache",
+  "message": "installed docset is missing required cache files",
+  "hint": "run nowdocs doctor --docset <name> or reinstall the docset"
 }
 ```
 
@@ -410,7 +410,7 @@ This track does not include:
 
 ### 11.1 Confirmed decisions
 
-1. **First implementation slice:** ship R1 → R2 → R3 → U1 first: archive/error hardening, transactional install/update, read-only doctor diagnostics, and real `smoke` search. Defer cache repair polish, onboarding docs, and registry discovery until that foundation is working.
+1. **Implementation slicing:** archive/error hardening is handled separately. This PR covers the remaining slice: R2 transactional install/update, R3 read-only doctor diagnostics, and U1 real `smoke` search. Defer cache repair polish, onboarding docs, and registry discovery until that foundation is working.
 2. **Repair boundary:** `doctor --repair` only removes stale nowdocs-owned staging/rollback state in this track. It must not delete active docsets.
 3. **JSON stability:** `doctor --json` exists early, but its JSON contract is experimental until v1.0 except for the small top-level status/checks shape.
 4. **Smoke semantics:** `nowdocs smoke` runs a real retrieval path by default, including embedder load and possible first-run model download.

@@ -2,7 +2,7 @@
 
 > **Parent track:** `docs/superpowers/specs/2026-07-06-robustness-ux.md`
 > **Implementation plan:** `docs/superpowers/plans/2026-07-06-robustness-ux-plan.md`
-> **Depends on:** R1 archive validation + error taxonomy
+> **Depends on:** the external archive-validation + error-taxonomy implementation
 > **Stage:** R2 — fail-safe install/update state
 > **Difficulty:** 6/10 (medium-high). Main review risk is preserving valid active state across failures and platforms.
 > **Worktree rule:** implement from a dedicated git worktree and branch for R2, e.g. `../nowdocs-r2-transactional-install` on `fix/r2-transactional-install`.
@@ -11,7 +11,7 @@
 
 ## 0. Goal
 
-R2 prevents partial active cache state during `install` and `update`. It builds on R1 validation by writing a complete candidate docset into staging, verifying it, then promoting it to the active cache only after validation succeeds.
+R2 prevents partial active cache state during `install` and `update`. It assumes the separate archive-validation implementation already rejects unsafe archives before active writes. R2 writes a complete candidate docset into staging, verifies it, then promotes it to the active cache only after validation succeeds.
 
 The product requirement is fail-safe active state: bad archives, interrupted writes, or failed updates must not publish an invalid active docset.
 
@@ -33,7 +33,7 @@ The product requirement is fail-safe active state: bad archives, interrupted wri
 - **Estimated difficulty:** medium-high, 6/10.
 - **Expected implementation time:** 1-2 days for a Rust maintainer; possibly 2-3 days for an external coding agent including review fixes.
 - **Review risk:** high around destructive filesystem operations, rollback paths, Windows rename behavior, and not deleting valid active docsets.
-- **Required isolation:** independent git worktree and stage-specific branch. Do not share a dirty worktree with R1/R3/U1.
+- **Required isolation:** independent git worktree and stage-specific branch. Do not share a dirty worktree with R3/U1 or with the archive-validation implementation branch.
 
 ---
 
@@ -48,7 +48,7 @@ Expected:
 
 Allowed if helpful:
 
-- `src/errors.rs` / `src/diagnostics.rs` if introduced by R1
+- existing error/diagnostic module if introduced by the archive-validation implementation
 - helper tests dedicated to staging/rollback
 
 Out of scope:
@@ -85,7 +85,7 @@ R2 install flow:
 1. validate docset name.
 2. ensure cache layout.
 3. download/open archive.
-4. run R1 archive validation.
+4. run the existing archive-validation path.
 5. create unique staging directory.
 6. materialize manifest/license/notice and LanceDB store under staging, not active paths.
 7. reopen/verify staged manifest and store.

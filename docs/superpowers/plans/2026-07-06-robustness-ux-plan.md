@@ -15,7 +15,7 @@
 - Every task follows TDD: failing test → implementation → passing test → commit.
 - Every user-facing error added in this track must include a stable code or a clear next-step hint.
 - Do not run large model/download E2E tests by default unless already accepted in CI; mark expensive checks ignored or put them behind explicit scripts.
-- First implementation slice is R1 → R2 → R3 → U1. R4/U2/U3 follow after the fail-safe install and diagnostic path is working.
+- This PR tracks the remaining implementation slice: R2 → R3 → U1. The archive-validation foundation is handled separately and is a prerequisite for R2.
 - `doctor --repair` is staging/rollback cleanup only in this track; it must not delete active docsets.
 - `doctor --json` is experimental until v1.0 except for the top-level status/checks shape.
 - `smoke` is a real retrieval test and may load/download the model through the existing embedder path.
@@ -25,45 +25,9 @@
 
 ---
 
-## 1. Milestone R1 — Error taxonomy and archive validation foundation
+## 1. Prerequisite — external archive-validation foundation
 
-**Purpose:** make failure modes explicit before changing install/update behavior.
-
-**Files likely touched:**
-
-- `src/registry.rs`
-- `src/input.rs` or new `src/diagnostics.rs` / `src/errors.rs`
-- `src/lib.rs`
-- `tests/registry_tests.rs`
-- new `tests/diagnostics_tests.rs` if a new module is created
-
-**Tasks:**
-
-- [ ] R1.1 Add a small internal error-code representation for CLI-facing failures.
-  - Include category/code/message/hint.
-  - Keep compatibility with `anyhow::Result` at command boundaries.
-  - Tests assert formatting includes code and hint.
-
-- [ ] R1.2 Extract registry archive validation before active writes.
-  - Required entries: `manifest.json`, `chunks.jsonl`.
-  - Reject absolute paths and `..` components.
-  - Reject symlinks/hardlinks/device entries.
-  - Reject vector artifacts: `.lance`, `.faiss`, `vectors.*`, `embeddings.*`.
-  - Reject duplicate `manifest.json` / `chunks.jsonl` / `LICENSE` / `NOTICES`.
-
-- [ ] R1.3 Add archive size/count guardrails.
-  - Pick conservative constants after checking seed crate sizes.
-  - Tests cover oversized entry using synthetic tar metadata if possible.
-
-- [ ] R1.4 Improve install parse errors.
-  - Missing manifest/chunks should say the archive is not a valid nowdocs registry archive.
-  - External URL rejection keeps current allowlist behavior.
-
-**Verification:**
-
-- `cargo test registry_tests -- --test-threads=1`
-- `cargo test diagnostics_tests -- --test-threads=1` if added
-- `cargo fmt --check`
+Archive validation + error taxonomy are intentionally not specified in this PR. Treat that separate implementation as an external prerequisite that must be merged before R2 starts. R2 may rely on an existing validation path that rejects unsafe archives before active cache writes.
 
 ---
 
@@ -349,12 +313,11 @@ Before calling robustness/UX hardening complete:
 
 ## 9. Suggested task order
 
-1. **First slice:** R1 archive validation + error taxonomy.
-2. **First slice:** R2 transactional install/update.
-3. **First slice:** R3 doctor read-only diagnostics.
-4. **First slice:** U1 smoke command and output improvements.
-5. R4 cache status/repair.
-6. U2 docs/onboarding.
-7. U3 registry discovery once index source is settled.
+1. **Remaining slice:** R2 transactional install/update.
+2. **Remaining slice:** R3 doctor read-only diagnostics.
+3. **Remaining slice:** U1 smoke command and output improvements.
+4. R4 cache status/repair.
+5. U2 docs/onboarding.
+6. U3 registry discovery once index source is settled.
 
-This order is confirmed: front-load data-safety work, expose diagnostics, then improve the first-run experience. Do not start R4/U2/U3 before the first slice has a working implementation and tests unless explicitly reprioritized.
+This order is confirmed: after the archive-validation prerequisite lands, front-load fail-safe install/update, expose diagnostics, then improve the first-run experience. Do not start R4/U2/U3 before the remaining slice has a working implementation and tests unless explicitly reprioritized.
