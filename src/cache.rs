@@ -103,7 +103,9 @@ pub fn rollback_path(docset: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    cache_root().join("rollback").join(format!("{}-{}-{}", docset, pid, timestamp))
+    cache_root()
+        .join("rollback")
+        .join(format!("{}-{}-{}", docset, pid, timestamp))
 }
 
 /// Create the cache tree if absent and gate on the layout version.

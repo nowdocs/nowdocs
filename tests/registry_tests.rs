@@ -1,7 +1,7 @@
+use nowdocs::cache;
 use nowdocs::chunker::{Chunk, ChunkType};
 use nowdocs::manifest;
 use nowdocs::store::Store;
-use nowdocs::cache;
 
 // These tests set XDG_CACHE_HOME and must not run in parallel (dirs::cache_dir
 // reads the env var, but parallel set_var creates a race).
@@ -475,14 +475,14 @@ fn test_staging_path_stays_under_cache_root() {
 
     let docset = "test_staging_path";
     let staging_path = cache::new_staging_path(docset);
-    
+
     // Staging path should be under cache root
     assert!(
         cache::is_under_cache_root(&staging_path),
         "staging path should be under cache root, got: {:?}",
         staging_path
     );
-    
+
     // Staging path should contain docset name
     assert!(
         staging_path.to_string_lossy().contains(docset),
@@ -496,23 +496,26 @@ fn test_invalid_archive_install_leaves_no_active_manifest_or_store() {
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
     let docset = "test_invalid_install";
-    
+
     // Create an invalid archive (not a real tar)
     let invalid_archive = b"this is not a valid tar archive";
     let tar_path = dir.path().join("invalid.tar");
     std::fs::write(&tar_path, invalid_archive).unwrap();
-    
+
     let url = format!("file://{}", tar_path.display());
     let result = nowdocs::registry::install(docset, &url);
-    
+
     // Install should fail
     assert!(result.is_err(), "invalid archive should fail install");
-    
+
     // No active manifest or store should be created
     let mp = cache::manifest_path(docset);
     let db = cache::db_path(docset);
     assert!(!mp.is_file(), "invalid install should not create manifest");
-    assert!(!db.exists(), "invalid install should not create db directory");
+    assert!(
+        !db.exists(),
+        "invalid install should not create db directory"
+    );
 }
 
 #[test]
@@ -524,21 +527,21 @@ fn test_successful_install_promotes_active_manifest_and_store() {
     let archive = make_tar_archive(dir.path());
     let tar_path = dir.path().join("archive.tar");
     std::fs::write(&tar_path, &archive).unwrap();
-    
+
     let url = format!("file://{}", tar_path.display());
     nowdocs::registry::install(docset, &url).unwrap();
-    
+
     // Active manifest and store should exist
     let mp = cache::manifest_path(docset);
     let db = cache::db_path(docset);
     assert!(mp.is_file(), "successful install should create manifest");
     assert!(db.exists(), "successful install should create db directory");
-    
+
     // Manifest should be valid
     let raw = std::fs::read_to_string(&mp).unwrap();
     let m = manifest::parse_manifest(&raw).unwrap();
     assert_eq!(m.docset, "test-docset");
-    
+
     // Store should have chunks
     let store = Store::open(docset).unwrap();
     let chunks = store.dump_chunks().unwrap();
@@ -551,41 +554,53 @@ fn test_failed_update_preserves_old_active_manifest_and_store() {
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
     let docset = "test_failed_update";
-    
+
     // First, install a valid docset
     let archive = make_tar_archive(dir.path());
     let tar_path = dir.path().join("good.tar");
     std::fs::write(&tar_path, &archive).unwrap();
-    
+
     let url = format!("file://{}", tar_path.display());
     nowdocs::registry::install(docset, &url).unwrap();
-    
+
     // Verify initial install
     let mp = cache::manifest_path(docset);
     let raw = std::fs::read_to_string(&mp).unwrap();
     let m = manifest::parse_manifest(&raw).unwrap();
     assert_eq!(m.doc_version, "1.0.0");
-    
+
     // Now try to update with an invalid archive
     let invalid_archive = b"this is not a valid tar archive";
     let bad_tar_path = dir.path().join("bad.tar");
     std::fs::write(&bad_tar_path, invalid_archive).unwrap();
-    
-    unsafe { std::env::set_var("NOWDOCS_TEST_URL", format!("file://{}", bad_tar_path.display())) };
+
+    unsafe {
+        std::env::set_var(
+            "NOWDOCS_TEST_URL",
+            format!("file://{}", bad_tar_path.display()),
+        )
+    };
     let result = nowdocs::registry::update(docset);
-    
+
     // Update should fail
     assert!(result.is_err(), "update with invalid archive should fail");
-    
+
     // Old manifest should still be present and valid
     let raw = std::fs::read_to_string(&mp).unwrap();
     let m = manifest::parse_manifest(&raw).unwrap();
-    assert_eq!(m.doc_version, "1.0.0", "old manifest should be preserved after failed update");
-    
+    assert_eq!(
+        m.doc_version, "1.0.0",
+        "old manifest should be preserved after failed update"
+    );
+
     // Old store should still be accessible
     let store = Store::open(docset).unwrap();
     let chunks = store.dump_chunks().unwrap();
-    assert_eq!(chunks.len(), 2, "old store should be preserved after failed update");
+    assert_eq!(
+        chunks.len(),
+        2,
+        "old store should be preserved after failed update"
+    );
 }
 
 #[test]
@@ -594,15 +609,15 @@ fn test_successful_update_cleans_rollback() {
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
     let docset = "test_update_cleanup";
-    
+
     // First, install a valid docset
     let archive = make_tar_archive(dir.path());
     let tar_path = dir.path().join("good.tar");
     std::fs::write(&tar_path, &archive).unwrap();
-    
+
     let url = format!("file://{}", tar_path.display());
     nowdocs::registry::install(docset, &url).unwrap();
-    
+
     // Create a v2 archive
     let v2_json = test_manifest_json().replace("1.0.0", "2.0.0");
     let v2_chunks = r#"{"idx":0,"heading_path":"Updated","source_url":"https://example.com/v2","api_version":null,"chunk_type":"Info","text":"updated content"}
@@ -623,11 +638,16 @@ fn test_successful_update_cleans_rollback() {
 
     let v2_tar_path = dir.path().join("v2.tar");
     std::fs::write(&v2_tar_path, &v2_archive).unwrap();
-    
+
     // Update to v2
-    unsafe { std::env::set_var("NOWDOCS_TEST_URL", format!("file://{}", v2_tar_path.display())) };
+    unsafe {
+        std::env::set_var(
+            "NOWDOCS_TEST_URL",
+            format!("file://{}", v2_tar_path.display()),
+        )
+    };
     nowdocs::registry::update(docset).unwrap();
-    
+
     // Check that rollback directories are cleaned up
     let rollback_root = cache::cache_root().join("rollback");
     if rollback_root.exists() {
@@ -641,7 +661,7 @@ fn test_successful_update_cleans_rollback() {
             "rollback directories should be cleaned up after successful update"
         );
     }
-    
+
     // Verify update was successful
     let mp = cache::manifest_path(docset);
     let raw = std::fs::read_to_string(&mp).unwrap();
@@ -659,9 +679,16 @@ fn test_stale_staging_detection() {
     std::fs::create_dir_all(&staging_root).unwrap();
     let stale_dir = staging_root.join("test-stale-123-456");
     std::fs::create_dir(&stale_dir).unwrap();
-    
+
     // List staging directories
     let staging_dirs = cache::list_staging_dirs().unwrap();
-    assert_eq!(staging_dirs.len(), 1, "should detect one stale staging directory");
-    assert_eq!(staging_dirs[0], stale_dir, "should detect the correct stale staging directory");
+    assert_eq!(
+        staging_dirs.len(),
+        1,
+        "should detect one stale staging directory"
+    );
+    assert_eq!(
+        staging_dirs[0], stale_dir,
+        "should detect the correct stale staging directory"
+    );
 }
