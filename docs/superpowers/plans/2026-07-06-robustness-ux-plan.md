@@ -44,28 +44,28 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 
 **Tasks:**
 
-- [ ] R2.1 Add staging path helpers.
+- [x] R2.1 Add staging path helpers.
   - `cache::staging_root()`.
   - unique staging path for docset + pid + timestamp.
   - tests ensure staging stays under cache root.
 
-- [ ] R2.2 Implement install-to-staging.
+- [x] R2.2 Implement install-to-staging.
   - Download/open archive into staging.
   - Validate archive before writing active paths.
   - Materialize manifest/license/chunks/store under staging.
   - Reopen staged manifest/store for final verification.
 
-- [ ] R2.3 Implement atomic promote.
+- [x] R2.3 Implement atomic promote.
   - Promote staged docset into active cache only after verification.
   - If replacing, keep rollback until new active is verified.
   - Use rename where possible; allow copy-verify-swap on Windows if directory replacement is not atomic.
   - Clean rollback on success.
 
-- [ ] R2.4 Implement update rollback semantics.
+- [x] R2.4 Implement update rollback semantics.
   - Failed update preserves old active manifest/store.
   - Tests simulate bad replacement archive after a good install.
 
-- [ ] R2.5 Add stale staging detection primitive.
+- [x] R2.5 Add stale staging detection primitive.
   - No deletion yet unless R4 implements cache cleanup.
 
 **Verification:**
