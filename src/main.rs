@@ -72,6 +72,63 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             println!("updated {docset}");
             Ok(())
         }
+        Commands::Doctor {
+            json,
+            docset,
+            mcp,
+            model,
+            repair,
+        } => {
+            let output = if repair {
+                nowdocs::doctor::run_repair()
+            } else if let Some(docset_name) = docset {
+                nowdocs::doctor::run_docset_checks(&docset_name)
+            } else if mcp {
+                nowdocs::doctor::run_mcp_check()
+            } else if model {
+                nowdocs::doctor::run_model_check()
+            } else {
+                nowdocs::doctor::run_default_checks()
+            };
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            } else {
+                print_doctor_output(&output);
+            }
+
+            // Exit with non-zero if any check failed
+            if output.status == nowdocs::doctor::Severity::Fail {
+                std::process::exit(1);
+            }
+
+            Ok(())
+        }
+    }
+}
+
+fn print_doctor_output(output: &nowdocs::doctor::DoctorOutput) {
+    use nowdocs::doctor::Severity;
+
+    let status_str = match output.status {
+        Severity::Ok => "ok",
+        Severity::Warn => "warn",
+        Severity::Fail => "fail",
+    };
+
+    println!("doctor status: {}", status_str);
+    println!("---");
+
+    for check in &output.checks {
+        let severity_str = match check.severity {
+            Severity::Ok => "  ok",
+            Severity::Warn => "warn",
+            Severity::Fail => "FAIL",
+        };
+        println!("[{}] {}: {}", severity_str, check.id, check.message);
+        if let Some(remediation) = &check.remediation {
+            println!("      hint: {}", remediation);
+        }
     }
 }
 

@@ -50,4 +50,22 @@ pub enum Commands {
     ListInstalled,
     /// Update a docset to the latest registry version
     Update { docset: String },
+    /// Run read-only diagnostics on nowdocs environment
+    Doctor {
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+        /// Deep-check a specific docset
+        #[arg(long)]
+        docset: Option<String>,
+        /// Run MCP smoke test (in-process, no network)
+        #[arg(long)]
+        mcp: bool,
+        /// Check model cache state
+        #[arg(long)]
+        model: bool,
+        /// Repair mode (not implemented yet, staging cleanup only)
+        #[arg(long)]
+        repair: bool,
+    },
 }
