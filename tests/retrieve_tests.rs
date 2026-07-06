@@ -24,6 +24,7 @@ fn rchunk(idx: u32) -> ResultChunk {
         api_version: None,
         chunk_type: ChunkType::Info,
         text: String::new(),
+        score: None,
     }
 }
 
@@ -37,6 +38,7 @@ fn test_search_smoke() {
             api_version: None,
             chunk_type: ChunkType::Info,
             text: "hello".into(),
+            score: None,
         },
         SearchResult {
             chunks: vec![],

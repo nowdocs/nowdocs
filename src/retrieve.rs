@@ -24,6 +24,7 @@ pub struct ResultChunk {
     pub api_version: Option<String>,
     pub chunk_type: ChunkType,
     pub text: String,
+    pub score: Option<f32>,
 }
 
 pub fn search(
@@ -85,12 +86,17 @@ pub fn search(
     let chunk_count = manifest.source.chunk_count as u32;
     let window_ids = window_ids_for(&hits, chunk_count);
 
+    // Build score map from hybrid hits so neighbors can carry None.
+    let score_map: std::collections::HashMap<u32, f32> =
+        hits.iter().map(|h| (h.chunk_idx, h.score)).collect();
+
     // Fetch window chunks by chunk_idx (store returns them idx-ascending), then
     // restore the relevance-first window order.
     let window_hits = store.fetch_by_idx(&window_ids)?;
     let window_chunks: Vec<ResultChunk> = window_hits
         .into_iter()
         .map(|h| ResultChunk {
+            score: score_map.get(&h.chunk_idx).copied(),
             chunk_idx: h.chunk_idx,
             heading_path: h.heading_path,
             source_url: h.source_url,
