@@ -247,7 +247,7 @@ fn verify_staging(staging_path: &Path) -> Result<()> {
 /// Promote staging to active cache.
 fn promote_staging(docset: &str, staging_path: &Path) -> Result<()> {
     let active_manifest = cache::manifest_path(docset);
-    let active_db = cache::db_path(docset);
+    let _active_db = cache::db_path(docset);
     let active_license = cache::license_text_path(docset);
 
     // Ensure parent directories exist
