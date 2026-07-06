@@ -126,12 +126,17 @@ fn extract_tar<R: Read>(reader: &mut R) -> Result<Vec<(String, Vec<u8>)>> {
                 b'7' => "contiguous file",
                 _ => "unknown",
             };
-            anyhow::bail!(
-                "archive contains unsupported entry type '{}' ({}): {}",
-                typeflag as char,
-                type_name,
-                name
-            );
+            return Err(anyhow::anyhow!(
+                "{}",
+                archive_error(
+                    "ARCHIVE_UNSUPPORTED_ENTRY",
+                    format!(
+                        "archive contains unsupported entry type '{}' ({}): {}",
+                        typeflag as char, type_name, name
+                    ),
+                    "report the broken registry release",
+                )
+            ));
         }
     }
     Ok(files)
@@ -155,11 +160,11 @@ fn parse_octal(s: &[u8]) -> Option<u64> {
 // --- R1: Archive validation guardrails ---
 
 /// Max total archive bytes (512 MiB).
-const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
 /// Max single entry bytes (256 MiB).
-const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
+pub const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
 /// Max entry count.
-const MAX_ENTRY_COUNT: usize = 100_000;
+pub const MAX_ENTRY_COUNT: usize = 100_000;
 
 /// Basenames that must appear at most once in the archive.
 const DUPLICATE_GUARD_BASENAMES: &[&str] = &["manifest.json", "chunks.jsonl", "LICENSE", "NOTICES"];

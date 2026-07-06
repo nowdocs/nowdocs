@@ -790,8 +790,8 @@ fn test_r1_symlink_entry_rejected() {
     assert!(result.is_err(), "symlink entry should be rejected");
     let err_str = format!("{}", result.unwrap_err());
     assert!(
-        err_str.contains("unsupported entry type") || err_str.contains("symlink"),
-        "error should mention unsupported entry type or symlink, got: {}",
+        err_str.contains("ARCHIVE_UNSUPPORTED_ENTRY"),
+        "error should contain ARCHIVE_UNSUPPORTED_ENTRY code, got: {}",
         err_str
     );
 }
@@ -800,12 +800,8 @@ fn test_r1_symlink_entry_rejected() {
 
 #[test]
 fn test_r1_oversized_entry_rejected() {
-    let dir = tempfile::tempdir().unwrap();
-    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
-
-    // Create a "manifest" that exceeds the per-entry size limit.
-    // MAX_ENTRY_BYTES = 256 MiB. We can't create a 256 MiB file easily in a test,
-    // so we test the guardrail function directly via validate_archive.
+    // Construct an entry that exceeds MAX_ENTRY_BYTES and verify rejection.
+    let oversized = vec![0u8; nowdocs::registry::MAX_ENTRY_BYTES as usize + 1];
     let entries = vec![
         (
             "manifest.json".to_string(),
@@ -815,13 +811,11 @@ fn test_r1_oversized_entry_rejected() {
             "chunks.jsonl".to_string(),
             test_chunks_jsonl().as_bytes().to_vec(),
         ),
+        ("big.bin".to_string(), oversized),
     ];
-
     let result = nowdocs::registry::validate_archive(&entries);
-    assert!(
-        result.is_ok(),
-        "valid archive entries should pass validation"
-    );
+    assert!(result.is_err(), "oversized entry should be rejected");
+    assert_eq!(result.unwrap_err().code, "ARCHIVE_TOO_LARGE");
 }
 
 // --- R1: error display includes code and hint ---
