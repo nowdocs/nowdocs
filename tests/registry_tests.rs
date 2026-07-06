@@ -768,6 +768,62 @@ fn test_r1_vectors_star_artifact_rejected() {
     );
 }
 
+// --- R1: embeddings.* artifact rejected ---
+
+#[test]
+fn test_r1_embeddings_star_artifact_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let url = write_archive_to_tar(
+        dir.path(),
+        "embeddings_star.tar",
+        &[
+            ("manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+            ("embeddings.bin", b"embedding data"),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_embeddings_star", &url);
+    assert!(result.is_err(), "embeddings.* artifact should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_VECTOR_ARTIFACT"),
+        "error should contain ARCHIVE_VECTOR_ARTIFACT code, got: {}",
+        err_str
+    );
+}
+
+// --- R1: duplicate NOTICES rejected ---
+
+#[test]
+fn test_r1_duplicate_notices_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let notices_data = b"notice text";
+    let url = write_archive_to_tar(
+        dir.path(),
+        "dup_notices.tar",
+        &[
+            ("manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+            ("NOTICES", notices_data),
+            ("subdir/NOTICES", notices_data),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_dup_notices", &url);
+    assert!(result.is_err(), "duplicate NOTICES should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_DUPLICATE_ENTRY"),
+        "error should contain ARCHIVE_DUPLICATE_ENTRY code, got: {}",
+        err_str
+    );
+}
+
 // --- R1: unsupported entry (symlink) rejected ---
 
 #[test]
