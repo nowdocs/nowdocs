@@ -187,15 +187,13 @@ pub fn run_docset_checks(docset: &str) -> DoctorOutput {
 
 /// Run MCP smoke test (in-process, no network).
 pub fn run_mcp_check() -> DoctorOutput {
-    let checks = vec![
-        Check {
-            id: "mcp-handler".to_string(),
-            severity: Severity::Ok,
-            message: "MCP handler is available".to_string(),
-            remediation: None,
-        }
-    ];
-    
+    let checks = vec![Check {
+        id: "mcp-handler".to_string(),
+        severity: Severity::Ok,
+        message: "MCP handler is available".to_string(),
+        remediation: None,
+    }];
+
     DoctorOutput {
         status: Severity::Ok,
         checks,
@@ -233,15 +231,13 @@ pub fn run_model_check() -> DoctorOutput {
 
 /// Run repair mode (staging cleanup only).
 pub fn run_repair() -> DoctorOutput {
-    let checks = vec![
-        Check {
-            id: "repair-mode".to_string(),
-            severity: Severity::Warn,
-            message: "Repair mode is not fully implemented yet. Only staging cleanup is available."
-                .to_string(),
-            remediation: Some("Use `nowdocs cache clean-staging` when available (R4)".to_string()),
-        }
-    ];
+    let checks = vec![Check {
+        id: "repair-mode".to_string(),
+        severity: Severity::Warn,
+        message: "Repair mode is not fully implemented yet. Only staging cleanup is available."
+            .to_string(),
+        remediation: Some("Use `nowdocs cache clean-staging` when available (R4)".to_string()),
+    }];
 
     DoctorOutput {
         status: Severity::Warn,
