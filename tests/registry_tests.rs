@@ -1,5 +1,4 @@
 use nowdocs::chunker::{Chunk, ChunkType};
-use nowdocs::errors::NowdocsError;
 use nowdocs::manifest;
 use nowdocs::store::Store;
 
