@@ -284,3 +284,154 @@ fn test_install_shows_next_step_hint() {
         "install output should suggest next step (smoke), got: {stdout}"
     );
 }
+
+// Test: install output includes version/chunks/license metadata
+#[test]
+fn test_install_shows_metadata() {
+    let cache = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let tar = write_tarball(cache.path(), "1.0.0");
+    let url = format!("file://{}", tar.display());
+
+    let out =
+        run_nowdocs_with_test_url(cwd.path(), cache.path(), &url, &["install", "meta-test-99"]);
+    assert!(out.status.success(), "install failed");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("1.0.0"),
+        "install output should show version, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("chunks"),
+        "install output should show chunk count, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("MIT"),
+        "install output should show license, got: {stdout}"
+    );
+}
+
+// Test: list-installed shows table with version/chunks/license columns
+#[test]
+fn test_list_installed_shows_table() {
+    let cache = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let tar = write_tarball(cache.path(), "2.1.0");
+    let url = format!("file://{}", tar.display());
+
+    let out = run_nowdocs_with_test_url(
+        cwd.path(),
+        cache.path(),
+        &url,
+        &["install", "table-test-77"],
+    );
+    assert!(out.status.success());
+
+    let out = run_nowdocs(cwd.path(), cache.path(), &["list-installed"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("DOCSET"),
+        "list-installed should have header, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("VERSION"),
+        "list-installed should have VERSION column, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("table-test-77"),
+        "list-installed should show docset name, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("2.1.0"),
+        "list-installed should show version, got: {stdout}"
+    );
+}
+
+// Test: share output includes no-vector reminder
+#[test]
+fn test_share_shows_no_vector_reminder() {
+    let cache = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let tar = write_tarball(cache.path(), "1.0.0");
+    let url = format!("file://{}", tar.display());
+
+    let out = run_nowdocs_with_test_url(
+        cwd.path(),
+        cache.path(),
+        &url,
+        &["install", "vector-test-55"],
+    );
+    assert!(out.status.success());
+
+    let out = run_nowdocs(cwd.path(), cache.path(), &["share", "vector-test-55"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("vectors excluded") || stdout.contains("no-vector"),
+        "share output should remind about no vectors, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("nowdocs-registry"),
+        "share output should mention registry PR, got: {stdout}"
+    );
+}
+
+// Test: update output says "updated" not "installed"
+#[test]
+fn test_update_says_updated_not_installed() {
+    let cache = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let v1 = write_tarball(cache.path(), "1.0.0");
+    let v1_url = format!("file://{}", v1.display());
+
+    // install v1
+    let out = run_nowdocs_with_test_url(
+        cwd.path(),
+        cache.path(),
+        &v1_url,
+        &["install", "upd-verb-88"],
+    );
+    assert!(out.status.success());
+
+    // update to v2
+    let v2 = write_tarball(cache.path(), "2.0.0");
+    let v2_url = format!("file://{}", v2.display());
+    let out = run_nowdocs_with_test_url(
+        cwd.path(),
+        cache.path(),
+        &v2_url,
+        &["update", "upd-verb-88"],
+    );
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("updated"),
+        "update output should say 'updated', got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("installed"),
+        "update output should NOT say 'installed', got: {stdout}"
+    );
+}
+
+// Test: list-installed shows "broken" for unparseable manifest
+#[test]
+fn test_list_installed_shows_broken_for_bad_manifest() {
+    let cache = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+
+    // Create a .lance directory and a broken manifest
+    let db_dir = cache.path().join("nowdocs").join("db");
+    std::fs::create_dir_all(db_dir.join("bad-docset.lance")).unwrap();
+    let manifest_path = db_dir.join("bad-docset.manifest.json");
+    std::fs::write(&manifest_path, "{ invalid json !!!").unwrap();
+
+    let out = run_nowdocs(cwd.path(), cache.path(), &["list-installed"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("broken"),
+        "list-installed should show 'broken' for bad manifest, got: {stdout}"
+    );
+}

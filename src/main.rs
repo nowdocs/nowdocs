@@ -21,8 +21,7 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
         Commands::Install { docset } => {
             let url = registry_url_for(&docset);
             nowdocs::registry::install(&docset, &url)?;
-            println!("installed {docset}");
-            println!("next: nowdocs smoke {docset}");
+            print_install_success(&docset);
             Ok(())
         }
         Commands::Ingest {
@@ -42,8 +41,7 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
                 entry_url: entry_url.unwrap_or_default(),
             };
             let stats = nowdocs::ingest::ingest_dir(Path::new(&dir), &name, &meta)?;
-            println!("ingested {} files, {} chunks", stats.files, stats.chunks);
-            println!("next: nowdocs smoke {name}");
+            print_ingest_success(&name, stats.files, stats.chunks);
             Ok(())
         }
         Commands::Share { docset, out_dir } => {
@@ -53,7 +51,8 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             };
             let product = nowdocs::registry::share(&docset, &out_dir)?;
             println!("wrote {}", product.display());
-            println!("next: submit to nowdocs-registry via PR");
+            println!("vectors excluded (text + manifest only)");
+            println!("next: submit PR to https://github.com/nowdocs-registry");
             Ok(())
         }
         Commands::Uninstall { docset } => {
@@ -66,14 +65,22 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             if docsets.is_empty() {
                 println!("no docsets installed");
             } else {
-                println!("{}", docsets.join(", "));
+                println!(
+                    "{:<24} {:<10} {:<8} {:<12} STATUS",
+                    "DOCSET", "VERSION", "CHUNKS", "LICENSE"
+                );
+                for d in &docsets {
+                    println!(
+                        "{:<24} {:<10} {:<8} {:<12} {}",
+                        d.name, d.version, d.chunks, d.license, d.status
+                    );
+                }
             }
             Ok(())
         }
         Commands::Update { docset } => {
             nowdocs::registry::update(&docset)?;
-            println!("updated {docset}");
-            println!("next: nowdocs smoke {docset}");
+            print_update_success(&docset);
             Ok(())
         }
         Commands::Smoke {
@@ -181,22 +188,92 @@ fn print_doctor_output(output: &nowdocs::doctor::DoctorOutput) {
     }
 }
 
-fn list_installed() -> std::io::Result<Vec<String>> {
+/// Read manifest metadata for a docset, returning (version, chunk_count, license).
+fn read_docset_meta(docset: &str) -> (String, String, String) {
+    let manifest_path = nowdocs::cache::manifest_path(docset);
+    if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
+        if let Ok(m) = nowdocs::manifest::parse_manifest(&raw) {
+            return (
+                m.doc_version,
+                m.source.chunk_count.to_string(),
+                m.legal.license,
+            );
+        }
+    }
+    ("?".into(), "?".into(), "?".into())
+}
+
+/// Check if a docset manifest parses and validates successfully.
+fn is_docset_healthy(docset: &str) -> bool {
+    let manifest_path = nowdocs::cache::manifest_path(docset);
+    if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
+        if let Ok(m) = nowdocs::manifest::parse_manifest(&raw) {
+            return nowdocs::manifest::validate(&m).is_ok();
+        }
+    }
+    false
+}
+
+/// Print enriched success output after install.
+fn print_install_success(docset: &str) {
+    let (version, chunks, license) = read_docset_meta(docset);
+    println!("installed {docset} v{version} ({chunks} chunks, {license})");
+    println!("next: nowdocs smoke {docset}");
+}
+
+/// Print enriched success output after update.
+fn print_update_success(docset: &str) {
+    let (version, chunks, license) = read_docset_meta(docset);
+    println!("updated {docset} v{version} ({chunks} chunks, {license})");
+    println!("next: nowdocs smoke {docset}");
+}
+
+/// Print enriched success output after ingest.
+fn print_ingest_success(docset: &str, files: u32, chunks: u32) {
+    let (_, _, license) = read_docset_meta(docset);
+    println!("ingested {docset}: {files} files, {chunks} chunks ({license})");
+    println!("next: nowdocs smoke {docset}");
+}
+
+/// List installed docsets with metadata.
+struct InstalledDocset {
+    name: String,
+    version: String,
+    chunks: String,
+    license: String,
+    status: String,
+}
+
+fn list_installed() -> std::io::Result<Vec<InstalledDocset>> {
     let db_dir = nowdocs::cache::cache_root().join("db");
-    let mut docsets: Vec<String> = Vec::new();
+    let mut docsets: Vec<InstalledDocset> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&db_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if let Some(stem) = name.strip_suffix(".lance") {
-                        docsets.push(stem.to_string());
+                        let (version, chunks, license) = read_docset_meta(stem);
+                        let status = if is_docset_healthy(stem) {
+                            "ok"
+                        } else if nowdocs::cache::manifest_path(stem).is_file() {
+                            "broken"
+                        } else {
+                            "no-manifest"
+                        };
+                        docsets.push(InstalledDocset {
+                            name: stem.to_string(),
+                            version,
+                            chunks,
+                            license,
+                            status: status.to_string(),
+                        });
                     }
                 }
             }
         }
     }
-    docsets.sort();
+    docsets.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(docsets)
 }
 

@@ -107,8 +107,8 @@ pub fn format_human(result: &SmokeResult) -> String {
     ));
     for hit in &result.results {
         out.push_str(&format!(
-            "{}. heading=\"{}\" source={} chunk={}\n   {}\n",
-            hit.rank, hit.heading, hit.source_url, hit.chunk_idx, hit.preview
+            "{}. score={:.2} heading=\"{}\" source={} chunk={}\n   {}\n",
+            hit.rank, hit.score, hit.heading, hit.source_url, hit.chunk_idx, hit.preview
         ));
     }
     out
