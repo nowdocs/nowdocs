@@ -128,11 +128,105 @@ pub fn ingest_dir(dir: &Path, docset: &str, meta: &IngestMeta) -> Result<IngestS
     })
 }
 
+/// Rebuild an existing docset from the text already stored in LanceDB.
+///
+/// This is the one-command escape hatch for schema/embedder changes: dump the
+/// sanitized text+metadata rows, remove the old physical table, re-embed with
+/// the current model, recreate the table with the current Arrow schema, and
+/// rewrite the manifest with current schema/embedder provenance.
+pub fn rebuild_docset(docset: &str) -> Result<IngestStats> {
+    let docset = input::validate_docset(docset)?;
+    cache::ensure_layout()?;
+
+    let manifest_path = cache::manifest_path(&docset);
+    let db_path = cache::db_path(&docset);
+    if !manifest_path.is_file() || !db_path.exists() {
+        anyhow::bail!(
+            "docset `{}` is not installed; install or ingest it before running `nowdocs rebuild {}`",
+            docset,
+            docset
+        );
+    }
+
+    let raw = std::fs::read_to_string(&manifest_path).ok();
+    let old_manifest = raw
+        .as_deref()
+        .and_then(|r| manifest::parse_manifest(r).ok());
+
+    let store = Store::open(&docset)?;
+    let chunks = store.dump_chunks()?;
+    drop(store);
+
+    // Rebuild must be non-destructive on embedder/model failures. Compute the
+    // replacement vectors before deleting the active Lance table so an offline
+    // or corrupt model cache does not turn a recoverable rebuild attempt into
+    // data loss.
+    let vectors = if chunks.is_empty() {
+        Vec::new()
+    } else {
+        let emb = embedder::Embedder::load()?;
+        chunks
+            .iter()
+            .map(|c| emb.embed(&c.text))
+            .collect::<Result<Vec<_>>>()?
+    };
+
+    wipe_store(&docset)?;
+
+    if !chunks.is_empty() {
+        let store = Store::open(&docset)?;
+        store.insert(&chunks, &vectors)?;
+    } else {
+        let _ = Store::open(&docset)?;
+    }
+
+    let meta = raw
+        .as_deref()
+        .and_then(|r| {
+            let v: serde_json::Value = serde_json::from_str(r).ok()?;
+            Some(IngestMeta {
+                license: v["legal"]["license"].as_str().unwrap_or("MIT").to_string(),
+                copyright_holder: v["legal"]["copyright_holder"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+                attribution: v["legal"]["attribution"].as_str().unwrap_or("").to_string(),
+                source_url: v["source"]["source_url"].as_str().unwrap_or("").to_string(),
+                entry_url: v["source"]["entry_url"].as_str().unwrap_or("").to_string(),
+            })
+        })
+        .or_else(|| {
+            old_manifest.as_ref().map(|m| IngestMeta {
+                license: m.legal.license.clone(),
+                copyright_holder: m.legal.copyright_holder.clone(),
+                attribution: m.legal.attribution.clone(),
+                source_url: m.source.source_url.clone(),
+                entry_url: m.source.entry_url.clone(),
+            })
+        })
+        .unwrap_or_default();
+    let mut new_manifest = build_manifest(&docset, chunks.len() as u32, &meta);
+    if let Some(old) = old_manifest {
+        new_manifest.doc_version = old.doc_version;
+        new_manifest.refresh_strategy = old.refresh_strategy;
+    }
+    manifest::validate(&new_manifest)?;
+    let manifest_file_path = cache::manifest_path(&docset);
+    let tmp = manifest_file_path.with_extension("tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(&new_manifest)?)?;
+    std::fs::rename(&tmp, &manifest_file_path)?;
+
+    Ok(IngestStats {
+        files: 0,
+        chunks: chunks.len() as u32,
+    })
+}
+
 /// Remove an existing docset's lance table so the next `Store::open` recreates
 /// it empty. Ingest is full-rebuild semantics — see `ingest_dir`. A missing
 /// path is a no-op (first ingest); an existing path is removed whether it is a
 /// directory (the normal `.lance` case) or a stray file.
-fn wipe_store(docset: &str) -> Result<()> {
+pub fn wipe_store(docset: &str) -> Result<()> {
     let path = cache::db_path(docset);
     if !path.exists() {
         return Ok(());

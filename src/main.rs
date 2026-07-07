@@ -83,6 +83,12 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             print_update_success(&docset);
             Ok(())
         }
+        Commands::Rebuild { docset } => {
+            let stats = nowdocs::ingest::rebuild_docset(&docset)?;
+            println!("rebuilt {docset}: {} chunks", stats.chunks);
+            println!("next: nowdocs smoke {docset}");
+            Ok(())
+        }
         Commands::Smoke {
             docset,
             query,

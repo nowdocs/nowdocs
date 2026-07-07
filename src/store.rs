@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use arrow_array::{FixedSizeListArray, Float16Array, RecordBatch, StringArray, UInt32Array};
+use arrow_array::{Array, FixedSizeListArray, Float16Array, RecordBatch, StringArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
 use half::f16;
@@ -9,7 +9,7 @@ use lance_arrow::FixedSizeListArrayExt;
 use lancedb::index::scalar::{FtsIndexBuilder, FullTextSearchQuery};
 use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase, QueryExecutionOptions};
-use lancedb::Session;
+use lancedb::{table::NewColumnTransform, Session};
 
 use crate::cache;
 use crate::chunker::{Chunk, ChunkType};
@@ -71,9 +71,14 @@ impl Store {
 
         let table_name = TABLE_NAME.to_string();
 
-        // Try to open existing table; if not found, create with schema + FTS index.
-        let exists = runtime.block_on(conn.open_table(&table_name).execute());
-        if exists.is_err() {
+        // Create only when the table is genuinely absent. Do not treat an
+        // arbitrary open error (corruption, permissions, incompatible metadata)
+        // as "missing", because creating over that state can mask a broken
+        // cache and make recovery harder.
+        let table_names = runtime
+            .block_on(conn.table_names().execute())
+            .context("failed to list lancedb tables")?;
+        if !table_names.iter().any(|name| name == &table_name) {
             let schema = table_schema();
             runtime
                 .block_on(conn.create_empty_table(&table_name, schema).execute())
@@ -90,6 +95,13 @@ impl Store {
                         .execute(),
                 )
                 .context("failed to create FTS index")?;
+        } else {
+            let table = runtime
+                .block_on(conn.open_table(&table_name).execute())
+                .context("failed to open existing table")?;
+            runtime
+                .block_on(ensure_table_schema(&table))
+                .context("failed to migrate table schema")?;
         }
 
         Ok(Self {
@@ -107,6 +119,16 @@ impl Store {
                 chunks.len(),
                 vectors.len()
             );
+        }
+
+        for (i, vector) in vectors.iter().enumerate() {
+            if vector.len() != VECTOR_DIM {
+                anyhow::bail!(
+                    "vector[{i}] has dimension {}, expected {}",
+                    vector.len(),
+                    VECTOR_DIM
+                );
+            }
         }
 
         if chunks.is_empty() {
@@ -353,7 +375,7 @@ fn parse_search_hits(batches: &[RecordBatch], default_score: f32) -> Result<Vec<
                 chunk_idx: idx_col.value(row),
                 heading_path: heading_col.value(row).to_string(),
                 source_url: url_col.value(row).to_string(),
-                api_version: api_col.map(|c| c.value(row).to_string()),
+                api_version: string_value(api_col, row),
                 chunk_type,
                 text: text_col.value(row).to_string(),
             });
@@ -361,6 +383,15 @@ fn parse_search_hits(batches: &[RecordBatch], default_score: f32) -> Result<Vec<
     }
     hits.sort_by_key(|h| h.chunk_idx);
     Ok(hits)
+}
+
+fn string_value(col: Option<&StringArray>, row: usize) -> Option<String> {
+    let col = col?;
+    if col.is_null(row) {
+        None
+    } else {
+        Some(col.value(row).to_string())
+    }
 }
 
 /// Parse record batches into SearchHit items with _score column (for hybrid_search).
@@ -425,13 +456,51 @@ fn parse_search_hits_with_score(batches: &[RecordBatch]) -> Result<Vec<SearchHit
                 chunk_idx: idx_col.value(row),
                 heading_path: heading_col.value(row).to_string(),
                 source_url: url_col.value(row).to_string(),
-                api_version: api_col.map(|c| c.value(row).to_string()),
+                api_version: string_value(api_col, row),
                 chunk_type,
                 text: text_col.value(row).to_string(),
             });
         }
     }
     Ok(hits)
+}
+
+/// Ensure an existing table can accept the current RecordBatch schema.
+///
+/// Compatible additive migrations are applied in-place: any newly introduced
+/// nullable field is appended as an all-null Arrow column. Required-field or
+/// type changes are intentionally rejected with a rebuild hint because they need
+/// re-materializing vectors/chunks rather than blind schema surgery.
+async fn ensure_table_schema(table: &lancedb::Table) -> Result<()> {
+    let existing = table.schema().await?;
+    let expected = table_schema();
+    let mut missing_nullable = Vec::new();
+
+    for field in expected.fields() {
+        match existing.field_with_name(field.name()) {
+            Ok(current) if current.data_type() == field.data_type() => {}
+            Ok(current) => bail!(
+                "incompatible LanceDB column `{}`: found {:?}, expected {:?}; run `nowdocs rebuild <docset>`",
+                field.name(),
+                current.data_type(),
+                field.data_type()
+            ),
+            Err(_) if field.is_nullable() => missing_nullable.push(field.clone()),
+            Err(_) => bail!(
+                "missing required LanceDB column `{}`; run `nowdocs rebuild <docset>`",
+                field.name()
+            ),
+        }
+    }
+
+    if !missing_nullable.is_empty() {
+        let schema = Arc::new(Schema::new(missing_nullable));
+        table
+            .add_columns(NewColumnTransform::AllNulls(schema), None)
+            .await?;
+    }
+
+    Ok(())
 }
 
 /// Build the table schema: id, vector(FixedSizeList<f16,512>), heading_path,

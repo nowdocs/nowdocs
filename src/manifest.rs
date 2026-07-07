@@ -1,5 +1,28 @@
 use serde::{Deserialize, Serialize};
 
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaCompatibility {
+    Current,
+    Older { found: u32, current: u32 },
+    Newer { found: u32, current: u32 },
+}
+
+pub fn schema_compatibility(version: u32) -> SchemaCompatibility {
+    match version.cmp(&CURRENT_SCHEMA_VERSION) {
+        std::cmp::Ordering::Equal => SchemaCompatibility::Current,
+        std::cmp::Ordering::Less => SchemaCompatibility::Older {
+            found: version,
+            current: CURRENT_SCHEMA_VERSION,
+        },
+        std::cmp::Ordering::Greater => SchemaCompatibility::Newer {
+            found: version,
+            current: CURRENT_SCHEMA_VERSION,
+        },
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     pub docset: String,
@@ -57,11 +80,16 @@ pub fn parse_manifest(json: &str) -> anyhow::Result<Manifest> {
 /// - retrieval.tokenizer must be "default" (lindera reserved for v2)
 /// - license must be allowlisted; CC-BY-4.0 requires non-empty attribution
 pub fn validate(m: &Manifest) -> anyhow::Result<()> {
-    if m.nowdocs_schema_version != 1 {
-        anyhow::bail!(
-            "unsupported nowdocs_schema_version: {} (only 1 supported)",
-            m.nowdocs_schema_version
-        );
+    match schema_compatibility(m.nowdocs_schema_version) {
+        SchemaCompatibility::Current => {}
+        SchemaCompatibility::Older { found, current } => anyhow::bail!(
+            "unsupported older nowdocs_schema_version: {found} (current {current}); run `nowdocs rebuild {}` to migrate the local cache",
+            m.docset
+        ),
+        SchemaCompatibility::Newer { found, current } => anyhow::bail!(
+            "manifest schema {found} is newer than this nowdocs binary supports ({current}); upgrade nowdocs, or run `nowdocs rebuild {}` after downgrading only if you accept rebuilding the local cache",
+            m.docset
+        ),
     }
     if m.embedder.model_id != "jinaai/jina-embeddings-v2-small-en" {
         anyhow::bail!("embedder.model_id mismatch: {}", m.embedder.model_id);

@@ -36,6 +36,9 @@ tokenizers = "0.23"
 hf-hub = "0.5"
 # store (Wave 2 — only task 2b may touch these lines, AGENTS §4.5)
 lancedb = "0.31"
+# Enable Lance's vendored protobuf compiler path so transitive Lance crates
+# do not require a system `protoc` during clean builds.
+lance = { version = "8", default-features = false, features = ["protoc"] }
 tokio = { version = "1", features = ["rt", "macros", "fs"] }
 arrow = "58.3"
 arrow-array = "58.3"
