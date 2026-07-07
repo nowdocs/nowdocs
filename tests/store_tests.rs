@@ -113,3 +113,40 @@ fn test_open_empty_docset_creates_table() {
         "empty table should return empty results, not error"
     );
 }
+
+#[tokio::test]
+async fn test_store_open_rejects_nested_tokio_runtime() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let err = match Store::open("test_nested_runtime") {
+        Ok(_) => panic!("Store::open should fail inside an existing Tokio runtime"),
+        Err(err) => err,
+    };
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("existing Tokio runtime"),
+        "Store::open should reject nested runtimes gracefully, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_store_open_allows_spawn_blocking() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let res = tokio::task::spawn_blocking(|| {
+        let store = Store::open("test_spawn_blocking")?;
+        let hits = store.fetch_by_idx(&[]);
+        assert!(hits.is_ok());
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .unwrap();
+
+    assert!(
+        res.is_ok(),
+        "Store::open should succeed inside spawn_blocking, got error: {:?}",
+        res.err()
+    );
+}
