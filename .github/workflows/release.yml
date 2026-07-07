@@ -39,7 +39,7 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
