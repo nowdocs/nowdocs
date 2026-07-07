@@ -37,6 +37,23 @@ const VECTOR_DIM: usize = 512;
 
 impl Store {
     pub fn open(docset: &str) -> Result<Self> {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            // Detect if we are in an actively running async context where nested block_on would panic.
+            // In tokio::task::spawn_blocking, block_on is permitted and does not panic.
+            let is_nested_async = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                handle.block_on(async {});
+            }))
+            .is_err();
+
+            if is_nested_async {
+                bail!(
+                    "Store::open cannot run inside an existing Tokio runtime; \
+                     nowdocs Store is synchronous over LanceDB async APIs, so call \
+                     it from a blocking thread or refactor the caller to use an async store boundary"
+                );
+            }
+        }
+
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use crate::cache;
 use crate::chunker::{Chunk, ChunkType};
+use crate::errors::{archive_error, NowdocsError};
 use crate::input;
 use crate::manifest;
 use crate::store::Store;
@@ -60,9 +61,13 @@ fn download_to_temp(url: &str) -> Result<PathBuf> {
 }
 
 /// Minimal ustar tar reader (no GNU extensions, no PAX).
+///
+/// Rejects unsafe entries and enforces size/count guardrails *before* allocating
+/// content buffers, so a malicious header cannot cause unbounded memory use.
 fn extract_tar<R: Read>(reader: &mut R) -> Result<Vec<(String, Vec<u8>)>> {
     let mut files = Vec::new();
     let mut header = [0u8; 512];
+    let mut total_bytes: u64 = 0;
 
     loop {
         match reader.read_exact(&mut header) {
@@ -85,6 +90,31 @@ fn extract_tar<R: Read>(reader: &mut R) -> Result<Vec<(String, Vec<u8>)>> {
         let typeflag = header[156];
 
         if typeflag == 0 || typeflag == b'0' {
+            // P1: reject per-entry size and total count BEFORE allocating.
+            if size > MAX_ENTRY_BYTES {
+                // Still need to skip the declared content to leave reader in a
+                // consistent state for potential callers that ignore this error.
+                skip_tar_content(reader, size)?;
+                let err = archive_error(
+                    "ARCHIVE_TOO_LARGE",
+                    format!(
+                        "entry '{}' is {} bytes, exceeds limit of {} bytes",
+                        name, size, MAX_ENTRY_BYTES
+                    ),
+                    "use a smaller archive or report the broken registry release",
+                );
+                return Err(anyhow::anyhow!("{}", err));
+            }
+            if files.len() >= MAX_ENTRY_COUNT {
+                skip_tar_content(reader, size)?;
+                let err = archive_error(
+                    "ARCHIVE_TOO_LARGE",
+                    format!("archive exceeds entry count limit of {}", MAX_ENTRY_COUNT),
+                    "use a smaller archive or report the broken registry release",
+                );
+                return Err(anyhow::anyhow!("{}", err));
+            }
+
             let mut content = vec![0u8; size as usize];
             let mut read = 0usize;
             while read < size as usize {
@@ -102,15 +132,71 @@ fn extract_tar<R: Read>(reader: &mut R) -> Result<Vec<(String, Vec<u8>)>> {
                 let _ = reader.read_exact(&mut skip);
             }
 
+            total_bytes += size;
+            if total_bytes > MAX_ARCHIVE_BYTES {
+                let err = archive_error(
+                    "ARCHIVE_TOO_LARGE",
+                    format!(
+                        "archive is at least {} bytes after '{}', exceeds limit of {} bytes",
+                        total_bytes, name, MAX_ARCHIVE_BYTES
+                    ),
+                    "use a smaller archive or report the broken registry release",
+                );
+                return Err(anyhow::anyhow!("{}", err));
+            }
+
             files.push((name, content));
-        } else {
-            // Skip non-regular entries.
+        } else if typeflag == b'5' {
+            // Directory entry — skip silently (safe, needed for nested paths).
             let padded = (size as usize).div_ceil(512) * 512;
             let mut skip = vec![0u8; padded];
             let _ = reader.read_exact(&mut skip);
+        } else {
+            // Symlink (b'2'), hardlink (b'1'), device (b'3'/'4'), or other
+            // unsafe non-regular entry — reject.
+            let padded = (size as usize).div_ceil(512) * 512;
+            let mut skip = vec![0u8; padded];
+            let _ = reader.read_exact(&mut skip);
+
+            let type_name = match typeflag {
+                b'1' => "hardlink",
+                b'2' => "symlink",
+                b'3' => "character device",
+                b'4' => "block device",
+                b'6' => "fifo",
+                b'7' => "contiguous file",
+                _ => "unknown",
+            };
+            return Err(anyhow::anyhow!(
+                "{}",
+                archive_error(
+                    "ARCHIVE_UNSUPPORTED_ENTRY",
+                    format!(
+                        "archive contains unsupported entry type '{}' ({}): {}",
+                        typeflag as char, type_name, name
+                    ),
+                    "report the broken registry release",
+                )
+            ));
         }
     }
     Ok(files)
+}
+
+/// Skip `size` bytes + padding from a tar entry without allocating a buffer.
+fn skip_tar_content<R: Read>(reader: &mut R, size: u64) -> Result<()> {
+    let padded = (size as usize).div_ceil(512) * 512;
+    let mut skip = vec![0u8; std::cmp::min(padded, 8192)];
+    let mut remaining = padded;
+    while remaining > 0 {
+        let to_read = std::cmp::min(remaining, skip.len());
+        let n = reader.read(&mut skip[..to_read]).context("tar skip")?;
+        if n == 0 {
+            break;
+        }
+        remaining -= n;
+    }
+    Ok(())
 }
 
 fn parse_octal(s: &[u8]) -> Option<u64> {
@@ -128,6 +214,152 @@ fn parse_octal(s: &[u8]) -> Option<u64> {
         .and_then(|s| u64::from_str_radix(s, 8).ok())
 }
 
+// --- R1: Archive validation guardrails ---
+
+/// Max total archive bytes (512 MiB).
+pub const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+/// Max single entry bytes (256 MiB).
+pub const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
+/// Max entry count.
+pub const MAX_ENTRY_COUNT: usize = 100_000;
+
+/// Basenames that must appear at most once in the archive.
+const DUPLICATE_GUARD_BASENAMES: &[&str] = &["manifest.json", "chunks.jsonl", "LICENSE", "NOTICES"];
+
+/// Validate archive entries before writing active cache.
+///
+/// Returns `Ok(())` if the archive passes all safety checks, or a structured
+/// `NowdocsError` with a stable code and actionable hint.
+pub fn validate_archive(entries: &[(String, Vec<u8>)]) -> Result<(), NowdocsError> {
+    // Entry count guardrail.
+    if entries.len() > MAX_ENTRY_COUNT {
+        return Err(archive_error(
+            "ARCHIVE_TOO_LARGE",
+            format!(
+                "archive has {} entries, exceeds limit of {}",
+                entries.len(),
+                MAX_ENTRY_COUNT
+            ),
+            "use a smaller archive or report the broken registry release",
+        ));
+    }
+
+    let mut total_bytes: u64 = 0;
+    let mut seen_duplicates: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut has_manifest = false;
+    let mut has_chunks = false;
+
+    for (name, data) in entries {
+        total_bytes += data.len() as u64;
+
+        // Per-entry size guardrail.
+        if data.len() as u64 > MAX_ENTRY_BYTES {
+            return Err(archive_error(
+                "ARCHIVE_TOO_LARGE",
+                format!(
+                    "entry '{}' is {} bytes, exceeds limit of {} bytes",
+                    name,
+                    data.len(),
+                    MAX_ENTRY_BYTES
+                ),
+                "use a smaller archive or report the broken registry release",
+            ));
+        }
+
+        // Path safety: reject absolute paths.
+        if name.starts_with('/') {
+            return Err(archive_error(
+                "ARCHIVE_UNSAFE_PATH",
+                format!("archive contains absolute path: {}", name),
+                "report the broken registry release",
+            ));
+        }
+
+        // Path safety: reject .. components.
+        let path = std::path::Path::new(name);
+        for component in path.components() {
+            if matches!(component, std::path::Component::ParentDir) {
+                return Err(archive_error(
+                    "ARCHIVE_UNSAFE_PATH",
+                    format!("archive contains path traversal (..): {}", name),
+                    "report the broken registry release",
+                ));
+            }
+        }
+
+        // Vector artifact detection — check every path component, not just the
+        // full name suffix.  LanceDB stores are directories like
+        // `index.lance/data.bin` where child files don't end in `.lance`.
+        let basename = path
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let has_vector_component = path.components().any(|c| {
+            let s = c.as_os_str().to_string_lossy();
+            s.ends_with(".lance")
+                || s.ends_with(".faiss")
+                || s.starts_with("vectors.")
+                || s.starts_with("embeddings.")
+        });
+        if has_vector_component {
+            return Err(archive_error(
+                "ARCHIVE_VECTOR_ARTIFACT",
+                format!("archive contains vector artifact: {}", name),
+                "share must not include vector data; rebuild vectors with CI",
+            ));
+        }
+
+        // Duplicate guard for security-sensitive basenames.
+        if DUPLICATE_GUARD_BASENAMES.contains(&basename.as_str())
+            && !seen_duplicates.insert(basename.clone())
+        {
+            return Err(archive_error(
+                "ARCHIVE_DUPLICATE_ENTRY",
+                format!("archive contains duplicate entry: {}", basename),
+                "report the broken registry release",
+            ));
+        }
+
+        // Track required entries.
+        if name.ends_with("manifest.json") {
+            has_manifest = true;
+        }
+        if name.ends_with("chunks.jsonl") {
+            has_chunks = true;
+        }
+    }
+
+    // Total archive size guardrail.
+    if total_bytes > MAX_ARCHIVE_BYTES {
+        return Err(archive_error(
+            "ARCHIVE_TOO_LARGE",
+            format!(
+                "archive is {} bytes, exceeds limit of {} bytes",
+                total_bytes, MAX_ARCHIVE_BYTES
+            ),
+            "use a smaller archive or report the broken registry release",
+        ));
+    }
+
+    if !has_manifest {
+        return Err(archive_error(
+            "ARCHIVE_MISSING_MANIFEST",
+            "registry archive is missing manifest.json",
+            "retry install, or report the broken registry release",
+        ));
+    }
+
+    if !has_chunks {
+        return Err(archive_error(
+            "ARCHIVE_MISSING_CHUNKS",
+            "registry archive is missing chunks.jsonl",
+            "retry install, or report the broken registry release",
+        ));
+    }
+
+    Ok(())
+}
+
 /// Install a docset from an archive URL.
 ///
 /// **Security**: production URLs must be on `nowdocs-registry` domains.
@@ -135,6 +367,45 @@ fn parse_octal(s: &[u8]) -> Option<u64> {
 pub fn install(docset: &str, url: &str) -> Result<()> {
     let docset = input::validate_docset(docset)?;
     cache::ensure_layout()?;
+
+    // Check if there's an existing active docset for rollback
+    let has_existing = cache::manifest_path(&docset).is_file();
+    let existing_backup = if has_existing {
+        Some(backup_existing(&docset)?)
+    } else {
+        None
+    };
+
+    // Install to staging first
+    let staging_path = install_to_staging(&docset, url)?;
+
+    // Promote staging to active
+    match promote_staging(&docset, &staging_path) {
+        Ok(()) => {
+            // Success: cleanup staging and any rollback backup
+            cleanup_staging(&staging_path)?;
+            if let Some(backup) = existing_backup {
+                cleanup_rollback(&backup)?;
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // Promotion failed: try to restore from backup if we had one
+            if let Some(backup) = existing_backup {
+                if let Err(restore_err) = restore_from_backup(&docset, &backup) {
+                    eprintln!("warning: failed to restore from backup: {}", restore_err);
+                }
+            }
+            // Leave staging for diagnostics
+            Err(e)
+        }
+    }
+}
+
+/// Install a docset to a staging directory (not active paths).
+fn install_to_staging(docset: &str, url: &str) -> Result<PathBuf> {
+    let staging_path = cache::new_staging_path(docset);
+    std::fs::create_dir_all(&staging_path)?;
 
     let (archive_path, is_temp) = if is_test_file_url(url) {
         let path = url.strip_prefix("file://").unwrap();
@@ -150,6 +421,10 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
         let _ = std::fs::remove_file(&archive_path);
     }
 
+    // R1: validate archive before writing any active cache paths.
+    validate_archive(&entries).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // Validate archive has manifest
     let manifest_entry = entries
         .iter()
         .find(|(name, _)| name.ends_with("manifest.json"))
@@ -159,16 +434,11 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
     let m = manifest::parse_manifest(manifest_json)?;
     manifest::validate(&m)?;
 
-    let db_dir = cache::db_path(&docset).parent().unwrap().to_path_buf();
-    std::fs::create_dir_all(&db_dir)?;
+    // Write manifest to staging
+    let staging_manifest = staging_path.join("manifest.json");
+    std::fs::write(&staging_manifest, &manifest_entry.1)?;
 
-    std::fs::write(cache::manifest_path(&docset), &manifest_entry.1)?;
-
-    // Persist the upstream LICENSE bundled in the archive (if present) so a
-    // later `share` of this docset carries the notice text forward. Without
-    // this, docsets installed from a registry tar lose their LICENSE on
-    // re-share even though the archive contained it — mirror what `ingest`
-    // stashes at cache::license_text_path for locally-ingested docsets.
+    // Persist LICENSE to staging if present
     let license_entry = entries.iter().find(|(name, _)| {
         std::path::Path::new(name)
             .file_name()
@@ -176,20 +446,67 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
             .unwrap_or(false)
     });
     if let Some((_, data)) = license_entry {
-        let license_path = cache::license_text_path(&docset);
-        if let Some(parent) = license_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&license_path, data)?;
+        let staging_license = staging_path.join("license.txt");
+        std::fs::write(&staging_license, data)?;
     }
 
-    // Materialize chunks into the LanceDB store so retrieve::search works.
-    // Uses zero vectors as placeholders; real vectors are rebuilt by CI (D10).
+    // Save chunks to staging for later materialization
     let chunks_entry = entries
         .iter()
         .find(|(name, _)| name.ends_with("chunks.jsonl"));
     if let Some((_, data)) = chunks_entry {
-        let jsonl = std::str::from_utf8(data).context("chunks.jsonl utf8")?;
+        let staging_chunks = staging_path.join("chunks.jsonl");
+        std::fs::write(&staging_chunks, data)?;
+    }
+
+    // Verify staged manifest
+    verify_staging(&staging_path)?;
+
+    Ok(staging_path)
+}
+
+/// Verify that staging contains valid manifest.
+fn verify_staging(staging_path: &Path) -> Result<()> {
+    let manifest_path = staging_path.join("manifest.json");
+    if !manifest_path.is_file() {
+        anyhow::bail!("staging missing manifest.json");
+    }
+
+    let raw = std::fs::read_to_string(&manifest_path)?;
+    let m = manifest::parse_manifest(&raw)?;
+    manifest::validate(&m)?;
+
+    Ok(())
+}
+
+/// Promote staging to active cache.
+fn promote_staging(docset: &str, staging_path: &Path) -> Result<()> {
+    let active_manifest = cache::manifest_path(docset);
+    let _active_db = cache::db_path(docset);
+    let active_license = cache::license_text_path(docset);
+
+    // Ensure parent directories exist
+    if let Some(parent) = active_manifest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Copy manifest from staging to active
+    let staging_manifest = staging_path.join("manifest.json");
+    std::fs::copy(&staging_manifest, &active_manifest)?;
+
+    // Copy license if present
+    let staging_license = staging_path.join("license.txt");
+    if staging_license.is_file() {
+        if let Some(parent) = active_license.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(&staging_license, &active_license)?;
+    }
+
+    // Materialize chunks from staging to active store
+    let staging_chunks = staging_path.join("chunks.jsonl");
+    if staging_chunks.is_file() {
+        let jsonl = std::fs::read_to_string(&staging_chunks)?;
         let parsed: Vec<JsonlChunk> = jsonl
             .lines()
             .filter(|l| !l.trim().is_empty())
@@ -213,10 +530,101 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
             .collect();
 
         let zero_vectors: Vec<Vec<f32>> = vec![vec![0.0f32; 512]; chunks.len()];
-        let store = Store::open(&docset)?;
+        let store = Store::open(docset)?;
         store.insert(&chunks, &zero_vectors)?;
     }
 
+    Ok(())
+}
+
+/// Backup existing active docset for rollback.
+fn backup_existing(docset: &str) -> Result<PathBuf> {
+    let backup_path = cache::rollback_path(docset);
+    std::fs::create_dir_all(&backup_path)?;
+
+    let active_manifest = cache::manifest_path(docset);
+    let active_db = cache::db_path(docset);
+    let active_license = cache::license_text_path(docset);
+
+    // Backup manifest
+    if active_manifest.is_file() {
+        std::fs::copy(&active_manifest, backup_path.join("manifest.json"))?;
+    }
+
+    // Backup license
+    if active_license.is_file() {
+        std::fs::copy(&active_license, backup_path.join("license.txt"))?;
+    }
+
+    // Backup store (db directory)
+    if active_db.exists() {
+        copy_dir_all(&active_db, &backup_path.join("store.lance"))?;
+    }
+
+    Ok(backup_path)
+}
+
+/// Restore from backup.
+fn restore_from_backup(docset: &str, backup_path: &Path) -> Result<()> {
+    let active_manifest = cache::manifest_path(docset);
+    let active_db = cache::db_path(docset);
+    let active_license = cache::license_text_path(docset);
+
+    // Restore manifest
+    let backup_manifest = backup_path.join("manifest.json");
+    if backup_manifest.is_file() {
+        std::fs::copy(&backup_manifest, &active_manifest)?;
+    }
+
+    // Restore license
+    let backup_license = backup_path.join("license.txt");
+    if backup_license.is_file() {
+        if let Some(parent) = active_license.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(&backup_license, &active_license)?;
+    }
+
+    // Restore store (db directory)
+    let backup_store = backup_path.join("store.lance");
+    if backup_store.exists() {
+        if active_db.exists() {
+            std::fs::remove_dir_all(&active_db)?;
+        }
+        copy_dir_all(&backup_store, &active_db)?;
+    }
+
+    Ok(())
+}
+
+/// Cleanup staging directory.
+fn cleanup_staging(staging_path: &Path) -> Result<()> {
+    if staging_path.exists() {
+        std::fs::remove_dir_all(staging_path)?;
+    }
+    Ok(())
+}
+
+/// Cleanup rollback directory.
+fn cleanup_rollback(rollback_path: &Path) -> Result<()> {
+    if rollback_path.exists() {
+        std::fs::remove_dir_all(rollback_path)?;
+    }
+    Ok(())
+}
+
+/// Copy directory recursively.
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
     Ok(())
 }
 
