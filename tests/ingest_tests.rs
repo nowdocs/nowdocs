@@ -1,6 +1,6 @@
 use nowdocs::cache;
 use nowdocs::embedder::Embedder;
-use nowdocs::ingest::{ingest_dir, IngestMeta};
+use nowdocs::ingest::{ingest_dir, rebuild_docset, IngestMeta};
 use nowdocs::manifest;
 use nowdocs::store::Store;
 use std::fs;
@@ -120,6 +120,27 @@ fn test_ingest_empty_dir() {
             .unwrap();
     manifest::validate(&m).unwrap();
     assert_eq!(m.source.chunk_count, 0);
+}
+
+#[test]
+fn test_rebuild_missing_docset_does_not_create_orphan_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let err = rebuild_docset("missing_ds").unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("not installed"),
+        "missing rebuild should explain install/ingest precondition, got: {msg}"
+    );
+    assert!(
+        !cache::db_path("missing_ds").exists(),
+        "failed rebuild must not create an orphan LanceDB table"
+    );
+    assert!(
+        !cache::manifest_path("missing_ds").exists(),
+        "failed rebuild must not create a manifest"
+    );
 }
 
 // ---- legal/source metadata flags (absorbs patch_manifest.py) ----

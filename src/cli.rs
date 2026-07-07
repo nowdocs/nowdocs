@@ -50,6 +50,8 @@ pub enum Commands {
     ListInstalled,
     /// Update a docset to the latest registry version
     Update { docset: String },
+    /// Rebuild a local docset cache from stored text using the current embedder/schema
+    Rebuild { docset: String },
     /// Smoke-test a docset with real retrieval to verify installation
     Smoke {
         /// Docset to smoke-test

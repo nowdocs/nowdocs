@@ -102,6 +102,37 @@ fn test_insert_len_mismatch_bails() {
 }
 
 #[test]
+fn test_insert_rejects_mixed_bad_vector_dimensions() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let store = Store::open("test_bad_vector_dim").unwrap();
+    let chunks = vec![
+        Chunk {
+            idx: 0,
+            heading_path: "H".into(),
+            source_url: "u".into(),
+            api_version: None,
+            chunk_type: ChunkType::Info,
+            text: "a".into(),
+        },
+        Chunk {
+            idx: 1,
+            heading_path: "H".into(),
+            source_url: "u".into(),
+            api_version: None,
+            chunk_type: ChunkType::Info,
+            text: "b".into(),
+        },
+    ];
+    // Total length is still 1024, so validating only the flattened vector
+    // length would silently corrupt row boundaries. Each row must be checked.
+    let vectors = vec![vec![0.0f32; 511], vec![0.0f32; 513]];
+    let err = store.insert(&chunks, &vectors).unwrap_err().to_string();
+    assert!(err.contains("vector[0] has dimension 511"));
+}
+
+#[test]
 fn test_open_empty_docset_creates_table() {
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };

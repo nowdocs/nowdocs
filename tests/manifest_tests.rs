@@ -1,4 +1,4 @@
-use nowdocs::manifest::{parse_manifest, validate};
+use nowdocs::manifest::{parse_manifest, schema_compatibility, validate, SchemaCompatibility};
 
 const VALID: &str = r#"{
   "docset":"nextjs","doc_version":"15.1.0","nowdocs_schema_version":1,
@@ -27,10 +27,14 @@ fn parses_and_roundtrips_fields() {
 }
 
 #[test]
-fn rejects_unknown_schema_version() {
+fn rejects_unknown_schema_version_with_rebuild_hint() {
     let mut v: serde_json::Value = serde_json::from_str(VALID).unwrap();
     v["nowdocs_schema_version"] = serde_json::json!(999);
-    assert!(validate(&serde_json::from_value(v).unwrap()).is_err());
+    let err = validate(&serde_json::from_value(v).unwrap())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("newer than this nowdocs binary supports"));
+    assert!(err.contains("nowdocs rebuild nextjs"));
 }
 
 #[test]
@@ -64,4 +68,23 @@ fn rejects_non_default_tokenizer() {
     v["retrieval"]["tokenizer"] = serde_json::json!("lindera");
     let m: nowdocs::manifest::Manifest = serde_json::from_value(v).unwrap();
     assert!(validate(&m).is_err());
+}
+
+#[test]
+fn reports_schema_compatibility_without_bailing() {
+    assert_eq!(schema_compatibility(1), SchemaCompatibility::Current);
+    assert_eq!(
+        schema_compatibility(0),
+        SchemaCompatibility::Older {
+            found: 0,
+            current: 1
+        }
+    );
+    assert_eq!(
+        schema_compatibility(2),
+        SchemaCompatibility::Newer {
+            found: 2,
+            current: 1
+        }
+    );
 }
