@@ -15,7 +15,14 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 db-path = "~/.cargo/advisory-dbs"
 unmaintained = "none"
 yanked = "warn"
-ignore = []
+ignore = [
+    # RUSTSEC-2026-0194 & RUSTSEC-2026-0195:
+    # quick-xml 漏洞是由测试组件 lance-testing 中的性能剖析工具 pprof 间接拉入的。
+    # nowdocs 核心生产二进制中不包含 pprof，且整个项目完全不涉及 XML 解析逻辑，
+    # 故该漏洞在运行期和生产环境下完全不可达 (Unreachable)，不构成实质性安全风险。
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195"
+]
 
 [licenses]
 # 许可证白名单
@@ -35,6 +42,7 @@ allow = [
     "MPL-2.0",
     "CDLA-Permissive-2.0",
     "BSL-1.0",
+    "CDDL-1.0",
 ]
 confidence-threshold = 0.8
 exceptions = []

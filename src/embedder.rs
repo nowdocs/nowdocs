@@ -165,5 +165,8 @@ fn sanitize_config(path: &std::path::Path) -> Result<()> {
 fn sha256_hex(path: &std::path::Path) -> Result<String> {
     let bytes = std::fs::read(path).context("read file for sha256")?;
     let hash = Sha256::digest(&bytes);
-    Ok(format!("{hash:x}"))
+    Ok(hash
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>())
 }
