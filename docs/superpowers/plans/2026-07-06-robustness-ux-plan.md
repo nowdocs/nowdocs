@@ -44,28 +44,28 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 
 **Tasks:**
 
-- [ ] R2.1 Add staging path helpers.
+- [x] R2.1 Add staging path helpers.
   - `cache::staging_root()`.
   - unique staging path for docset + pid + timestamp.
   - tests ensure staging stays under cache root.
 
-- [ ] R2.2 Implement install-to-staging.
+- [x] R2.2 Implement install-to-staging.
   - Download/open archive into staging.
   - Validate archive before writing active paths.
   - Materialize manifest/license/chunks/store under staging.
   - Reopen staged manifest/store for final verification.
 
-- [ ] R2.3 Implement atomic promote.
+- [x] R2.3 Implement atomic promote.
   - Promote staged docset into active cache only after verification.
   - If replacing, keep rollback until new active is verified.
   - Use rename where possible; allow copy-verify-swap on Windows if directory replacement is not atomic.
   - Clean rollback on success.
 
-- [ ] R2.4 Implement update rollback semantics.
+- [x] R2.4 Implement update rollback semantics.
   - Failed update preserves old active manifest/store.
   - Tests simulate bad replacement archive after a good install.
 
-- [ ] R2.5 Add stale staging detection primitive.
+- [x] R2.5 Add stale staging detection primitive.
   - No deletion yet unless R4 implements cache cleanup.
 
 **Verification:**
@@ -92,31 +92,31 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 
 **Tasks:**
 
-- [ ] R3.1 Add `Doctor` CLI subcommand.
+- [x] R3.1 Add `Doctor` CLI subcommand.
   - Flags: `--json`, `--docset <name>`, `--mcp`, `--model`, `--repair`.
   - Initial implementation may reject `--repair` with a clear "not implemented yet" until R4.
 
-- [ ] R3.2 Implement read-only check model.
+- [x] R3.2 Implement read-only check model.
   - Check ID, severity, status, message, remediation.
   - Aggregate exit code: fail if any fail.
 
-- [ ] R3.3 Implement default checks.
+- [x] R3.3 Implement default checks.
   - cache root exists/writable.
   - db/manifest directories exist or can be created.
   - installed docsets have matching manifest/store presence.
   - manifest validates.
   - stale staging paths detected.
 
-- [ ] R3.4 Implement `doctor --docset`.
+- [x] R3.4 Implement `doctor --docset`.
   - Validate docset name.
   - Check manifest, store path, license/notice metadata presence where expected.
   - Print repair hint for missing/corrupt pieces.
 
-- [ ] R3.5 Implement `doctor --mcp` smoke.
+- [x] R3.5 Implement `doctor --mcp` smoke.
   - In-process initialize/tools-list check or equivalent direct MCP handler check.
   - Must not require a network or an external MCP client.
 
-- [ ] R3.6 Implement `doctor --json`.
+- [x] R3.6 Implement `doctor --json`.
   - Stable top-level shape: `{ "status": "ok|warn|fail", "checks": [...] }`.
   - Tests parse JSON and assert check IDs.
 

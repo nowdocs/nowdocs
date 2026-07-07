@@ -16,6 +16,7 @@ fn test_cli_help_lists_all_subcommands() {
         "uninstall",
         "list-installed",
         "update",
+        "smoke",
     ] {
         assert!(stdout.contains(sub), "help must list `{}`", sub);
     }
