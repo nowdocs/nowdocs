@@ -11,7 +11,11 @@
 //! by a newer nowdocs is rejected with a migration hint (D15) rather than
 //! silently corrupting the cache.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use serde::Serialize;
 
 pub const CACHE_LAYOUT_VERSION: u32 = 1;
 
@@ -83,6 +87,160 @@ pub fn list_staging_dirs() -> anyhow::Result<Vec<PathBuf>> {
         }
     }
     Ok(dirs)
+}
+
+#[derive(Debug, Serialize)]
+pub struct CacheStatus {
+    pub cache_root: String,
+    pub total_bytes: u64,
+    pub db_bytes: u64,
+    pub manifests_bytes: u64,
+    pub models_bytes: u64,
+    pub staging_bytes: u64,
+    pub rollback_bytes: u64,
+    pub installed_docsets: usize,
+    pub staging_count: usize,
+}
+
+#[derive(Debug)]
+pub struct CleanStagingResult {
+    pub removed: Vec<PathBuf>,
+    pub skipped: Vec<PathBuf>,
+}
+
+pub fn cache_status() -> Result<CacheStatus> {
+    let root = cache_root();
+    let db_root = root.join("db");
+    let models_root = root.join("models");
+    let staging = staging_root();
+    let rollback = root.join("rollback");
+
+    let db_bytes = dir_size(&db_root)?;
+    let manifests_bytes = manifest_bytes(&db_root)?;
+    let models_bytes = dir_size(&models_root)?;
+    let staging_bytes = dir_size(&staging)?;
+    let rollback_bytes = dir_size(&rollback)?;
+    let installed_docsets = installed_docset_count(&db_root)?;
+    let staging_count = list_staging_dirs().unwrap_or_default().len();
+
+    Ok(CacheStatus {
+        cache_root: root.display().to_string(),
+        total_bytes: db_bytes + models_bytes + staging_bytes + rollback_bytes,
+        db_bytes,
+        manifests_bytes,
+        models_bytes,
+        staging_bytes,
+        rollback_bytes,
+        installed_docsets,
+        staging_count,
+    })
+}
+
+pub fn clean_staging_older_than(older_than: Duration) -> Result<CleanStagingResult> {
+    let mut result = CleanStagingResult {
+        removed: Vec::new(),
+        skipped: Vec::new(),
+    };
+    for path in list_staging_dirs().unwrap_or_default() {
+        if !is_nowdocs_staging_dir(&path) || !is_old_enough(&path, older_than)? {
+            result.skipped.push(path);
+            continue;
+        }
+        std::fs::remove_dir_all(&path)
+            .with_context(|| format!("remove staging directory {}", path.display()))?;
+        result.removed.push(path);
+    }
+    Ok(result)
+}
+
+fn dir_size(path: &Path) -> Result<u64> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let mut bytes = 0;
+    for entry in std::fs::read_dir(path).with_context(|| format!("read {}", path.display()))? {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        if meta.is_dir() {
+            bytes += dir_size(&entry.path())?;
+        } else if meta.is_file() {
+            bytes += meta.len();
+        }
+    }
+    Ok(bytes)
+}
+
+fn manifest_bytes(db_root: &Path) -> Result<u64> {
+    if !db_root.exists() {
+        return Ok(0);
+    }
+    let mut bytes = 0;
+    for entry in
+        std::fs::read_dir(db_root).with_context(|| format!("read {}", db_root.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".manifest.json"))
+        {
+            bytes += entry.metadata()?.len();
+        }
+    }
+    Ok(bytes)
+}
+
+fn installed_docset_count(db_root: &Path) -> Result<usize> {
+    if !db_root.exists() {
+        return Ok(0);
+    }
+    let mut count = 0;
+    for entry in
+        std::fs::read_dir(db_root).with_context(|| format!("read {}", db_root.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir()
+            && path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".lance"))
+        {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn is_old_enough(path: &Path, older_than: Duration) -> Result<bool> {
+    let modified = path.metadata()?.modified()?;
+    Ok(modified
+        .elapsed()
+        .map(|age| age >= older_than)
+        .unwrap_or(false))
+}
+
+fn is_nowdocs_staging_dir(path: &Path) -> bool {
+    let staging_root = staging_root();
+    if path.parent() != Some(staging_root.as_path()) {
+        return false;
+    }
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let mut parts = name.rsplitn(3, '-');
+    let timestamp = parts.next();
+    let pid = parts.next();
+    let docset = parts.next();
+    matches!(
+        (docset, pid, timestamp),
+        (Some(d), Some(p), Some(t))
+            if !d.is_empty()
+                && p.chars().all(|c| c.is_ascii_digit())
+                && t.chars().all(|c| c.is_ascii_digit())
+    )
 }
 
 /// Create a unique staging path for a docset install/update.

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
-use nowdocs::cli::{Cli, Commands};
+use nowdocs::cli::{CacheCommands, Cli, Commands};
 
 fn main() -> ExitCode {
     let args = Cli::parse();
@@ -166,7 +166,82 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
 
             Ok(())
         }
+        Commands::Cache { command } => match command {
+            CacheCommands::Status { json } => {
+                let status = nowdocs::cache::cache_status()?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&status)?);
+                } else {
+                    print_cache_status(&status);
+                }
+                Ok(())
+            }
+            CacheCommands::CleanStaging { older_than } => {
+                let threshold = parse_duration(&older_than)?;
+                let result = nowdocs::cache::clean_staging_older_than(threshold)?;
+                println!(
+                    "removed {} staging director{}",
+                    result.removed.len(),
+                    if result.removed.len() == 1 {
+                        "y"
+                    } else {
+                        "ies"
+                    }
+                );
+                for path in result.removed {
+                    println!("removed {}", path.display());
+                }
+                if !result.skipped.is_empty() {
+                    println!(
+                        "skipped {} staging director{}",
+                        result.skipped.len(),
+                        if result.skipped.len() == 1 {
+                            "y"
+                        } else {
+                            "ies"
+                        }
+                    );
+                }
+                Ok(())
+            }
+        },
     }
+}
+
+fn print_cache_status(status: &nowdocs::cache::CacheStatus) {
+    println!("cache root: {}", status.cache_root);
+    println!("installed docsets: {}", status.installed_docsets);
+    println!("staging dirs: {}", status.staging_count);
+    println!("sizes:");
+    println!("  total: {} bytes", status.total_bytes);
+    println!("  db: {} bytes", status.db_bytes);
+    println!("  manifests: {} bytes", status.manifests_bytes);
+    println!("  models: {} bytes", status.models_bytes);
+    println!("  staging: {} bytes", status.staging_bytes);
+    println!("  rollback: {} bytes", status.rollback_bytes);
+}
+
+fn parse_duration(input: &str) -> anyhow::Result<std::time::Duration> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("duration must not be empty; use examples like 30m, 2h, 1d, or 3600s");
+    }
+    let (number, unit) = trimmed.split_at(
+        trimmed
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(trimmed.len()),
+    );
+    let value: u64 = number.parse().map_err(|_| {
+        anyhow::anyhow!("invalid duration {input:?}; use examples like 30m, 2h, 1d, or 3600s")
+    })?;
+    let seconds = match unit {
+        "" | "s" => value,
+        "m" => value * 60,
+        "h" => value * 60 * 60,
+        "d" => value * 60 * 60 * 24,
+        _ => anyhow::bail!("invalid duration unit {unit:?}; supported units are s, m, h, and d"),
+    };
+    Ok(std::time::Duration::from_secs(seconds))
 }
 
 fn print_doctor_output(output: &nowdocs::doctor::DoctorOutput) {

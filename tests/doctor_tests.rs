@@ -125,13 +125,18 @@ fn test_doctor_repair_non_destructive() {
 
     let output = doctor::run_repair();
 
-    // Repair should warn that it's not fully implemented
-    assert_eq!(output.status, doctor::Severity::Warn);
+    // Repair should be wired to staging cleanup and remain non-destructive.
+    assert_eq!(output.status, doctor::Severity::Ok);
 
-    // Should have repair-mode check
-    let repair_check = output.checks.iter().find(|c| c.id == "repair-mode");
-    assert!(repair_check.is_some(), "should have repair-mode check");
-    assert_eq!(repair_check.unwrap().severity, doctor::Severity::Warn);
+    let repair_check = output
+        .checks
+        .iter()
+        .find(|c| c.id == "repair-staging-cleanup");
+    assert!(
+        repair_check.is_some(),
+        "should have repair-staging-cleanup check"
+    );
+    assert_eq!(repair_check.unwrap().severity, doctor::Severity::Ok);
 }
 
 #[test]

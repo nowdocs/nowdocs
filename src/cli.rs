@@ -83,4 +83,25 @@ pub enum Commands {
         #[arg(long)]
         repair: bool,
     },
+    /// Inspect or safely clean nowdocs cache state
+    Cache {
+        #[command(subcommand)]
+        command: CacheCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CacheCommands {
+    /// Show cache paths, sizes, installed docsets, and staging state
+    Status {
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove only nowdocs-owned staging directories older than a threshold
+    CleanStaging {
+        /// Minimum age to remove (examples: 30m, 2h, 1d, 3600s)
+        #[arg(long, default_value = "1h")]
+        older_than: String,
+    },
 }

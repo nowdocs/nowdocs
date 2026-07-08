@@ -30,6 +30,16 @@ pub struct DoctorOutput {
     pub checks: Vec<Check>,
 }
 
+fn aggregate_status(checks: &[Check]) -> Severity {
+    if checks.iter().any(|c| c.severity == Severity::Fail) {
+        Severity::Fail
+    } else if checks.iter().any(|c| c.severity == Severity::Warn) {
+        Severity::Warn
+    } else {
+        Severity::Ok
+    }
+}
+
 /// Run all default doctor checks.
 pub fn run_default_checks() -> DoctorOutput {
     let mut checks = Vec::new();
@@ -291,16 +301,44 @@ pub fn run_model_check() -> DoctorOutput {
 
 /// Run repair mode (staging cleanup only).
 pub fn run_repair() -> DoctorOutput {
-    let checks = vec![Check {
-        id: "repair-mode".to_string(),
-        severity: Severity::Warn,
-        message: "Repair mode is not fully implemented yet. Only staging cleanup is available."
-            .to_string(),
-        remediation: Some("Use `nowdocs cache clean-staging` when available (R4)".to_string()),
-    }];
+    let checks = match cache::clean_staging_older_than(std::time::Duration::from_secs(60 * 60)) {
+        Ok(cleaned) => {
+            let removed_paths = if cleaned.removed.is_empty() {
+                "none".to_string()
+            } else {
+                cleaned
+                    .removed
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            vec![Check {
+                id: "repair-staging-cleanup".to_string(),
+                severity: Severity::Ok,
+                message: format!(
+                    "Removed {} stale staging director{} ({removed_paths}); skipped {} recent or non-nowdocs staging director{}",
+                cleaned.removed.len(),
+                if cleaned.removed.len() == 1 { "y" } else { "ies" },
+                cleaned.skipped.len(),
+                if cleaned.skipped.len() == 1 { "y" } else { "ies" }
+            ),
+                remediation: Some(
+                    "For explicit cleanup thresholds, run `nowdocs cache clean-staging --older-than 1h`"
+                        .to_string(),
+                ),
+            }]
+        }
+        Err(e) => vec![Check {
+            id: "repair-staging-cleanup".to_string(),
+            severity: Severity::Fail,
+            message: format!("Failed to clean stale staging directories: {e}"),
+            remediation: Some("Inspect cache permissions or run `nowdocs doctor`".to_string()),
+        }],
+    };
 
     DoctorOutput {
-        status: Severity::Warn,
+        status: aggregate_status(&checks),
         checks,
     }
 }
@@ -464,7 +502,8 @@ fn check_stale_staging() -> Check {
                     severity: Severity::Warn,
                     message: format!("Found {} stale staging directory(ies)", dirs.len()),
                     remediation: Some(
-                        "Use `nowdocs cache clean-staging` when available (R4)".to_string(),
+                        "Run `nowdocs cache clean-staging --older-than 1h` or `nowdocs doctor --repair`"
+                            .to_string(),
                     ),
                 }
             }
