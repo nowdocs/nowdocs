@@ -20,7 +20,7 @@ LLM 训练有截止日期，对快速变化的库（Next.js 15 / React 19 / Vue 
 cargo install --git https://github.com/nowdocs/nowdocs
 ```
 
-需 Rust 工具链（stable）与 `protoc`（prost-build 依赖）。首次 `serve` 会从 HuggingFace 下载 embedder 模型（jina-v2-small-en，约 66 MB），之后本地缓存。
+需 Rust 工具链（stable）与 `protoc`（prost-build 依赖；macOS `brew install protobuf`，Linux `sudo apt-get install protobuf-compiler`）。首次 `serve` 会从 HuggingFace 下载 embedder 模型（jina-v2-small-en，约 66 MB），之后本地缓存。
 
 ### 待正式 release（预编译二进制）
 
