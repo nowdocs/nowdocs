@@ -8,7 +8,7 @@
 //!   models/<org>/<repo>/   # downloaded embedder weights
 //! ```
 //! `ensure_layout` gates on `CACHE_LAYOUT_VERSION`: an on-disk layout written
-//! by a newer nowdocs is rejected with a migration hint (D15) rather than
+//! by an incompatible nowdocs is rejected with a reinitialize hint rather than
 //! silently corrupting the cache.
 
 use std::path::{Path, PathBuf};
@@ -278,13 +278,19 @@ pub fn ensure_layout() -> anyhow::Result<()> {
     if version_file.is_file() {
         let on_disk = std::fs::read_to_string(&version_file)?;
         let on_disk: u32 = on_disk.trim().parse().map_err(|_| {
-            anyhow::anyhow!("corrupt .layout_version (not a number): run `nowdocs migrate`")
+            anyhow::anyhow!(
+                "corrupt .layout_version (not a number) at {} — remove the cache directory and re-run `nowdocs` to reinitialize",
+                version_file.display()
+            )
         })?;
         if on_disk != CACHE_LAYOUT_VERSION {
             anyhow::bail!(
-                "cache layout version mismatch: on disk {}, nowdocs {} — run `nowdocs migrate`",
+                "cache layout version mismatch: on disk {} but nowdocs expects {} — \
+                 the cache at {} was created by an incompatible nowdocs build; \
+                 remove that directory and re-run `nowdocs` to reinitialize (installed docsets will be lost)",
                 on_disk,
-                CACHE_LAYOUT_VERSION
+                CACHE_LAYOUT_VERSION,
+                root.display()
             );
         }
     } else {

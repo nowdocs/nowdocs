@@ -86,8 +86,8 @@ fn ensure_layout_rejects_version_mismatch() {
     let err = ensure_layout().unwrap_err();
     let msg = format!("{}", err);
     assert!(
-        msg.contains("migrate"),
-        "err should hint migration, got: {}",
+        msg.contains("layout version mismatch"),
+        "err should report layout version mismatch, got: {}",
         msg
     );
 }
