@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cache;
 use crate::chunker::{Chunk, ChunkType};
@@ -39,6 +39,14 @@ fn is_allowed_registry_url(url: &str) -> bool {
         "registry.nowdocs.dev" => true,
         _ => false,
     }
+}
+
+/// Licenses permitted in the registry catalog index (per plan schema, §U3 line 283).
+const ALLOWED_LICENSES: &[&str] = &["MIT", "Apache-2.0", "CC-BY-4.0"];
+
+/// Validate a package `sha256` integrity value: exactly 64 ASCII hex characters.
+fn is_valid_sha256(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 fn download_to_temp(url: &str) -> Result<PathBuf> {
@@ -382,18 +390,33 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
     // Promote staging to active
     match promote_staging(&docset, &staging_path) {
         Ok(()) => {
-            // Success: cleanup staging and any rollback backup
-            cleanup_staging(&staging_path)?;
+            // Success: cleanup staging and any rollback backup (best-effort so a
+            // cleanup hiccup never masks a successful install).
+            if let Err(cleanup_err) = cleanup_staging(&staging_path) {
+                eprintln!("warning: failed to clean up staging: {}", cleanup_err);
+            }
             if let Some(backup) = existing_backup {
-                cleanup_rollback(&backup)?;
+                if let Err(cleanup_err) = cleanup_rollback(&backup) {
+                    eprintln!("warning: failed to clean up rollback: {}", cleanup_err);
+                }
             }
             Ok(())
         }
         Err(e) => {
-            // Promotion failed: try to restore from backup if we had one
+            // Promotion failed.
             if let Some(backup) = existing_backup {
+                // Had a prior active docset: restore it (best-effort).
                 if let Err(restore_err) = restore_from_backup(&docset, &backup) {
                     eprintln!("warning: failed to restore from backup: {}", restore_err);
+                }
+            } else {
+                // Fresh install: remove any partially-promoted active paths so we
+                // never leave a broken active docset behind (no backup to restore).
+                if let Err(cleanup_err) = cleanup_partial_active(&docset) {
+                    eprintln!(
+                        "warning: failed to clean up partial active: {}",
+                        cleanup_err
+                    );
                 }
             }
             // Leave staging for diagnostics
@@ -613,6 +636,24 @@ fn cleanup_rollback(rollback_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Remove any partially-promoted active paths left after a failed fresh install
+/// (no backup existed to restore from). Best-effort; called only on the error path.
+fn cleanup_partial_active(docset: &str) -> Result<()> {
+    let mp = cache::manifest_path(docset);
+    let db = cache::db_path(docset);
+    let lic = cache::license_text_path(docset);
+    if mp.is_file() {
+        std::fs::remove_file(&mp)?;
+    }
+    if db.exists() {
+        std::fs::remove_dir_all(&db)?;
+    }
+    if lic.is_file() {
+        std::fs::remove_file(&lic)?;
+    }
+    Ok(())
+}
+
 /// Copy directory recursively.
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     std::fs::create_dir_all(dst)?;
@@ -757,6 +798,162 @@ pub fn uninstall(docset: &str) -> Result<()> {
     }
     if mp.is_file() {
         std::fs::remove_file(&mp).context("remove manifest")?;
+    }
+    Ok(())
+}
+
+// ===== Registry catalog discovery (U3: list / search) =====
+
+/// A single docset entry in the registry catalog index.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RegistryPackage {
+    pub docset: String,
+    pub version: String,
+    pub license: String,
+    pub chunk_count: u64,
+    pub freshness: String,
+    pub download_url: String,
+    pub sha256: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// The registry catalog index (`index.json`).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RegistryIndex {
+    pub schema_version: u64,
+    pub generated_at: String,
+    pub packages: Vec<RegistryPackage>,
+}
+
+/// Default catalog index URL: a dedicated repo under the `nowdocs-registry` GitHub org.
+/// Override with `NOWDOCS_REGISTRY_INDEX_URL` (e.g. a `file://` path in tests).
+///
+/// NOTE: uses `github.com/.../raw/...` (not `raw.githubusercontent.com`) so the URL
+/// passes `is_allowed_registry_url` (host allow-list), matching the existing
+/// per-docset download convention.
+pub fn index_url() -> String {
+    if let Ok(url) = std::env::var("NOWDOCS_REGISTRY_INDEX_URL") {
+        if !url.is_empty() {
+            return url;
+        }
+    }
+    "https://github.com/nowdocs-registry/registry-index/raw/main/index.json".to_string()
+}
+
+/// Fetch and parse the registry catalog index from an explicit URL.
+pub fn fetch_index_from(url: &str) -> Result<RegistryIndex> {
+    let tmp = if is_test_file_url(url) {
+        PathBuf::from(url.strip_prefix("file://").unwrap_or(url))
+    } else {
+        download_to_temp(url)?
+    };
+    let text = std::fs::read_to_string(&tmp)
+        .with_context(|| format!("reading registry index at {tmp:?}"))?;
+    let idx: RegistryIndex = serde_json::from_str(&text).context("parsing registry index.json")?;
+    // Security: every package must satisfy the catalog contract before it is
+    // surfaced to users (plan §U3): allowed download host, allowed license,
+    // and a valid 64-hex sha256 integrity value.
+    for p in &idx.packages {
+        if !is_allowed_registry_url(&p.download_url) {
+            anyhow::bail!(
+                "registry package {} has disallowed download_url: {}",
+                p.docset,
+                p.download_url
+            );
+        }
+        if !ALLOWED_LICENSES.contains(&p.license.as_str()) {
+            anyhow::bail!(
+                "registry package {} has disallowed license: {} (allowed: {})",
+                p.docset,
+                p.license,
+                ALLOWED_LICENSES.join(", ")
+            );
+        }
+        if !is_valid_sha256(&p.sha256) {
+            anyhow::bail!(
+                "registry package {} has invalid sha256 (must be 64 hex chars): {}",
+                p.docset,
+                p.sha256
+            );
+        }
+    }
+    Ok(idx)
+}
+
+/// Fetch and parse the registry catalog index using the resolved/default URL.
+pub fn fetch_index() -> Result<RegistryIndex> {
+    fetch_index_from(&index_url())
+}
+
+/// Filter catalog packages by a case-insensitive substring match on name + description.
+pub fn search_packages<'a>(idx: &'a RegistryIndex, query: &str) -> Vec<&'a RegistryPackage> {
+    let q = query.to_lowercase();
+    idx.packages
+        .iter()
+        .filter(|p| {
+            p.docset.to_lowercase().contains(&q)
+                || p.description
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .contains(&q)
+        })
+        .collect()
+}
+
+/// `nowdocs registry list`: print the catalog (table or JSON).
+pub fn list_index(json: bool) -> Result<()> {
+    let idx = fetch_index()?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&idx)?);
+        return Ok(());
+    }
+    println!(
+        "{:<14} {:<10} {:<8} {:<12} {:<12} {:<10}",
+        "DOCSET", "VERSION", "CHUNKS", "LICENSE", "FRESHNESS", "INSTALLED"
+    );
+    println!("{}", "-".repeat(70));
+    for p in &idx.packages {
+        let installed = cache::db_path(&p.docset).exists();
+        println!(
+            "{:<14} {:<10} {:<8} {:<12} {:<12} {:<10}",
+            p.docset,
+            p.version,
+            p.chunk_count,
+            p.license,
+            p.freshness,
+            if installed { "yes" } else { "no" }
+        );
+    }
+    Ok(())
+}
+
+/// `nowdocs registry search <query>`: filter the catalog and print matches.
+pub fn search_index(query: &str, json: bool) -> Result<()> {
+    let idx = fetch_index()?;
+    let matches = search_packages(&idx, query);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&matches)?);
+        return Ok(());
+    }
+    if matches.is_empty() {
+        println!("No registry docsets match \"{query}\".");
+        return Ok(());
+    }
+    println!(
+        "{:<14} {:<10} {:<12} DESCRIPTION",
+        "DOCSET", "VERSION", "LICENSE"
+    );
+    println!("{}", "-".repeat(64));
+    for p in matches {
+        println!(
+            "{:<14} {:<10} {:<12} {}",
+            p.docset,
+            p.version,
+            p.license,
+            p.description.as_deref().unwrap_or("")
+        );
     }
     Ok(())
 }

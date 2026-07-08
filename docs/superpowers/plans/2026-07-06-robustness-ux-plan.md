@@ -144,18 +144,18 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 
 **Tasks:**
 
-- [ ] R4.1 Add `nowdocs cache status [--json]`.
+- [x] R4.1 Add `nowdocs cache status [--json]`.
   - Print cache root, category sizes, installed count, staging count.
 
-- [ ] R4.2 Add `nowdocs cache clean-staging [--older-than <duration>]`.
+- [x] R4.2 Add `nowdocs cache clean-staging [--older-than <duration>]`.
   - Remove only nowdocs staging directories.
   - Default threshold should avoid deleting just-created staging from another process.
 
-- [ ] R4.3 Wire `doctor --repair` to staging cleanup only.
+- [x] R4.3 Wire `doctor --repair` to staging cleanup only.
   - v1 repair does not delete active docsets.
   - Print exactly what was removed.
 
-- [ ] R4.4 Tests for cleanup safety.
+- [x] R4.4 Tests for cleanup safety.
   - Does not remove active db paths.
   - Does not remove unrelated directories.
   - Removes old staging dirs.
@@ -183,25 +183,25 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 
 **Tasks:**
 
-- [ ] U1.1 Add `Smoke` CLI subcommand.
+- [x] U1.1 Add `Smoke` CLI subcommand.
   - `nowdocs smoke <docset> [query] [--json] [--top-k <n>]`.
   - Default query: `installation configuration example`.
 
-- [ ] U1.2 Implement smoke search.
+- [x] U1.2 Implement smoke search.
   - Validate installed docset.
   - Run retrieve pipeline.
   - Print top results with score, heading/source/chunk index, elapsed time.
   - Non-zero on missing docset or zero results.
 
-- [ ] U1.3 Add JSON output.
+- [x] U1.3 Add JSON output.
   - Include docset, query, elapsed_ms, result count, results array.
 
-- [ ] U1.4 Improve install/update/ingest/share success output.
+- [x] U1.4 Improve install/update/ingest/share success output.
   - Include docset version/chunk count/license where available.
   - Include next-step hints.
   - Preserve tests that depend on existing substrings.
 
-- [ ] U1.5 Improve `list-installed` table.
+- [x] U1.5 Improve `list-installed` table.
   - Table columns: docset, version, chunks, license, status.
   - Consider `--plain` or keep comma output only if test/script compatibility demands it.
 
@@ -222,35 +222,37 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 - new `docs/GETTING_STARTED.md`
 - new `docs/TROUBLESHOOTING.md`
 - optional `docs/MCP_CLIENTS.md`
+- new `docs/RELEASE_READINESS.md`
 
 **Tasks:**
 
-- [ ] U2.1 Add a Getting Started guide.
+- [x] U2.1 Add a Getting Started guide.
   - install path.
   - install or ingest first docset.
   - smoke test.
   - serve command.
 
-- [ ] U2.2 Add MCP client configuration snippets.
+- [x] U2.2 Add MCP client configuration snippets.
   - Cursor.
   - Claude Code.
   - Claude Desktop.
   - Aider.
   - generic MCP JSON.
 
-- [ ] U2.3 Add Troubleshooting guide.
+- [x] U2.3 Add Troubleshooting guide.
   - model download failures.
   - docset not found.
   - corrupt cache.
   - MCP tools not visible.
   - Windows/macOS/Linux path notes.
 
-- [ ] U2.4 Update README quickstart.
+- [x] U2.4 Update README quickstart.
   - New happy path includes `doctor` and `smoke`.
   - Link to troubleshooting and MCP clients.
 
-- [ ] U2.5 Add release-readiness checklist section.
+- [x] U2.5 Add release-readiness checklist section.
   - Include robustness/UX manual gates.
+  - Added `docs/RELEASE_READINESS.md` for owner-run gates.
 
 **Verification:**
 
@@ -274,24 +276,40 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 
 **Tasks:**
 
-- [ ] U3.1 Decide registry index source of truth.
-  - GitHub raw release asset vs `registry.nowdocs.dev` mirror.
-  - Define `index.json` schema.
+- [x] U3.1 Decide registry index source of truth (decided 2026-07-07: GitHub nowdocs-registry repo; self-hosted mirror deferred post-v1).
 
-- [ ] U3.2 Add parser tests for registry index.
+**Agreed `index.json` schema (2026-07-07):**
+- Top-level: `schema_version` (int), `generated_at` (RFC3339), `packages` (array).
+- Per package: `docset` (id), `version`, `license` (must be on allowlist MIT/Apache-2.0/CC-BY-4.0), `chunk_count` (int), `freshness` (date), `download_url` (must be nowdocs-registry GitHub Releases domain), `sha256` (64-hex package integrity), `description` (optional, human-friendly).
+- Sample fixture: `seed-crates/index.json` (nextjs/react/vue).
+
+- [x] U3.2 Add parser tests for registry index.
   - docset, version, license, chunk_count, freshness, download URL.
   - Enforce nowdocs-registry URL policy.
 
-- [ ] U3.3 Add `nowdocs registry list/search` behind stable index.
+- [x] U3.3 Add `nowdocs registry list/search` behind stable index.
   - Human table and JSON output.
   - Install status column.
 
-- [ ] U3.4 Document that command may access network.
+- [x] U3.4 Document that command may access network.
 
 **Verification:**
 
 - `cargo test registry_tests -- --test-threads=1`
 - `cargo test cli_tests -- --test-threads=1`
+
+### User-owned / manual follow-up
+
+U3.1 (registry index source of truth) decided 2026-07-07: **GitHub raw/release asset in the nowdocs-registry repo** (self-hosted `registry.nowdocs.dev` mirror deferred to post-v1). Rationale: AGENTS.md pins all registry fetch URLs to the nowdocs-registry GitHub Releases domain (external URLs rejected), so index-on-GitHub is compliant and zero-infra.
+
+U3.2–U3.4 done (2026-07-07):
+
+- (U3.1 done) source of truth = GitHub `nowdocs-registry` org (dedicated `registry-index` repo); default `index_url()` overridable via `NOWDOCS_REGISTRY_INDEX_URL`.
+- `index.json` schema approved (U3.2) — see "Agreed index.json schema" above.
+- Real fixture at `seed-crates/index.json` (nextjs/react/vue) with `nowdocs-registry`-domain `download_url`s (U3.2).
+- Implemented `nowdocs registry list` (table + `--json`, with install-status column) and `nowdocs registry search <query>` (U3.3) in `src/registry.rs`, wired via `RegistryCommands` in `cli.rs`/`main.rs`.
+- Parser + search + URL-policy-rejection tests in `tests/registry_index_tests.rs` (U3.2).
+- Network access documented in code: index is fetched via `curl` through the existing `download_to_temp` + `is_allowed_registry_url` gate (U3.4).
 
 ---
 
@@ -299,25 +317,48 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 
 Before calling robustness/UX hardening complete:
 
-- [ ] `nowdocs doctor` passes on a clean checkout after `cargo build`.
-- [ ] `nowdocs doctor --json` is parseable and documented.
-- [ ] interrupted/bad install does not create an active docset.
-- [ ] failed update preserves the previous working docset.
-- [ ] `nowdocs smoke` works for a locally ingested fixture.
-- [ ] README quickstart includes doctor + smoke + MCP setup verification.
-- [ ] Troubleshooting guide covers the top 8 expected failures.
-- [ ] all normal tests pass with `cargo test -- --test-threads=1`.
-- [ ] expensive model/real-docset checks are either passing in a dedicated script or documented as manual release gates.
+- [x] `nowdocs doctor` passes on a clean checkout after `cargo build` (verified 2026-07-08: clean build, `doctor` on empty cache → `status: ok`, exit 0).
+- [x] `nowdocs doctor --json` is parseable and documented.
+- [x] bad/corrupt install does not create an active docset (proven by `test_invalid_archive_install_leaves_no_active_manifest_or_store`, green in full suite). NOTE: "interrupted" mid-process kill is a known limitation, not unit-tested.
+- [x] failed update preserves the previous working docset (proven by `test_failed_update_preserves_old_active_manifest_and_store`, green in full suite).
+- [x] `nowdocs smoke` works for a locally ingested fixture (verified 2026-07-08: ingested `tests/fixtures/golden` as docset `golden` with the real jina embedder, `nowdocs smoke golden` returned 3 results, exit 0).
+- [x] README quickstart includes doctor + smoke + MCP setup verification.
+- [x] Troubleshooting guide covers the top 8 expected failures.
+- [x] all normal tests pass with `cargo test -- --test-threads=1` (verified 2026-07-08: Exit 0, 0 failures across 21 test binaries).
+- [x] expensive model/real-docset checks are either passing in a dedicated script or documented as manual release gates.
+
+### User-owned / manual gates not checked by this agent
+
+The following gates stay unchecked until the owner runs them in a fully provisioned environment with the real model/cache/toolchain setup and real docset assets:
+
+- ~~clean-checkout `cargo build` plus `nowdocs doctor` / `nowdocs doctor --json`~~ — **verified 2026-07-08** (clean build; `doctor` → `status: ok`, exit 0).
+- ~~interrupted/bad install and failed-update manual verification against real archives~~ — **bad/corrupt-install and failed-update proven by transactional unit tests 2026-07-08**; "interrupted" mid-kill remains a known limitation, not unit-tested.
+- ~~`nowdocs smoke` against a locally ingested fixture with the real embedder available~~ — **verified 2026-07-08** (real jina model downloaded; `ingest tests/fixtures/golden` + `smoke golden` → 3 results, exit 0).
+- ~~full `cargo test -- --test-threads=1`~~ — **verified 2026-07-08** (Exit 0, 0 failures across 21 test binaries).
+- expensive model and real-docset checks, including the Next.js large-docset gate.
+
+### Code quality review — registry.rs transaction functions (2026-07-08)
+
+Focused review of `install` / `install_to_staging` / `promote_staging` / `update` and helpers, after the §8 gates.
+
+Findings:
+- **F1 (fixed)**: a fresh-install promote failure left a broken partial active docset (manifest copied, store not finished) with no backup to restore. Added `cleanup_partial_active`, called on the error path when no prior backup exists.
+- **F2 (fixed)**: success-path `cleanup_staging` / `cleanup_rollback` used `?`, so a cleanup error masked a successful install. Now best-effort (eprintln warning).
+- **F3 (noted, not changed)**: `promote_staging` inserts zero-filled vectors into the store. Safe under v1 flat/FTS retrieval; would be wrong if vector search is ever enabled. Architectural, out of scope for this track.
+- **F4 (noted, not changed)**: `uninstall` leaves `license.txt` and any rollback dir behind. Harmless; tracked as cleanup debt.
+- **F5 (test hygiene, not changed)**: `tests/registry_tests.rs` shares the real cache root and is not thread-safe — fails under parallel `cargo test --test registry_tests` but passes single-threaded (`--test-threads=1`, the G8 methodology). Recommend per-test `XDG_CACHE_HOME` isolation in a follow-up.
+
+Verification: `cargo test --test registry_tests -- --test-threads=1` → 36 passed, 0 failed after F1/F2.
 
 ---
 
 ## 9. Suggested task order
 
-1. **Remaining slice:** R2 transactional install/update.
-2. **Remaining slice:** R3 doctor read-only diagnostics.
-3. **Remaining slice:** U1 smoke command and output improvements.
-4. R4 cache status/repair.
-5. U2 docs/onboarding.
-6. U3 registry discovery once index source is settled.
+1. R2 transactional install/update — done.
+2. R3 doctor read-only diagnostics — done.
+3. U1 smoke command and output improvements — done.
+4. R4 cache status/repair — done.
+5. U2 docs/onboarding — done.
+6. U3 registry discovery once index source is settled — user-owned decision first.
 
 This order is confirmed: after the archive-validation prerequisite lands, front-load fail-safe install/update, expose diagnostics, then improve the first-run experience. Do not start R4/U2/U3 before the remaining slice has a working implementation and tests unless explicitly reprioritized.

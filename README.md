@@ -20,7 +20,7 @@ LLM 训练有截止日期，对快速变化的库（Next.js 15 / React 19 / Vue 
 cargo install --git https://github.com/nowdocs/nowdocs
 ```
 
-需 Rust 工具链（stable）与 `protoc`（prost-build 依赖）。首次 `serve` 会从 HuggingFace 下载 embedder 模型（jina-v2-small-en，约 66 MB），之后本地缓存。
+需 Rust 工具链（stable）与 `protoc`（prost-build 依赖；macOS `brew install protobuf`，Linux `sudo apt-get install protobuf-compiler`）。首次 `serve` 会从 HuggingFace 下载 embedder 模型（jina-v2-small-en，约 66 MB），之后本地缓存。
 
 ### 待正式 release（预编译二进制）
 
@@ -39,7 +39,15 @@ release 二进制覆盖 linux musl（x86_64 / aarch64）、macOS（arm64 / x86_6
 
 ## 快速开始
 
-1. **导入本地文档**（Markdown 目录）：
+完整教程见 [Getting Started](docs/GETTING_STARTED.md)，常见问题见 [Troubleshooting](docs/TROUBLESHOOTING.md)，MCP 客户端配置见 [MCP Clients](docs/MCP_CLIENTS.md)，发版门禁见 [Release Readiness](docs/RELEASE_READINESS.md)。
+
+1. **先跑诊断**：
+   ```bash
+   nowdocs doctor
+   nowdocs doctor --json
+   ```
+
+2. **导入本地文档**（Markdown 目录）：
    ```bash
    nowdocs ingest ./my-docs my-docset --license MIT --source-url https://github.com/org/repo
    ```
@@ -48,13 +56,18 @@ release 二进制覆盖 linux musl（x86_64 / aarch64）、macOS（arm64 / x86_6
    nowdocs install <docset>
    ```
 
-2. **启动 MCP server**：
+3. **跑真实检索冒烟测试**：
+   ```bash
+   nowdocs smoke my-docset "installation configuration example"
+   ```
+
+4. **启动 MCP server**：
    ```bash
    nowdocs serve
    ```
    `serve` 通过 stdio 通信，不绑定端口/Host。
 
-3. **配置 MCP client**：将 `nowdocs serve` 注册为 stdio MCP server。示例（多数 client 兼容的 `mcp.json` 格式）：
+5. **配置 MCP client**：将 `nowdocs serve` 注册为 stdio MCP server。示例（多数 client 兼容的 `mcp.json` 格式）：
    ```json
    {
      "mcpServers": {
@@ -74,6 +87,10 @@ release 二进制覆盖 linux musl（x86_64 / aarch64）、macOS（arm64 / x86_6
 | `nowdocs update <docset>` | 更新 docset 至最新 registry 版本 |
 | `nowdocs uninstall <docset>` | 卸载 docset |
 | `nowdocs list-installed` | 列出已安装 docset |
+| `nowdocs smoke <docset> [query]` | 对已安装 docset 跑真实检索冒烟测试 |
+| `nowdocs doctor [--json] [--docset <name>] [--mcp] [--model] [--repair]` | 诊断环境、缓存、docset、MCP 与模型状态 |
+| `nowdocs cache status [--json]` | 查看 cache 路径、大小、已安装 docset 与 staging 状态 |
+| `nowdocs cache clean-staging [--older-than <duration>]` | 安全清理 nowdocs-owned staging 目录 |
 | `nowdocs share <docset>` | 打包 docset 供 registry 贡献（文本 + manifest，不含向量） |
 
 `ingest` 参数：`--license`（MIT / Apache-2.0 / CC-BY-4.0，默认 MIT）、`--copyright-holder`、`--attribution`（CC-BY-4.0 必填）、`--source-url`、`--entry-url`。

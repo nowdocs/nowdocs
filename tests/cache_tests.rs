@@ -1,6 +1,11 @@
-use nowdocs::cache::{cache_root, db_path, ensure_layout, model_path, CACHE_LAYOUT_VERSION};
+use nowdocs::cache::{
+    cache_root, cache_status, clean_staging_older_than, db_path, ensure_layout, model_path,
+    new_staging_path, CACHE_LAYOUT_VERSION,
+};
 use std::path::Path;
+use std::process::Command;
 use std::sync::Mutex;
+use std::time::Duration;
 
 // dirs::cache_dir() reads XDG_CACHE_HOME / HOME at call time, so tests that
 // mutate these env vars must not run concurrently. This lock serializes them.
@@ -81,8 +86,8 @@ fn ensure_layout_rejects_version_mismatch() {
     let err = ensure_layout().unwrap_err();
     let msg = format!("{}", err);
     assert!(
-        msg.contains("migrate"),
-        "err should hint migration, got: {}",
+        msg.contains("layout version mismatch"),
+        "err should report layout version mismatch, got: {}",
         msg
     );
 }
@@ -93,4 +98,83 @@ fn ensure_layout_idempotent_on_repeat() {
     let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
     ensure_layout().unwrap();
     ensure_layout().unwrap(); // second call on matching layout must succeed
+}
+
+#[test]
+fn cache_status_reports_installed_docsets_and_staging() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+    ensure_layout().unwrap();
+
+    std::fs::create_dir_all(db_path("nextjs")).unwrap();
+    std::fs::write(cache_root().join("db/nextjs.manifest.json"), "{}").unwrap();
+    let staging = new_staging_path("nextjs");
+    std::fs::create_dir_all(&staging).unwrap();
+
+    let status = cache_status().unwrap();
+    assert_eq!(status.installed_docsets, 1);
+    assert_eq!(status.staging_count, 1);
+    assert!(status.cache_root.ends_with("nowdocs"));
+    assert!(status.db_bytes >= 2);
+}
+
+#[test]
+fn clean_staging_removes_only_nowdocs_owned_staging_dirs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+    ensure_layout().unwrap();
+
+    let owned = new_staging_path("safe-docset");
+    let unrelated = cache_root().join("staging").join("do-not-delete");
+    let active = db_path("safe-docset");
+    std::fs::create_dir_all(&owned).unwrap();
+    std::fs::create_dir_all(&unrelated).unwrap();
+    std::fs::create_dir_all(&active).unwrap();
+
+    let cleaned = clean_staging_older_than(Duration::from_secs(0)).unwrap();
+
+    assert_eq!(cleaned.removed.len(), 1);
+    assert!(!owned.exists(), "owned staging dir should be removed");
+    assert!(
+        unrelated.exists(),
+        "unrelated staging dir must be preserved"
+    );
+    assert!(active.exists(), "active db path must never be removed");
+}
+
+#[test]
+fn clean_staging_respects_age_threshold() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+    ensure_layout().unwrap();
+
+    let owned = new_staging_path("recent-docset");
+    std::fs::create_dir_all(&owned).unwrap();
+
+    let cleaned = clean_staging_older_than(Duration::from_secs(60 * 60)).unwrap();
+
+    assert!(cleaned.removed.is_empty());
+    assert!(owned.exists(), "recent staging dir should be skipped");
+}
+
+#[test]
+fn cli_cache_status_json_parses() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_nowdocs"))
+        .args(["cache", "status", "--json"])
+        .current_dir(cwd.path())
+        .env("XDG_CACHE_HOME", tmp.path())
+        .output()
+        .expect("run nowdocs cache status");
+
+    assert!(
+        out.status.success(),
+        "cache status should exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(json.get("cache_root").is_some());
+    assert!(json.get("installed_docsets").is_some());
+    assert!(json.get("staging_count").is_some());
 }

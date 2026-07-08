@@ -17,6 +17,8 @@ fn test_cli_help_lists_all_subcommands() {
         "list-installed",
         "update",
         "smoke",
+        "doctor",
+        "cache",
     ] {
         assert!(stdout.contains(sub), "help must list `{}`", sub);
     }
