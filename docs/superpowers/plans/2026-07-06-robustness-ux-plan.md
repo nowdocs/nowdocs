@@ -321,7 +321,7 @@ Before calling robustness/UX hardening complete:
 - [x] `nowdocs doctor --json` is parseable and documented.
 - [x] bad/corrupt install does not create an active docset (proven by `test_invalid_archive_install_leaves_no_active_manifest_or_store`, green in full suite). NOTE: "interrupted" mid-process kill is a known limitation, not unit-tested.
 - [x] failed update preserves the previous working docset (proven by `test_failed_update_preserves_old_active_manifest_and_store`, green in full suite).
-- [ ] `nowdocs smoke` works for a locally ingested fixture — **manual release gate**: requires the 66MB jina embedder model download (not present in CI); covered by the manual-gate clause (G9) above.
+- [x] `nowdocs smoke` works for a locally ingested fixture (verified 2026-07-08: ingested `tests/fixtures/golden` as docset `golden` with the real jina embedder, `nowdocs smoke golden` returned 3 results, exit 0).
 - [x] README quickstart includes doctor + smoke + MCP setup verification.
 - [x] Troubleshooting guide covers the top 8 expected failures.
 - [x] all normal tests pass with `cargo test -- --test-threads=1` (verified 2026-07-08: Exit 0, 0 failures across 21 test binaries).
@@ -333,9 +333,22 @@ The following gates stay unchecked until the owner runs them in a fully provisio
 
 - ~~clean-checkout `cargo build` plus `nowdocs doctor` / `nowdocs doctor --json`~~ — **verified 2026-07-08** (clean build; `doctor` → `status: ok`, exit 0).
 - ~~interrupted/bad install and failed-update manual verification against real archives~~ — **bad/corrupt-install and failed-update proven by transactional unit tests 2026-07-08**; "interrupted" mid-kill remains a known limitation, not unit-tested.
-- `nowdocs smoke` against a locally ingested fixture with the real embedder available — **still manual** (requires 66MB jina embedder model download; not present in CI).
+- ~~`nowdocs smoke` against a locally ingested fixture with the real embedder available~~ — **verified 2026-07-08** (real jina model downloaded; `ingest tests/fixtures/golden` + `smoke golden` → 3 results, exit 0).
 - ~~full `cargo test -- --test-threads=1`~~ — **verified 2026-07-08** (Exit 0, 0 failures across 21 test binaries).
 - expensive model and real-docset checks, including the Next.js large-docset gate.
+
+### Code quality review — registry.rs transaction functions (2026-07-08)
+
+Focused review of `install` / `install_to_staging` / `promote_staging` / `update` and helpers, after the §8 gates.
+
+Findings:
+- **F1 (fixed)**: a fresh-install promote failure left a broken partial active docset (manifest copied, store not finished) with no backup to restore. Added `cleanup_partial_active`, called on the error path when no prior backup exists.
+- **F2 (fixed)**: success-path `cleanup_staging` / `cleanup_rollback` used `?`, so a cleanup error masked a successful install. Now best-effort (eprintln warning).
+- **F3 (noted, not changed)**: `promote_staging` inserts zero-filled vectors into the store. Safe under v1 flat/FTS retrieval; would be wrong if vector search is ever enabled. Architectural, out of scope for this track.
+- **F4 (noted, not changed)**: `uninstall` leaves `license.txt` and any rollback dir behind. Harmless; tracked as cleanup debt.
+- **F5 (test hygiene, not changed)**: `tests/registry_tests.rs` shares the real cache root and is not thread-safe — fails under parallel `cargo test --test registry_tests` but passes single-threaded (`--test-threads=1`, the G8 methodology). Recommend per-test `XDG_CACHE_HOME` isolation in a follow-up.
+
+Verification: `cargo test --test registry_tests -- --test-threads=1` → 36 passed, 0 failed after F1/F2.
 
 ---
 
