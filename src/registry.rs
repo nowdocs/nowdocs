@@ -382,18 +382,33 @@ pub fn install(docset: &str, url: &str) -> Result<()> {
     // Promote staging to active
     match promote_staging(&docset, &staging_path) {
         Ok(()) => {
-            // Success: cleanup staging and any rollback backup
-            cleanup_staging(&staging_path)?;
+            // Success: cleanup staging and any rollback backup (best-effort so a
+            // cleanup hiccup never masks a successful install).
+            if let Err(cleanup_err) = cleanup_staging(&staging_path) {
+                eprintln!("warning: failed to clean up staging: {}", cleanup_err);
+            }
             if let Some(backup) = existing_backup {
-                cleanup_rollback(&backup)?;
+                if let Err(cleanup_err) = cleanup_rollback(&backup) {
+                    eprintln!("warning: failed to clean up rollback: {}", cleanup_err);
+                }
             }
             Ok(())
         }
         Err(e) => {
-            // Promotion failed: try to restore from backup if we had one
+            // Promotion failed.
             if let Some(backup) = existing_backup {
+                // Had a prior active docset: restore it (best-effort).
                 if let Err(restore_err) = restore_from_backup(&docset, &backup) {
                     eprintln!("warning: failed to restore from backup: {}", restore_err);
+                }
+            } else {
+                // Fresh install: remove any partially-promoted active paths so we
+                // never leave a broken active docset behind (no backup to restore).
+                if let Err(cleanup_err) = cleanup_partial_active(&docset) {
+                    eprintln!(
+                        "warning: failed to clean up partial active: {}",
+                        cleanup_err
+                    );
                 }
             }
             // Leave staging for diagnostics
@@ -609,6 +624,24 @@ fn cleanup_staging(staging_path: &Path) -> Result<()> {
 fn cleanup_rollback(rollback_path: &Path) -> Result<()> {
     if rollback_path.exists() {
         std::fs::remove_dir_all(rollback_path)?;
+    }
+    Ok(())
+}
+
+/// Remove any partially-promoted active paths left after a failed fresh install
+/// (no backup existed to restore from). Best-effort; called only on the error path.
+fn cleanup_partial_active(docset: &str) -> Result<()> {
+    let mp = cache::manifest_path(docset);
+    let db = cache::db_path(docset);
+    let lic = cache::license_text_path(docset);
+    if mp.is_file() {
+        std::fs::remove_file(&mp)?;
+    }
+    if db.exists() {
+        std::fs::remove_dir_all(&db)?;
+    }
+    if lic.is_file() {
+        std::fs::remove_file(&lic)?;
     }
     Ok(())
 }
