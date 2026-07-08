@@ -144,18 +144,18 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 
 **Tasks:**
 
-- [ ] R4.1 Add `nowdocs cache status [--json]`.
+- [x] R4.1 Add `nowdocs cache status [--json]`.
   - Print cache root, category sizes, installed count, staging count.
 
-- [ ] R4.2 Add `nowdocs cache clean-staging [--older-than <duration>]`.
+- [x] R4.2 Add `nowdocs cache clean-staging [--older-than <duration>]`.
   - Remove only nowdocs staging directories.
   - Default threshold should avoid deleting just-created staging from another process.
 
-- [ ] R4.3 Wire `doctor --repair` to staging cleanup only.
+- [x] R4.3 Wire `doctor --repair` to staging cleanup only.
   - v1 repair does not delete active docsets.
   - Print exactly what was removed.
 
-- [ ] R4.4 Tests for cleanup safety.
+- [x] R4.4 Tests for cleanup safety.
   - Does not remove active db paths.
   - Does not remove unrelated directories.
   - Removes old staging dirs.
@@ -183,25 +183,25 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 
 **Tasks:**
 
-- [ ] U1.1 Add `Smoke` CLI subcommand.
+- [x] U1.1 Add `Smoke` CLI subcommand.
   - `nowdocs smoke <docset> [query] [--json] [--top-k <n>]`.
   - Default query: `installation configuration example`.
 
-- [ ] U1.2 Implement smoke search.
+- [x] U1.2 Implement smoke search.
   - Validate installed docset.
   - Run retrieve pipeline.
   - Print top results with score, heading/source/chunk index, elapsed time.
   - Non-zero on missing docset or zero results.
 
-- [ ] U1.3 Add JSON output.
+- [x] U1.3 Add JSON output.
   - Include docset, query, elapsed_ms, result count, results array.
 
-- [ ] U1.4 Improve install/update/ingest/share success output.
+- [x] U1.4 Improve install/update/ingest/share success output.
   - Include docset version/chunk count/license where available.
   - Include next-step hints.
   - Preserve tests that depend on existing substrings.
 
-- [ ] U1.5 Improve `list-installed` table.
+- [x] U1.5 Improve `list-installed` table.
   - Table columns: docset, version, chunks, license, status.
   - Consider `--plain` or keep comma output only if test/script compatibility demands it.
 
@@ -222,35 +222,37 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 - new `docs/GETTING_STARTED.md`
 - new `docs/TROUBLESHOOTING.md`
 - optional `docs/MCP_CLIENTS.md`
+- new `docs/RELEASE_READINESS.md`
 
 **Tasks:**
 
-- [ ] U2.1 Add a Getting Started guide.
+- [x] U2.1 Add a Getting Started guide.
   - install path.
   - install or ingest first docset.
   - smoke test.
   - serve command.
 
-- [ ] U2.2 Add MCP client configuration snippets.
+- [x] U2.2 Add MCP client configuration snippets.
   - Cursor.
   - Claude Code.
   - Claude Desktop.
   - Aider.
   - generic MCP JSON.
 
-- [ ] U2.3 Add Troubleshooting guide.
+- [x] U2.3 Add Troubleshooting guide.
   - model download failures.
   - docset not found.
   - corrupt cache.
   - MCP tools not visible.
   - Windows/macOS/Linux path notes.
 
-- [ ] U2.4 Update README quickstart.
+- [x] U2.4 Update README quickstart.
   - New happy path includes `doctor` and `smoke`.
   - Link to troubleshooting and MCP clients.
 
-- [ ] U2.5 Add release-readiness checklist section.
+- [x] U2.5 Add release-readiness checklist section.
   - Include robustness/UX manual gates.
+  - Added `docs/RELEASE_READINESS.md` for owner-run gates.
 
 **Verification:**
 
@@ -293,6 +295,15 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 - `cargo test registry_tests -- --test-threads=1`
 - `cargo test cli_tests -- --test-threads=1`
 
+### User-owned / manual follow-up
+
+U3 is intentionally left unchecked because it needs a product/registry ownership decision before implementation:
+
+- choose the registry index source of truth (`index.json` in GitHub release/raw file vs `registry.nowdocs.dev` mirror);
+- approve the stable `index.json` schema;
+- provide or approve a real registry index fixture;
+- then implement `nowdocs registry list/search` and parser tests.
+
 ---
 
 ## 8. Release readiness gates for this track
@@ -300,24 +311,34 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 Before calling robustness/UX hardening complete:
 
 - [ ] `nowdocs doctor` passes on a clean checkout after `cargo build`.
-- [ ] `nowdocs doctor --json` is parseable and documented.
+- [x] `nowdocs doctor --json` is parseable and documented.
 - [ ] interrupted/bad install does not create an active docset.
 - [ ] failed update preserves the previous working docset.
 - [ ] `nowdocs smoke` works for a locally ingested fixture.
-- [ ] README quickstart includes doctor + smoke + MCP setup verification.
-- [ ] Troubleshooting guide covers the top 8 expected failures.
+- [x] README quickstart includes doctor + smoke + MCP setup verification.
+- [x] Troubleshooting guide covers the top 8 expected failures.
 - [ ] all normal tests pass with `cargo test -- --test-threads=1`.
-- [ ] expensive model/real-docset checks are either passing in a dedicated script or documented as manual release gates.
+- [x] expensive model/real-docset checks are either passing in a dedicated script or documented as manual release gates.
+
+### User-owned / manual gates not checked by this agent
+
+The following gates stay unchecked until the owner runs them in a fully provisioned environment with the real model/cache/toolchain setup and real docset assets:
+
+- clean-checkout `cargo build` plus `nowdocs doctor` / `nowdocs doctor --json`;
+- interrupted/bad install and failed-update manual verification against real archives;
+- `nowdocs smoke` against a locally ingested fixture with the real embedder available;
+- full `cargo test -- --test-threads=1`;
+- expensive model and real-docset checks, including the Next.js large-docset gate.
 
 ---
 
 ## 9. Suggested task order
 
-1. **Remaining slice:** R2 transactional install/update.
-2. **Remaining slice:** R3 doctor read-only diagnostics.
-3. **Remaining slice:** U1 smoke command and output improvements.
-4. R4 cache status/repair.
-5. U2 docs/onboarding.
-6. U3 registry discovery once index source is settled.
+1. R2 transactional install/update — done.
+2. R3 doctor read-only diagnostics — done.
+3. U1 smoke command and output improvements — done.
+4. R4 cache status/repair — done.
+5. U2 docs/onboarding — done.
+6. U3 registry discovery once index source is settled — user-owned decision first.
 
 This order is confirmed: after the archive-validation prerequisite lands, front-load fail-safe install/update, expose diagnostics, then improve the first-run experience. Do not start R4/U2/U3 before the remaining slice has a working implementation and tests unless explicitly reprioritized.
