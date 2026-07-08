@@ -69,3 +69,62 @@ fn rejects_index_with_disallowed_download_url() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn rejects_index_with_disallowed_license() {
+    let path =
+        std::env::temp_dir().join(format!("nowdocs_bad_license_{}.json", std::process::id()));
+    let json = r#"{
+      "schema_version": 1,
+      "generated_at": "2026-07-07T00:00:00Z",
+      "packages": [
+        {
+          "docset": "proprietary",
+          "version": "1.0.0",
+          "license": "Proprietary",
+          "chunk_count": 1,
+          "freshness": "2026-07-07",
+          "download_url": "https://github.com/nowdocs-registry/proprietary/releases/download/proprietary-1.0.0/proprietary-1.0.0.lance.tar.zst",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "description": "must be rejected"
+        }
+      ]
+    }"#;
+    std::fs::write(&path, json).unwrap();
+    let url = format!("file://{}", path.display());
+    let result = fetch_index_from(&url);
+    assert!(
+        result.is_err(),
+        "index with disallowed license must be rejected"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn rejects_index_with_bad_sha256() {
+    let path = std::env::temp_dir().join(format!("nowdocs_bad_sha256_{}.json", std::process::id()));
+    let json = r#"{
+      "schema_version": 1,
+      "generated_at": "2026-07-07T00:00:00Z",
+      "packages": [
+        {
+          "docset": "badhash",
+          "version": "1.0.0",
+          "license": "MIT",
+          "chunk_count": 1,
+          "freshness": "2026-07-07",
+          "download_url": "https://github.com/nowdocs-registry/badhash/releases/download/badhash-1.0.0/badhash-1.0.0.lance.tar.zst",
+          "sha256": "00",
+          "description": "must be rejected"
+        }
+      ]
+    }"#;
+    std::fs::write(&path, json).unwrap();
+    let url = format!("file://{}", path.display());
+    let result = fetch_index_from(&url);
+    assert!(
+        result.is_err(),
+        "index with non-64-hex sha256 must be rejected"
+    );
+    let _ = std::fs::remove_file(&path);
+}

@@ -50,7 +50,7 @@ pub enum Commands {
     ListInstalled,
     /// Update a docset to the latest registry version
     Update { docset: String },
-    /// Browse the nowdocs registry catalog (list / search available docsets)
+    /// Browse the nowdocs registry catalog (list / search available docsets; may access the network)
     Registry {
         #[command(subcommand)]
         command: RegistryCommands,

@@ -41,6 +41,14 @@ fn is_allowed_registry_url(url: &str) -> bool {
     }
 }
 
+/// Licenses permitted in the registry catalog index (per plan schema, §U3 line 283).
+const ALLOWED_LICENSES: &[&str] = &["MIT", "Apache-2.0", "CC-BY-4.0"];
+
+/// Validate a package `sha256` integrity value: exactly 64 ASCII hex characters.
+fn is_valid_sha256(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 fn download_to_temp(url: &str) -> Result<PathBuf> {
     if !is_allowed_registry_url(url) {
         anyhow::bail!(
@@ -806,7 +814,8 @@ pub struct RegistryPackage {
     pub freshness: String,
     pub download_url: String,
     pub sha256: String,
-    pub description: String,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// The registry catalog index (`index.json`).
@@ -842,13 +851,30 @@ pub fn fetch_index_from(url: &str) -> Result<RegistryIndex> {
     let text = std::fs::read_to_string(&tmp)
         .with_context(|| format!("reading registry index at {tmp:?}"))?;
     let idx: RegistryIndex = serde_json::from_str(&text).context("parsing registry index.json")?;
-    // Security: every package's download_url must be on an allowed registry domain.
+    // Security: every package must satisfy the catalog contract before it is
+    // surfaced to users (plan §U3): allowed download host, allowed license,
+    // and a valid 64-hex sha256 integrity value.
     for p in &idx.packages {
         if !is_allowed_registry_url(&p.download_url) {
             anyhow::bail!(
                 "registry package {} has disallowed download_url: {}",
                 p.docset,
                 p.download_url
+            );
+        }
+        if !ALLOWED_LICENSES.contains(&p.license.as_str()) {
+            anyhow::bail!(
+                "registry package {} has disallowed license: {} (allowed: {})",
+                p.docset,
+                p.license,
+                ALLOWED_LICENSES.join(", ")
+            );
+        }
+        if !is_valid_sha256(&p.sha256) {
+            anyhow::bail!(
+                "registry package {} has invalid sha256 (must be 64 hex chars): {}",
+                p.docset,
+                p.sha256
             );
         }
     }
@@ -866,7 +892,12 @@ pub fn search_packages<'a>(idx: &'a RegistryIndex, query: &str) -> Vec<&'a Regis
     idx.packages
         .iter()
         .filter(|p| {
-            p.docset.to_lowercase().contains(&q) || p.description.to_lowercase().contains(&q)
+            p.docset.to_lowercase().contains(&q)
+                || p.description
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .contains(&q)
         })
         .collect()
 }
@@ -879,16 +910,17 @@ pub fn list_index(json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<14} {:<10} {:<12} {:<12} {:<10}",
-        "DOCSET", "VERSION", "LICENSE", "FRESHNESS", "INSTALLED"
+        "{:<14} {:<10} {:<8} {:<12} {:<12} {:<10}",
+        "DOCSET", "VERSION", "CHUNKS", "LICENSE", "FRESHNESS", "INSTALLED"
     );
-    println!("{}", "-".repeat(64));
+    println!("{}", "-".repeat(70));
     for p in &idx.packages {
         let installed = cache::db_path(&p.docset).exists();
         println!(
-            "{:<14} {:<10} {:<12} {:<12} {:<10}",
+            "{:<14} {:<10} {:<8} {:<12} {:<12} {:<10}",
             p.docset,
             p.version,
+            p.chunk_count,
             p.license,
             p.freshness,
             if installed { "yes" } else { "no" }
@@ -917,7 +949,10 @@ pub fn search_index(query: &str, json: bool) -> Result<()> {
     for p in matches {
         println!(
             "{:<14} {:<10} {:<12} {}",
-            p.docset, p.version, p.license, p.description
+            p.docset,
+            p.version,
+            p.license,
+            p.description.as_deref().unwrap_or("")
         );
     }
     Ok(())
