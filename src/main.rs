@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
-use nowdocs::cli::{CacheCommands, Cli, Commands};
+use nowdocs::cli::{CacheCommands, Cli, Commands, RegistryCommands};
 
 fn main() -> ExitCode {
     let args = Cli::parse();
@@ -166,6 +166,16 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
 
             Ok(())
         }
+        Commands::Registry { command } => match command {
+            RegistryCommands::List { json } => {
+                nowdocs::registry::list_index(json)?;
+                Ok(())
+            }
+            RegistryCommands::Search { query, json } => {
+                nowdocs::registry::search_index(&query, json)?;
+                Ok(())
+            }
+        },
         Commands::Cache { command } => match command {
             CacheCommands::Status { json } => {
                 let status = nowdocs::cache::cache_status()?;

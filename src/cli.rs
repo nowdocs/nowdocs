@@ -50,6 +50,11 @@ pub enum Commands {
     ListInstalled,
     /// Update a docset to the latest registry version
     Update { docset: String },
+    /// Browse the nowdocs registry catalog (list / search available docsets)
+    Registry {
+        #[command(subcommand)]
+        command: RegistryCommands,
+    },
     /// Rebuild a local docset cache from stored text using the current embedder/schema
     Rebuild { docset: String },
     /// Smoke-test a docset with real retrieval to verify installation
@@ -79,7 +84,7 @@ pub enum Commands {
         /// Check model cache state
         #[arg(long)]
         model: bool,
-        /// Repair mode (not implemented yet, staging cleanup only)
+        /// Repair mode: remove stale staging dirs (safe, non-destructive)
         #[arg(long)]
         repair: bool,
     },
@@ -103,5 +108,23 @@ pub enum CacheCommands {
         /// Minimum age to remove (examples: 30m, 2h, 1d, 3600s)
         #[arg(long, default_value = "1h")]
         older_than: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum RegistryCommands {
+    /// List docsets available in the registry catalog
+    List {
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+    /// Search the registry catalog by name or description
+    Search {
+        /// Search query (matched against docset name and description)
+        query: String,
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
     },
 }

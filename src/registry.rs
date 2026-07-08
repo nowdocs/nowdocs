@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cache;
 use crate::chunker::{Chunk, ChunkType};
@@ -757,6 +757,135 @@ pub fn uninstall(docset: &str) -> Result<()> {
     }
     if mp.is_file() {
         std::fs::remove_file(&mp).context("remove manifest")?;
+    }
+    Ok(())
+}
+
+// ===== Registry catalog discovery (U3: list / search) =====
+
+/// A single docset entry in the registry catalog index.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RegistryPackage {
+    pub docset: String,
+    pub version: String,
+    pub license: String,
+    pub chunk_count: u64,
+    pub freshness: String,
+    pub download_url: String,
+    pub sha256: String,
+    pub description: String,
+}
+
+/// The registry catalog index (`index.json`).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RegistryIndex {
+    pub schema_version: u64,
+    pub generated_at: String,
+    pub packages: Vec<RegistryPackage>,
+}
+
+/// Default catalog index URL: a dedicated repo under the `nowdocs-registry` GitHub org.
+/// Override with `NOWDOCS_REGISTRY_INDEX_URL` (e.g. a `file://` path in tests).
+///
+/// NOTE: uses `github.com/.../raw/...` (not `raw.githubusercontent.com`) so the URL
+/// passes `is_allowed_registry_url` (host allow-list), matching the existing
+/// per-docset download convention.
+pub fn index_url() -> String {
+    if let Ok(url) = std::env::var("NOWDOCS_REGISTRY_INDEX_URL") {
+        if !url.is_empty() {
+            return url;
+        }
+    }
+    "https://github.com/nowdocs-registry/registry-index/raw/main/index.json".to_string()
+}
+
+/// Fetch and parse the registry catalog index from an explicit URL.
+pub fn fetch_index_from(url: &str) -> Result<RegistryIndex> {
+    let tmp = if is_test_file_url(url) {
+        PathBuf::from(url.strip_prefix("file://").unwrap_or(url))
+    } else {
+        download_to_temp(url)?
+    };
+    let text = std::fs::read_to_string(&tmp)
+        .with_context(|| format!("reading registry index at {tmp:?}"))?;
+    let idx: RegistryIndex = serde_json::from_str(&text).context("parsing registry index.json")?;
+    // Security: every package's download_url must be on an allowed registry domain.
+    for p in &idx.packages {
+        if !is_allowed_registry_url(&p.download_url) {
+            anyhow::bail!(
+                "registry package {} has disallowed download_url: {}",
+                p.docset,
+                p.download_url
+            );
+        }
+    }
+    Ok(idx)
+}
+
+/// Fetch and parse the registry catalog index using the resolved/default URL.
+pub fn fetch_index() -> Result<RegistryIndex> {
+    fetch_index_from(&index_url())
+}
+
+/// Filter catalog packages by a case-insensitive substring match on name + description.
+pub fn search_packages<'a>(idx: &'a RegistryIndex, query: &str) -> Vec<&'a RegistryPackage> {
+    let q = query.to_lowercase();
+    idx.packages
+        .iter()
+        .filter(|p| {
+            p.docset.to_lowercase().contains(&q) || p.description.to_lowercase().contains(&q)
+        })
+        .collect()
+}
+
+/// `nowdocs registry list`: print the catalog (table or JSON).
+pub fn list_index(json: bool) -> Result<()> {
+    let idx = fetch_index()?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&idx)?);
+        return Ok(());
+    }
+    println!(
+        "{:<14} {:<10} {:<12} {:<12} {:<10}",
+        "DOCSET", "VERSION", "LICENSE", "FRESHNESS", "INSTALLED"
+    );
+    println!("{}", "-".repeat(64));
+    for p in &idx.packages {
+        let installed = cache::db_path(&p.docset).exists();
+        println!(
+            "{:<14} {:<10} {:<12} {:<12} {:<10}",
+            p.docset,
+            p.version,
+            p.license,
+            p.freshness,
+            if installed { "yes" } else { "no" }
+        );
+    }
+    Ok(())
+}
+
+/// `nowdocs registry search <query>`: filter the catalog and print matches.
+pub fn search_index(query: &str, json: bool) -> Result<()> {
+    let idx = fetch_index()?;
+    let matches = search_packages(&idx, query);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&matches)?);
+        return Ok(());
+    }
+    if matches.is_empty() {
+        println!("No registry docsets match \"{query}\".");
+        return Ok(());
+    }
+    println!(
+        "{:<14} {:<10} {:<12} DESCRIPTION",
+        "DOCSET", "VERSION", "LICENSE"
+    );
+    println!("{}", "-".repeat(64));
+    for p in matches {
+        println!(
+            "{:<14} {:<10} {:<12} {}",
+            p.docset, p.version, p.license, p.description
+        );
     }
     Ok(())
 }
