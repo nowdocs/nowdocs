@@ -276,19 +276,22 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 
 **Tasks:**
 
-- [ ] U3.1 Decide registry index source of truth.
-  - GitHub raw release asset vs `registry.nowdocs.dev` mirror.
-  - Define `index.json` schema.
+- [x] U3.1 Decide registry index source of truth (decided 2026-07-07: GitHub nowdocs-registry repo; self-hosted mirror deferred post-v1).
 
-- [ ] U3.2 Add parser tests for registry index.
+**Agreed `index.json` schema (2026-07-07):**
+- Top-level: `schema_version` (int), `generated_at` (RFC3339), `packages` (array).
+- Per package: `docset` (id), `version`, `license` (must be on allowlist MIT/Apache-2.0/CC-BY-4.0), `chunk_count` (int), `freshness` (date), `download_url` (must be nowdocs-registry GitHub Releases domain), `sha256` (64-hex package integrity), `description` (optional, human-friendly).
+- Sample fixture: `seed-crates/index.json` (nextjs/react/vue).
+
+- [x] U3.2 Add parser tests for registry index.
   - docset, version, license, chunk_count, freshness, download URL.
   - Enforce nowdocs-registry URL policy.
 
-- [ ] U3.3 Add `nowdocs registry list/search` behind stable index.
+- [x] U3.3 Add `nowdocs registry list/search` behind stable index.
   - Human table and JSON output.
   - Install status column.
 
-- [ ] U3.4 Document that command may access network.
+- [x] U3.4 Document that command may access network.
 
 **Verification:**
 
@@ -297,12 +300,16 @@ Archive validation + error taxonomy are intentionally not specified in this PR. 
 
 ### User-owned / manual follow-up
 
-U3 is intentionally left unchecked because it needs a product/registry ownership decision before implementation:
+U3.1 (registry index source of truth) decided 2026-07-07: **GitHub raw/release asset in the nowdocs-registry repo** (self-hosted `registry.nowdocs.dev` mirror deferred to post-v1). Rationale: AGENTS.md pins all registry fetch URLs to the nowdocs-registry GitHub Releases domain (external URLs rejected), so index-on-GitHub is compliant and zero-infra.
 
-- choose the registry index source of truth (`index.json` in GitHub release/raw file vs `registry.nowdocs.dev` mirror);
-- approve the stable `index.json` schema;
-- provide or approve a real registry index fixture;
-- then implement `nowdocs registry list/search` and parser tests.
+U3.2–U3.4 done (2026-07-07):
+
+- (U3.1 done) source of truth = GitHub `nowdocs-registry` org (dedicated `registry-index` repo); default `index_url()` overridable via `NOWDOCS_REGISTRY_INDEX_URL`.
+- `index.json` schema approved (U3.2) — see "Agreed index.json schema" above.
+- Real fixture at `seed-crates/index.json` (nextjs/react/vue) with `nowdocs-registry`-domain `download_url`s (U3.2).
+- Implemented `nowdocs registry list` (table + `--json`, with install-status column) and `nowdocs registry search <query>` (U3.3) in `src/registry.rs`, wired via `RegistryCommands` in `cli.rs`/`main.rs`.
+- Parser + search + URL-policy-rejection tests in `tests/registry_index_tests.rs` (U3.2).
+- Network access documented in code: index is fetched via `curl` through the existing `download_to_temp` + `is_allowed_registry_url` gate (U3.4).
 
 ---
 
