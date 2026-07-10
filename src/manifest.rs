@@ -74,6 +74,39 @@ pub fn parse_manifest(json: &str) -> anyhow::Result<Manifest> {
     Ok(m)
 }
 
+/// Validate install-context business invariants that `validate` does not cover.
+///
+/// `validate` checks the self-contained schema/model/license surface. This
+/// checks the invariants that only make sense relative to a specific install:
+/// the manifest's `docset` must equal the requested install name (identity
+/// binding, complements Phase 0 S7), the docset must contain at least one
+/// chunk, and it must carry at least one traceable upstream URL. License and
+/// attribution are intentionally NOT re-checked here — `validate` already
+/// enforces the allowlist and CC-BY-4.0 attribution. Callers should run
+/// `validate` first, then this.
+pub fn validate_manifest_for_docset(m: &Manifest, expected_docset: &str) -> anyhow::Result<()> {
+    if m.docset != expected_docset {
+        anyhow::bail!(
+            "manifest docset {:?} does not match install name {:?}",
+            m.docset,
+            expected_docset
+        );
+    }
+    if m.source.chunk_count == 0 {
+        anyhow::bail!(
+            "manifest for {:?} has chunk_count 0; refusing to install an empty docset",
+            m.docset
+        );
+    }
+    if m.source.source_url.trim().is_empty() && m.source.entry_url.trim().is_empty() {
+        anyhow::bail!(
+            "manifest for {:?} must carry at least one of source.source_url / source.entry_url",
+            m.docset
+        );
+    }
+    Ok(())
+}
+
 /// Validate manifest against v1 invariants:
 /// - schema version must be 1 (only v1 supported)
 /// - embedder must be the locked model (jina-v2-small, 512-dim, candle, f16)

@@ -88,3 +88,61 @@ fn reports_schema_compatibility_without_bailing() {
         }
     );
 }
+
+// ---- M12: install-context business invariants (validate_manifest_for_docset) ----
+// These complement `validate` (self-contained schema/model/license) with checks
+// that only make sense relative to an install name. License / attribution are
+// intentionally NOT re-checked here — `validate` already covers them.
+
+use nowdocs::manifest::validate_manifest_for_docset;
+
+#[test]
+fn rejects_manifest_with_wrong_docset() {
+    let m = parse_manifest(VALID).unwrap();
+    assert!(
+        validate_manifest_for_docset(&m, "some-other-docset").is_err(),
+        "docset identity mismatch must be rejected"
+    );
+}
+
+#[test]
+fn rejects_manifest_with_zero_chunk_count() {
+    let mut v: serde_json::Value = serde_json::from_str(VALID).unwrap();
+    v["source"]["chunk_count"] = serde_json::json!(0);
+    let m: nowdocs::manifest::Manifest = serde_json::from_value(v).unwrap();
+    assert!(
+        validate_manifest_for_docset(&m, "nextjs").is_err(),
+        "chunk_count == 0 must be rejected"
+    );
+}
+
+#[test]
+fn rejects_manifest_with_no_source_urls() {
+    let mut v: serde_json::Value = serde_json::from_str(VALID).unwrap();
+    v["source"]["source_url"] = serde_json::json!("");
+    v["source"]["entry_url"] = serde_json::json!("");
+    let m: nowdocs::manifest::Manifest = serde_json::from_value(v).unwrap();
+    assert!(
+        validate_manifest_for_docset(&m, "nextjs").is_err(),
+        "both source_url and entry_url empty must be rejected"
+    );
+}
+
+#[test]
+fn accepts_valid_manifest_for_docset() {
+    let m = parse_manifest(VALID).unwrap();
+    assert!(
+        validate_manifest_for_docset(&m, "nextjs").is_ok(),
+        "valid manifest with matching docset must pass: {:?}",
+        validate_manifest_for_docset(&m, "nextjs").err()
+    );
+}
+
+#[test]
+fn accepts_manifest_with_only_entry_url() {
+    // source_url empty but entry_url present → still traceable, must pass.
+    let mut v: serde_json::Value = serde_json::from_str(VALID).unwrap();
+    v["source"]["source_url"] = serde_json::json!("");
+    let m: nowdocs::manifest::Manifest = serde_json::from_value(v).unwrap();
+    assert!(validate_manifest_for_docset(&m, "nextjs").is_ok());
+}
