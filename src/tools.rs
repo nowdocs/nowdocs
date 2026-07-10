@@ -114,7 +114,9 @@ fn handle_list() -> Value {
     let text = if docsets.is_empty() {
         "no docsets installed".to_string()
     } else {
-        docsets.join(", ")
+        // S6: docset names are returned to the LLM; sanitize defensively even
+        // though input::validate_docset already constrains the on-disk names.
+        sanitize::sanitize_metadata(&docsets.join(", "))
     };
 
     json!({
@@ -126,4 +128,32 @@ fn handle_list() -> Value {
 
 fn err_response(code: i64, message: &str) -> Value {
     json!({ "code": code, "message": message })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache;
+
+    #[test]
+    fn test_handle_list_sanitizes_docset_names() {
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+        cache::ensure_layout().unwrap();
+
+        // Plant a docset directory whose name embeds a zero-width injection char.
+        // Real on-disk names are constrained by `validate_docset`, but
+        // `handle_list` must still defend against hostile metadata reaching the
+        // LLM, so its output must pass through `sanitize_metadata` (S6).
+        let zw = char::from_u32(0x200B).unwrap();
+        let db = cache::cache_root().join("db");
+        std::fs::create_dir_all(db.join(format!("evil{zw}docset.lance"))).unwrap();
+
+        let value = handle_list();
+        let text = value["content"][0]["text"].as_str().unwrap();
+        assert!(
+            !text.contains(zw),
+            "handle_list output must be sanitized, got: {text:?}"
+        );
+    }
 }

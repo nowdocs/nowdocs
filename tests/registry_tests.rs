@@ -198,6 +198,29 @@ fn test_install_rejects_path_traversal_docset() {
     assert!(result.is_err(), "path traversal docset should be rejected");
 }
 
+// --- Test: install rejects manifest.docset != CLI install name (S7) ---
+
+#[test]
+fn test_install_rejects_docset_identity_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    // Archive manifest declares docset "test-docset".
+    let archive = make_tar_archive(dir.path());
+    let tar_path = dir.path().join("archive.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    let url = format!("file://{}", tar_path.display());
+
+    // CLI install name differs from the manifest's docset → must be rejected.
+    let result = nowdocs::registry::install("cli-name-mismatch", &url);
+    assert!(result.is_err(), "docset identity mismatch must be rejected");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("does not match install name"),
+        "error should explain identity mismatch, got: {msg}"
+    );
+}
+
 // --- Test: install from file:// URL ---
 
 #[test]
@@ -205,7 +228,7 @@ fn test_install_from_file_url() {
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
-    let docset = "test_file_install";
+    let docset = "test-docset";
     let archive = make_tar_archive(dir.path());
     let tar_path = dir.path().join("archive.tar");
     std::fs::write(&tar_path, &archive).unwrap();
@@ -236,7 +259,7 @@ fn test_install_persists_license_for_reshare() {
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
-    let docset = "test_install_lic";
+    let docset = "test-docset";
     let license_body = "MIT license body, upstream notice\n";
 
     // Build an archive that includes a LICENSE entry alongside manifest + chunks.
@@ -422,7 +445,7 @@ fn test_update_refreshes_manifest() {
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
-    let docset = "test_update";
+    let docset = "test-docset";
 
     // Write initial manifest.
     write_test_manifest(dir.path(), docset);
@@ -933,7 +956,7 @@ fn test_r1_valid_archive_installs() {
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
-    let docset = "r1_valid_install";
+    let docset = "test-docset";
     let archive = make_tar_archive(dir.path());
     let tar_path = dir.path().join("valid.tar");
     std::fs::write(&tar_path, &archive).unwrap();
@@ -1052,7 +1075,7 @@ fn test_successful_install_promotes_active_manifest_and_store() {
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
-    let docset = "test_successful_install";
+    let docset = "test-docset";
     let archive = make_tar_archive(dir.path());
     let tar_path = dir.path().join("archive.tar");
     std::fs::write(&tar_path, &archive).unwrap();
@@ -1082,7 +1105,7 @@ fn test_failed_update_preserves_old_active_manifest_and_store() {
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
-    let docset = "test_failed_update";
+    let docset = "test-docset";
 
     // First, install a valid docset
     let archive = make_tar_archive(dir.path());
@@ -1137,7 +1160,7 @@ fn test_successful_update_cleans_rollback() {
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
-    let docset = "test_update_cleanup";
+    let docset = "test-docset";
 
     // First, install a valid docset
     let archive = make_tar_archive(dir.path());

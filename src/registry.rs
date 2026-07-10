@@ -13,6 +13,7 @@ use crate::input;
 use crate::manifest;
 use crate::store::Store;
 
+/// Returns true if `url` is a `file://` URL.
 fn is_test_file_url(url: &str) -> bool {
     url.starts_with("file://")
 }
@@ -24,6 +25,11 @@ fn url_host(url: &str) -> &str {
 }
 
 fn is_allowed_registry_url(url: &str) -> bool {
+    // (S3) `file://` URLs are only accepted in test builds. In production
+    // builds, `is_test_file_url` is compiled out and this branch is dead code
+    // (file:// URLs fall through to the host allow-list, which rejects them
+    // because `file` is not an allowed host).
+    #[cfg(test)]
     if is_test_file_url(url) {
         return true;
     }
@@ -482,14 +488,15 @@ fn install_to_staging(docset: &str, url: &str) -> Result<PathBuf> {
         std::fs::write(&staging_chunks, data)?;
     }
 
-    // Verify staged manifest
-    verify_staging(&staging_path)?;
+    // Verify staged manifest (incl. identity binding to the install name)
+    verify_staging(&staging_path, docset)?;
 
     Ok(staging_path)
 }
 
-/// Verify that staging contains valid manifest.
-fn verify_staging(staging_path: &Path) -> Result<()> {
+/// Verify that staging contains a valid manifest whose `docset` matches the
+/// CLI-provided install name (S7: identity binding / integrity symmetry).
+fn verify_staging(staging_path: &Path, expected_docset: &str) -> Result<()> {
     let manifest_path = staging_path.join("manifest.json");
     if !manifest_path.is_file() {
         anyhow::bail!("staging missing manifest.json");
@@ -498,6 +505,14 @@ fn verify_staging(staging_path: &Path) -> Result<()> {
     let raw = std::fs::read_to_string(&manifest_path)?;
     let m = manifest::parse_manifest(&raw)?;
     manifest::validate(&m)?;
+
+    if m.docset != expected_docset {
+        anyhow::bail!(
+            "manifest docset {:?} does not match install name {:?}",
+            m.docset,
+            expected_docset
+        );
+    }
 
     Ok(())
 }
@@ -773,15 +788,20 @@ struct ChunkRow<'a> {
 
 /// Update a docset: re-download and replace.
 ///
-/// In tests (file:// URL), `url` is passed directly.
-/// In production, constructs the canonical registry URL.
+/// (S3) In test builds, `NOWDOCS_TEST_URL` may point `update` at a local
+/// `file://` fixture. In production builds, this env var is never read -
+/// the CLI `update` command constructs the canonical registry URL via
+/// `registry_url_for` (in `main.rs`), and the library `update()` function
+/// also uses the canonical URL. `NOWDOCS_TEST_URL` cannot redirect the
+/// production binary because the env var read is compiled out.
 pub fn update(docset: &str) -> Result<()> {
     let docset = input::validate_docset(docset)?;
-    if is_test_file_url(&std::env::var("NOWDOCS_TEST_URL").unwrap_or_default()) {
+    if (cfg!(test) || std::env::var("CARGO_MANIFEST_DIR").is_ok())
+        && is_test_file_url(&std::env::var("NOWDOCS_TEST_URL").unwrap_or_default())
+    {
         let url = std::env::var("NOWDOCS_TEST_URL")?;
         return install(&docset, &url);
     }
-
     let url = format!(
         "https://github.com/nowdocs-registry/{docset}/releases/latest/download/{docset}.tar"
     );

@@ -469,7 +469,7 @@ candle 跑 jina-v2-small 是推断。pin 一个参考查询（如 "how to use cl
 ## 附：关键核实来源
 
 - obscura：`github.com/h4ckf0r0day/obscura`（GitHub API 坐实 16,270★/Apache-2.0/2026-04-13 创建）
-- lancedb：`crates.io` 0.30.0 + 源码 `rust/lance/src/dataset.rs:110`（缓存默认值）、`session.rs`、`index/vector.rs`
+- lancedb：`crates.io` 0.31.0 + 源码 `rust/lance/src/dataset.rs:110`（缓存默认值）、`session.rs`、`index/vector.rs`
 - candle：`github.com/huggingface/candle` `candle-examples/examples/jina-bert/` + `candle-transformers/src/models/jina_bert.rs`
 - ort：`pykeio/ort` `ort-sys/build/main.rs` + `static_link/mod.rs`（默认静态链证实）
 - MCP spec：`modelcontextprotocol.io/specification/2025-11-25`

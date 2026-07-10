@@ -39,10 +39,10 @@ fn test_cli_help_lists_all_subcommands() {
 //     and registry_tests.rs may not share a common module under the
 //     4d constraint of "only edit cli_tests.rs + main.rs") ---
 
-fn test_manifest_json(version: &str) -> String {
+fn test_manifest_json(docset: &str, version: &str) -> String {
     format!(
         r#"{{
-            "docset": "test-docset",
+            "docset": "{docset}",
             "doc_version": "{version}",
             "nowdocs_schema_version": 1,
             "embedder": {{
@@ -118,8 +118,8 @@ fn make_tar_entry(name: &str, data: &[u8]) -> Vec<u8> {
     entry
 }
 
-fn make_tar_archive(version: &str) -> Vec<u8> {
-    let manifest_data = test_manifest_json(version).into_bytes();
+fn make_tar_archive(docset: &str, version: &str) -> Vec<u8> {
+    let manifest_data = test_manifest_json(docset, version).into_bytes();
     let chunks_data = test_chunks_jsonl().as_bytes();
     let files: Vec<(&str, &[u8])> = vec![
         ("manifest.json", &manifest_data),
@@ -134,8 +134,8 @@ fn make_tar_archive(version: &str) -> Vec<u8> {
     archive
 }
 
-fn write_tarball(dir: &std::path::Path, version: &str) -> std::path::PathBuf {
-    let archive = make_tar_archive(version);
+fn write_tarball(dir: &std::path::Path, docset: &str, version: &str) -> std::path::PathBuf {
+    let archive = make_tar_archive(docset, version);
     let tar_path = dir.join(format!("archive_{version}.tar"));
     std::fs::write(&tar_path, &archive).unwrap();
     tar_path
@@ -152,21 +152,6 @@ fn run_nowdocs(
         .current_dir(cwd)
         .env("XDG_CACHE_HOME", cache_home)
         .env("NOWDOCS_TEST_URL", "") // reset for tests that don't use it
-        .output()
-        .expect("failed to execute nowdocs")
-}
-
-fn run_nowdocs_with_test_url(
-    cwd: &std::path::Path,
-    cache_home: &std::path::Path,
-    test_url: &str,
-    args: &[&str],
-) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_nowdocs"))
-        .args(args)
-        .current_dir(cwd)
-        .env("XDG_CACHE_HOME", cache_home)
-        .env("NOWDOCS_TEST_URL", test_url)
         .output()
         .expect("failed to execute nowdocs")
 }
@@ -197,17 +182,14 @@ fn test_cli_list_installed_empty() {
 fn test_cli_install_uninstall_roundtrip() {
     let cache = tempfile::tempdir().unwrap();
     let cwd = tempfile::tempdir().unwrap();
-    let tar = write_tarball(cache.path(), "1.0.0");
+    let tar = write_tarball(cache.path(), "rnd-foo-7711", "1.0.0");
     let url = format!("file://{}", tar.display());
 
-    // install
-    let out =
-        run_nowdocs_with_test_url(cwd.path(), cache.path(), &url, &["install", "rnd-foo-7711"]);
-    assert!(
-        out.status.success(),
-        "install should exit 0, stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    // install — call the library directly: the production binary (built without
+    // `cfg(test)`) no longer honors `file://` / NOWDOCS_TEST_URL, so the test
+    // fixture path must go through `install` (which IS compiled in cfg(test)).
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    nowdocs::registry::install("rnd-foo-7711", &url).expect("install should succeed");
 
     // list-installed shows it
     let out = run_nowdocs(cwd.path(), cache.path(), &["list-installed"]);
@@ -242,21 +224,13 @@ fn test_cli_install_uninstall_roundtrip() {
 fn test_cli_share_creates_out_dir() {
     let cache = tempfile::tempdir().unwrap();
     let cwd = tempfile::tempdir().unwrap();
-    let tar = write_tarball(cache.path(), "1.0.0");
+    let tar = write_tarball(cache.path(), "rnd-share-9912", "1.0.0");
     let url = format!("file://{}", tar.display());
 
-    // install
-    let out = run_nowdocs_with_test_url(
-        cwd.path(),
-        cache.path(),
-        &url,
-        &["install", "rnd-share-9912"],
-    );
-    assert!(
-        out.status.success(),
-        "install failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    // install — library path honors `file://` in cfg(test); the production
+    // binary does not, so install must go through the library here.
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    nowdocs::registry::install("rnd-share-9912", &url).expect("install should succeed");
 
     // share — default out_dir is ./{docset}-share relative to cwd
     let out = run_nowdocs(cwd.path(), cache.path(), &["share", "rnd-share-9912"]);
@@ -289,22 +263,12 @@ fn test_cli_share_creates_out_dir() {
 #[test]
 fn test_cli_update_refreshes_manifest() {
     let cache = tempfile::tempdir().unwrap();
-    let cwd = tempfile::tempdir().unwrap();
-    let v1 = write_tarball(cache.path(), "1.0.0");
+    let v1 = write_tarball(cache.path(), "rnd-upd-3344", "1.0.0");
     let v1_url = format!("file://{}", v1.display());
 
-    // install v1
-    let out = run_nowdocs_with_test_url(
-        cwd.path(),
-        cache.path(),
-        &v1_url,
-        &["install", "rnd-upd-3344"],
-    );
-    assert!(
-        out.status.success(),
-        "install v1 failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    // install v1 — library path honors `file://` in cfg(test)
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    nowdocs::registry::install("rnd-upd-3344", &v1_url).expect("install v1 should succeed");
 
     // confirm v1 on disk (manifest path is known from cache layout; the test
     // process doesn't see the subprocess's XDG_CACHE_HOME, so we construct
@@ -319,21 +283,13 @@ fn test_cli_update_refreshes_manifest() {
     assert_eq!(m1.doc_version, "1.0.0");
 
     // write v2 tarball
-    let v2 = write_tarball(cache.path(), "2.0.0");
+    let v2 = write_tarball(cache.path(), "rnd-upd-3344", "2.0.0");
     let v2_url = format!("file://{}", v2.display());
 
-    // update with v2
-    let out = run_nowdocs_with_test_url(
-        cwd.path(),
-        cache.path(),
-        &v2_url,
-        &["update", "rnd-upd-3344"],
-    );
-    assert!(
-        out.status.success(),
-        "update failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    // update with v2 — library path honors NOWDOCS_TEST_URL in cfg(test); the
+    // production binary does not, so update must go through the library here.
+    unsafe { std::env::set_var("NOWDOCS_TEST_URL", &v2_url) };
+    nowdocs::registry::update("rnd-upd-3344").expect("update should succeed");
 
     // manifest should now be v2
     let m2 = nowdocs::manifest::parse_manifest(&std::fs::read_to_string(&manifest_path).unwrap())

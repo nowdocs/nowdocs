@@ -294,7 +294,7 @@ pub fn run_model_check() -> DoctorOutput {
     }
 
     DoctorOutput {
-        status: Severity::Ok,
+        status: aggregate_status(&checks),
         checks,
     }
 }

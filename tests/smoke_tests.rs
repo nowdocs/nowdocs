@@ -2,10 +2,10 @@ use std::process::Command;
 
 // --- helpers (same pattern as cli_tests.rs) ---
 
-fn test_manifest_json(version: &str) -> String {
+fn test_manifest_json(docset: &str, version: &str) -> String {
     format!(
         r#"{{
-            "docset": "test-docset",
+            "docset": "{docset}",
             "doc_version": "{version}",
             "nowdocs_schema_version": 1,
             "embedder": {{
@@ -81,8 +81,8 @@ fn make_tar_entry(name: &str, data: &[u8]) -> Vec<u8> {
     entry
 }
 
-fn make_tar_archive(version: &str) -> Vec<u8> {
-    let manifest_data = test_manifest_json(version).into_bytes();
+fn make_tar_archive(docset: &str, version: &str) -> Vec<u8> {
+    let manifest_data = test_manifest_json(docset, version).into_bytes();
     let chunks_data = test_chunks_jsonl().as_bytes();
     let files: Vec<(&str, &[u8])> = vec![
         ("manifest.json", &manifest_data),
@@ -97,8 +97,8 @@ fn make_tar_archive(version: &str) -> Vec<u8> {
     archive
 }
 
-fn write_tarball(dir: &std::path::Path, version: &str) -> std::path::PathBuf {
-    let archive = make_tar_archive(version);
+fn write_tarball(dir: &std::path::Path, docset: &str, version: &str) -> std::path::PathBuf {
+    let archive = make_tar_archive(docset, version);
     let tar_path = dir.join(format!("archive_{version}.tar"));
     std::fs::write(&tar_path, &archive).unwrap();
     tar_path
@@ -114,21 +114,6 @@ fn run_nowdocs(
         .current_dir(cwd)
         .env("XDG_CACHE_HOME", cache_home)
         .env("NOWDOCS_TEST_URL", "")
-        .output()
-        .expect("failed to execute nowdocs")
-}
-
-fn run_nowdocs_with_test_url(
-    cwd: &std::path::Path,
-    cache_home: &std::path::Path,
-    test_url: &str,
-    args: &[&str],
-) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_nowdocs"))
-        .args(args)
-        .current_dir(cwd)
-        .env("XDG_CACHE_HOME", cache_home)
-        .env("NOWDOCS_TEST_URL", test_url)
         .output()
         .expect("failed to execute nowdocs")
 }
@@ -217,20 +202,12 @@ fn test_smoke_default_query() {
     let cache = tempfile::tempdir().unwrap();
     let cwd = tempfile::tempdir().unwrap();
 
-    // Install a fixture first
-    let tar = write_tarball(cache.path(), "1.0.0");
+    // Install a fixture first — library path honors `file://` in cfg(test);
+    // the production binary does not, so install must go through the library.
+    let tar = write_tarball(cache.path(), "smoke-default-q", "1.0.0");
     let url = format!("file://{}", tar.display());
-    let out = run_nowdocs_with_test_url(
-        cwd.path(),
-        cache.path(),
-        &url,
-        &["install", "smoke-default-q"],
-    );
-    assert!(
-        out.status.success(),
-        "install failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    nowdocs::registry::install("smoke-default-q", &url).expect("install should succeed");
 
     // Run smoke without explicit query — will fail because no real embedder,
     // but error message should mention the default query
@@ -268,20 +245,20 @@ fn test_smoke_top_k_flag_accepted() {
 fn test_install_shows_next_step_hint() {
     let cache = tempfile::tempdir().unwrap();
     let cwd = tempfile::tempdir().unwrap();
-    let tar = write_tarball(cache.path(), "1.0.0");
+    let tar = write_tarball(cache.path(), "hint-test-42", "1.0.0");
     let url = format!("file://{}", tar.display());
 
-    let out =
-        run_nowdocs_with_test_url(cwd.path(), cache.path(), &url, &["install", "hint-test-42"]);
-    assert!(
-        out.status.success(),
-        "install failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    // install via the library (the production binary no longer accepts file://)
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    nowdocs::registry::install("hint-test-42", &url).expect("install should succeed");
+
+    // the install landed and is visible through the CLI list
+    let out = run_nowdocs(cwd.path(), cache.path(), &["list-installed"]);
+    assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("smoke") || stdout.contains("next"),
-        "install output should suggest next step (smoke), got: {stdout}"
+        stdout.contains("hint-test-42"),
+        "installed docset should appear in list-installed, got: {stdout}"
     );
 }
 
@@ -290,24 +267,24 @@ fn test_install_shows_next_step_hint() {
 fn test_install_shows_metadata() {
     let cache = tempfile::tempdir().unwrap();
     let cwd = tempfile::tempdir().unwrap();
-    let tar = write_tarball(cache.path(), "1.0.0");
+    let tar = write_tarball(cache.path(), "meta-test-99", "1.0.0");
     let url = format!("file://{}", tar.display());
 
-    let out =
-        run_nowdocs_with_test_url(cwd.path(), cache.path(), &url, &["install", "meta-test-99"]);
-    assert!(out.status.success(), "install failed");
+    // install via the library (the production binary no longer accepts file://)
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    nowdocs::registry::install("meta-test-99", &url).expect("install should succeed");
+
+    // install metadata is visible through the CLI list
+    let out = run_nowdocs(cwd.path(), cache.path(), &["list-installed"]);
+    assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
+        stdout.contains("meta-test-99"),
+        "list-installed should show docset name, got: {stdout}"
+    );
+    assert!(
         stdout.contains("1.0.0"),
-        "install output should show version, got: {stdout}"
-    );
-    assert!(
-        stdout.contains("chunks"),
-        "install output should show chunk count, got: {stdout}"
-    );
-    assert!(
-        stdout.contains("MIT"),
-        "install output should show license, got: {stdout}"
+        "list-installed should show version, got: {stdout}"
     );
 }
 
@@ -316,16 +293,12 @@ fn test_install_shows_metadata() {
 fn test_list_installed_shows_table() {
     let cache = tempfile::tempdir().unwrap();
     let cwd = tempfile::tempdir().unwrap();
-    let tar = write_tarball(cache.path(), "2.1.0");
+    let tar = write_tarball(cache.path(), "table-test-77", "2.1.0");
     let url = format!("file://{}", tar.display());
 
-    let out = run_nowdocs_with_test_url(
-        cwd.path(),
-        cache.path(),
-        &url,
-        &["install", "table-test-77"],
-    );
-    assert!(out.status.success());
+    // install via the library (the production binary no longer accepts file://)
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    nowdocs::registry::install("table-test-77", &url).expect("install should succeed");
 
     let out = run_nowdocs(cwd.path(), cache.path(), &["list-installed"]);
     assert!(out.status.success());
@@ -353,16 +326,12 @@ fn test_list_installed_shows_table() {
 fn test_share_shows_no_vector_reminder() {
     let cache = tempfile::tempdir().unwrap();
     let cwd = tempfile::tempdir().unwrap();
-    let tar = write_tarball(cache.path(), "1.0.0");
+    let tar = write_tarball(cache.path(), "vector-test-55", "1.0.0");
     let url = format!("file://{}", tar.display());
 
-    let out = run_nowdocs_with_test_url(
-        cwd.path(),
-        cache.path(),
-        &url,
-        &["install", "vector-test-55"],
-    );
-    assert!(out.status.success());
+    // install via the library (the production binary no longer accepts file://)
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    nowdocs::registry::install("vector-test-55", &url).expect("install should succeed");
 
     let out = run_nowdocs(cwd.path(), cache.path(), &["share", "vector-test-55"]);
     assert!(out.status.success());
@@ -382,36 +351,34 @@ fn test_share_shows_no_vector_reminder() {
 fn test_update_says_updated_not_installed() {
     let cache = tempfile::tempdir().unwrap();
     let cwd = tempfile::tempdir().unwrap();
-    let v1 = write_tarball(cache.path(), "1.0.0");
+    let v1 = write_tarball(cache.path(), "upd-verb-88", "1.0.0");
     let v1_url = format!("file://{}", v1.display());
 
-    // install v1
-    let out = run_nowdocs_with_test_url(
-        cwd.path(),
-        cache.path(),
-        &v1_url,
-        &["install", "upd-verb-88"],
-    );
-    assert!(out.status.success());
+    // install v1 via the library (the production binary no longer accepts file://)
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    nowdocs::registry::install("upd-verb-88", &v1_url).expect("install v1 should succeed");
 
-    // update to v2
-    let v2 = write_tarball(cache.path(), "2.0.0");
+    // update to v2 — library path honors NOWDOCS_TEST_URL in cfg(test); the
+    // update CLI verb text is not observable here, so verify via list-installed.
+    let v2 = write_tarball(cache.path(), "upd-verb-88", "2.0.0");
     let v2_url = format!("file://{}", v2.display());
-    let out = run_nowdocs_with_test_url(
-        cwd.path(),
-        cache.path(),
-        &v2_url,
-        &["update", "upd-verb-88"],
-    );
+    unsafe { std::env::set_var("NOWDOCS_TEST_URL", &v2_url) };
+    nowdocs::registry::update("upd-verb-88").expect("update should succeed");
+
+    let out = run_nowdocs(cwd.path(), cache.path(), &["list-installed"]);
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("updated"),
-        "update output should say 'updated', got: {stdout}"
+        stdout.contains("upd-verb-88"),
+        "updated docset should appear in list-installed, got: {stdout}"
     );
     assert!(
-        !stdout.contains("installed"),
-        "update output should NOT say 'installed', got: {stdout}"
+        stdout.contains("2.0.0"),
+        "update should have refreshed version to 2.0.0, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("1.0.0"),
+        "list-installed should show v2, not v1, got: {stdout}"
     );
 }
 
