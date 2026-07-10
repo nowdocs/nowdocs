@@ -79,9 +79,9 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             Ok(())
         }
         Commands::Update { docset } => {
-            // S3: derive the canonical registry URL. `registry_url_for` compiles
-            // out the NOWDOCS_TEST_URL override in the binary, so `update` can
-            // never be redirected to an arbitrary local file via the env var.
+            // (S3) `registry_url_for` always returns the canonical registry URL
+            // (never reads NOWDOCS_TEST_URL), so the binary's update cannot be
+            // redirected to a local file via env var.
             let url = registry_url_for(&docset);
             nowdocs::registry::install(&docset, &url)?;
             print_update_success(&docset);
@@ -373,14 +373,9 @@ fn list_installed() -> std::io::Result<Vec<InstalledDocset>> {
 }
 
 fn registry_url_for(docset: &str) -> String {
-    // S3: test-only override. `NOWDOCS_TEST_URL` is honored only in test builds
-    // (compiled out in production), so a production binary cannot be redirected
-    // to an arbitrary local file via this env var.
-    #[cfg(test)]
-    if let Ok(url) = std::env::var("NOWDOCS_TEST_URL") {
-        if !url.is_empty() {
-            return url;
-        }
-    }
+    // (S3) The binary always uses the canonical registry URL. `NOWDOCS_TEST_URL`
+    // is NOT read here - integration tests that need `file://` fixtures call
+    // the library API (`nowdocs::registry::install`) directly instead of
+    // spawning the binary.
     format!("https://github.com/nowdocs-registry/{docset}/releases/latest/download/{docset}.tar")
 }

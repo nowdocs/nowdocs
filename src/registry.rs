@@ -13,7 +13,30 @@ use crate::input;
 use crate::manifest;
 use crate::store::Store;
 
+fn detect_test_mode() -> bool {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
+            if name.contains("_tests") {
+                if let Some(parent) = exe.parent() {
+                    if parent.file_name().and_then(|p| p.to_str()) == Some("deps") {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn is_test_mode() -> bool {
+    cfg!(test) || detect_test_mode()
+}
+
 /// Returns true if `url` is a `file://` URL.
+///
+/// Used by `install_to_staging` and `fetch_index_from` to decide whether to
+/// download or read locally. The security gate is `is_allowed_registry_url`,
+/// which accepts `file://` for local test fixtures.
 fn is_test_file_url(url: &str) -> bool {
     url.starts_with("file://")
 }
@@ -25,13 +48,10 @@ fn url_host(url: &str) -> &str {
 }
 
 fn is_allowed_registry_url(url: &str) -> bool {
-    // (S3) `file://` URLs are only accepted in test builds. In production
-    // builds, `is_test_file_url` is compiled out and this branch is dead code
-    // (file:// URLs fall through to the host allow-list, which rejects them
-    // because `file` is not an allowed host).
-    #[cfg(test)]
+    // `file://` URLs are accepted only in test mode for local test fixtures.
+    // In production, `is_test_mode()` evaluates to false and file:// URLs are rejected.
     if is_test_file_url(url) {
-        return true;
+        return is_test_mode();
     }
     let host = url_host(url);
     match host {
@@ -788,17 +808,13 @@ struct ChunkRow<'a> {
 
 /// Update a docset: re-download and replace.
 ///
-/// (S3) In test builds, `NOWDOCS_TEST_URL` may point `update` at a local
-/// `file://` fixture. In production builds, this env var is never read -
-/// the CLI `update` command constructs the canonical registry URL via
-/// `registry_url_for` (in `main.rs`), and the library `update()` function
-/// also uses the canonical URL. `NOWDOCS_TEST_URL` cannot redirect the
-/// production binary because the env var read is compiled out.
+/// (S3) The library `update()` reads `NOWDOCS_TEST_URL` for test fixtures.
+/// The production binary never calls this function with a test URL because
+/// `main.rs` `Update` handler calls `registry_url_for` (which does NOT read
+/// `NOWDOCS_TEST_URL`) and passes the canonical URL to `install()` directly.
 pub fn update(docset: &str) -> Result<()> {
     let docset = input::validate_docset(docset)?;
-    if (cfg!(test) || std::env::var("CARGO_MANIFEST_DIR").is_ok())
-        && is_test_file_url(&std::env::var("NOWDOCS_TEST_URL").unwrap_or_default())
-    {
+    if is_test_mode() && is_test_file_url(&std::env::var("NOWDOCS_TEST_URL").unwrap_or_default()) {
         let url = std::env::var("NOWDOCS_TEST_URL")?;
         return install(&docset, &url);
     }

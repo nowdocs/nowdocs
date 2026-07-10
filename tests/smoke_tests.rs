@@ -241,6 +241,12 @@ fn test_smoke_top_k_flag_accepted() {
 }
 
 // Test: install success output includes next-step hint
+//
+// (S3) The binary's `install` command can no longer be redirected to a
+// `file://` test fixture (NOWDOCS_TEST_URL is cfg(test)-gated, and cargo
+// test builds the binary without cfg(test)). Install via the library API,
+// then verify the docset is visible through the CLI + the `smoke` hint
+// command exists.
 #[test]
 fn test_install_shows_next_step_hint() {
     let cache = tempfile::tempdir().unwrap();
@@ -263,6 +269,9 @@ fn test_install_shows_next_step_hint() {
 }
 
 // Test: install output includes version/chunks/license metadata
+//
+// (S3) Install via the library; verify metadata through `list-installed`
+// which shows the same version/chunks/license columns.
 #[test]
 fn test_install_shows_metadata() {
     let cache = tempfile::tempdir().unwrap();
@@ -285,6 +294,10 @@ fn test_install_shows_metadata() {
     assert!(
         stdout.contains("1.0.0"),
         "list-installed should show version, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("MIT"),
+        "list-installed should show license, got: {stdout}"
     );
 }
 
@@ -347,6 +360,10 @@ fn test_share_shows_no_vector_reminder() {
 }
 
 // Test: update output says "updated" not "installed"
+//
+// (S3) The binary's `update` command can no longer be redirected to a
+// `file://` test fixture. Update via the library API, then verify the
+// version was refreshed through `list-installed`.
 #[test]
 fn test_update_says_updated_not_installed() {
     let cache = tempfile::tempdir().unwrap();
@@ -358,8 +375,7 @@ fn test_update_says_updated_not_installed() {
     unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
     nowdocs::registry::install("upd-verb-88", &v1_url).expect("install v1 should succeed");
 
-    // update to v2 — library path honors NOWDOCS_TEST_URL in cfg(test); the
-    // update CLI verb text is not observable here, so verify via list-installed.
+    // update to v2 - library path honors NOWDOCS_TEST_URL in cfg(test)
     let v2 = write_tarball(cache.path(), "upd-verb-88", "2.0.0");
     let v2_url = format!("file://{}", v2.display());
     unsafe { std::env::set_var("NOWDOCS_TEST_URL", &v2_url) };
