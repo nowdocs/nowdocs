@@ -20,7 +20,7 @@ LLM 训练有截止日期，对快速变化的库（Next.js 15 / React 19 / Vue 
 cargo install --git https://github.com/nowdocs/nowdocs
 ```
 
-需 Rust 工具链（stable）与 `protoc`（prost-build 依赖；macOS `brew install protobuf`，Linux `sudo apt-get install protobuf-compiler`）。首次 `serve` 会从 HuggingFace 下载 embedder 模型（jina-v2-small-en，约 66 MB），之后本地缓存。
+需 Rust 工具链（stable）、`protoc`（prost-build 依赖；macOS `brew install protobuf`，Linux `sudo apt-get install protobuf-compiler`）与 `curl`（用于 registry 联网下载预编译的 docset）。首次 `serve` 会从 HuggingFace 下载 embedder 模型（jina-v2-small-en，约 66 MB），之后本地缓存。
 
 ### 待正式 release（预编译二进制）
 
@@ -94,6 +94,17 @@ release 二进制覆盖 linux musl（x86_64 / aarch64）、macOS（arm64 / x86_6
 | `nowdocs share <docset>` | 打包 docset 供 registry 贡献（文本 + manifest，不含向量） |
 
 `ingest` 参数：`--license`（MIT / Apache-2.0 / CC-BY-4.0，默认 MIT）、`--copyright-holder`、`--attribution`（CC-BY-4.0 必填）、`--source-url`、`--entry-url`。
+
+## 使用路径与架构边界
+
+nowdocs 针对不同使用场景提供三条清晰路径：
+1. **终端用户 (End User)**: 通过 `nowdocs install <docset>` 安装文档包，再通过 `nowdocs serve` 提供本地 MCP 服务。
+2. **贡献者 (Contributor)**: 使用 `nowdocs ingest <dir>` 导入 Markdown 文档，并通过 `nowdocs share <docset>` 打包分享到 registry 社区。
+3. **诊断与排错 (Troubleshooting)**: 使用 `nowdocs doctor` 诊断本地环境，用 `nowdocs smoke <docset> [query]` 冒烟测试检索质量。
+
+> **架构安全声明**：
+> - **MCP 工具是只读的**：MCP 接口暴露的工具（`nowdocs_search`、`nowdocs_list`）是纯只读查询，LLM agent 绝无可能通过 MCP 触发任何写操作（如安装、卸载、导入等）。
+> - **有副作用的操作均为 CLI 独占**：所有修改状态、写入文件和下载数据的敏感指令（如 `install`、`uninstall`、`ingest` 等）必须在终端中由用户手动运行 CLI 指令执行。
 
 ## 工作原理
 

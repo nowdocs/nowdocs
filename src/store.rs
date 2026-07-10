@@ -1,3 +1,10 @@
+//! Store wraps async LanceDB with a synchronous facade.
+//!
+//! Suitable for CLI tools and stdio-based MCP servers where synchronous blocking is acceptable.
+//! Note: It cannot be used inside an existing tokio runtime context due to potential nested runtime panics
+//! ("Cannot start a runtime from within a runtime").
+//! True AsyncStore implementation is deferred to v2.
+
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};

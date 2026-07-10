@@ -1,0 +1,44 @@
+name: Evaluation Gate
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # Nightly at 2 AM
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  PROTOC: /usr/bin/protoc
+  HF_ENDPOINT: https://hf-mirror.com
+
+jobs:
+  eval:
+    name: Evaluation Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Restore models cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/nowdocs/models/
+          key: ${{ runner.os }}-nowdocs-models-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-nowdocs-models-
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: protoc-v1
+
+      - name: Reconstruct Next.js corpus
+        run: python3 seed-crates/tmp/rebuild_nextjs.py
+
+      - name: Run evaluation tests
+        run: cargo test --test eval_tests -- --ignored --test-threads=1

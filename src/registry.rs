@@ -674,7 +674,7 @@ pub fn share(docset: &str, out_dir: &Path) -> Result<PathBuf> {
     let docset = input::validate_docset(docset)?;
     let mp = cache::manifest_path(&docset);
     if !mp.is_file() {
-        anyhow::bail!("docset not installed: {}", &docset);
+        anyhow::bail!("docset not installed: {}", docset);
     }
     let raw = std::fs::read_to_string(&mp)?;
     let m = manifest::parse_manifest(&raw)?;
