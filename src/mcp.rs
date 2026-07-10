@@ -20,6 +20,8 @@ const SERVER_NAME: &str = "nowdocs";
 /// JSON-RPC error codes.
 const ERR_METHOD_NOT_FOUND: i64 = -32601;
 const ERR_INVALID_PARAMS: i64 = -32602;
+/// Parse error (JSON-RPC 2.0 §5.1): malformed JSON, id unknown.
+const ERR_PARSE_ERROR: i64 = -32700;
 
 pub fn run_loop() -> io::Result<()> {
     // Fail-closed: refuse to serve if the cache layout is wrong (D15).
@@ -48,7 +50,7 @@ pub fn run_loop() -> io::Result<()> {
                 let _ = write_response(
                     &mut out,
                     &Value::Null,
-                    &err_response(ERR_INVALID_PARAMS, &format!("parse error: {e}")),
+                    &err_response(ERR_PARSE_ERROR, &format!("parse error: {e}")),
                 );
                 continue;
             }

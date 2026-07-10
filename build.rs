@@ -1,12 +1,17 @@
 fn main() {
+    // M17: Lance's `protoc` feature (Cargo.toml) vendors protobuf-compiler so a
+    // system `protoc` is not strictly required for clean builds. This build
+    // script no longer panics when protoc is missing — it only emits a warning
+    // if neither `PROTOC` nor a system `protoc` is found, since the vendored
+    // path is expected to cover the build.
     if std::env::var_os("PROTOC").is_some() || command_exists("protoc") {
         return;
     }
 
-    panic!(
-        "nowdocs requires protoc to build LanceDB dependencies. \
-         Install protobuf-compiler (Debian/Ubuntu: apt-get install protobuf-compiler) \
-         or set PROTOC to a protoc binary before running cargo."
+    println!(
+        "cargo:warning=nowdocs: no system `protoc` found; relying on the Lance `protoc` feature (vendored protobuf-compiler). \
+         If the build fails, install protobuf-compiler (Debian/Ubuntu: apt-get install protobuf-compiler) \
+         or set PROTOC to a protoc binary."
     );
 }
 
