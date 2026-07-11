@@ -141,18 +141,25 @@ fn tools_call_search_returns_structured_error_not_crash() {
         "jsonrpc":"2.0","id":2,"method":"tools/call",
         "params":{"name":"nowdocs_search","arguments":{"query":"how to use middleware","docset":"nextjs"}}
     }));
-    // Search is wired (Wave 4) but docset doesn't exist - must be a structured
-    // JSON-RPC error, never a crash / dropped connection.
-    assert!(
-        resp.get("error").is_some(),
-        "expected error result, got: {}",
+    // Search is wired (Wave 4) but docset doesn't exist. A missing docset is a
+    // business error: it must surface as a tool result with `isError: true`
+    // (not a JSON-RPC error), never a crash / dropped connection.
+    let result = resp.get("result").expect("expected a result envelope");
+    assert_eq!(
+        result["isError"].as_bool(),
+        Some(true),
+        "missing docset must be isError:true, got: {}",
         resp
     );
-    let code = resp["error"]["code"].as_i64().expect("error code");
     assert!(
-        code == -32602,
-        "expected -32602 search-failed, got {}",
-        code
+        resp.get("error").is_none(),
+        "business errors must not be JSON-RPC errors, got: {}",
+        resp
+    );
+    let text = result["content"][0]["text"].as_str().expect("hint text");
+    assert!(
+        text.contains("nextjs") && text.contains("install"),
+        "hint must name the docset and the install command, got: {text:?}"
     );
 
     // Server must still be alive (not crashed).
@@ -215,5 +222,87 @@ fn test_mcp_parse_error_returns_32700() {
         v["error"]["code"].as_i64(),
         Some(-32700),
         "malformed JSON must return parse error -32700, got: {line}"
+    );
+}
+
+// M6: `tools/list` must declare `integer` type with bounds for max_tokens/top_k.
+#[test]
+fn test_tools_list_declares_integer_schema() {
+    let (mut s, _child) = spawn();
+    let _ = s.round_trip(&serde_json::json!({
+        "jsonrpc":"2.0","id":1,"method":"initialize",
+        "params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}
+    }));
+    let resp = s.round_trip(&serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
+    let tools = resp["result"]["tools"].as_array().expect("tools array");
+    let search = tools
+        .iter()
+        .find(|t| t["name"] == "nowdocs_search")
+        .expect("nowdocs_search tool");
+    let props = &search["inputSchema"]["properties"];
+
+    for field in ["max_tokens", "top_k"] {
+        let prop = &props[field];
+        assert_eq!(
+            prop["type"], "integer",
+            "{field} must be declared as integer, got: {prop:?}"
+        );
+        assert!(prop["minimum"].as_i64().is_some(), "{field} needs minimum");
+        assert!(prop["maximum"].as_i64().is_some(), "{field} needs maximum");
+        assert!(prop["default"].as_i64().is_some(), "{field} needs default");
+    }
+
+    // Sanity: the documented bounds for max_tokens.
+    assert_eq!(props["max_tokens"]["minimum"].as_i64(), Some(1));
+    assert_eq!(props["max_tokens"]["maximum"].as_i64(), Some(32768));
+    assert_eq!(props["max_tokens"]["default"].as_i64(), Some(4096));
+    assert_eq!(props["top_k"]["minimum"].as_i64(), Some(1));
+    assert_eq!(props["top_k"]["maximum"].as_i64(), Some(50));
+    assert_eq!(props["top_k"]["default"].as_i64(), Some(5));
+}
+
+// M7: a request line larger than 1 MiB must be rejected with JSON-RPC parse
+// error -32700 and the server must not panic / OOM.
+#[test]
+fn test_mcp_oversized_line_returns_32700() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_nowdocs"))
+        .arg("serve")
+        .env("XDG_CACHE_HOME", cache.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn nowdocs serve");
+
+    // Build a ~2 MiB line with no internal newline, then terminate with one.
+    let mut payload = String::with_capacity(2 * 1024 * 1024);
+    payload.push_str("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"");
+    while payload.len() < 2 * 1024 * 1024 {
+        payload.push('a');
+    }
+    payload.push_str("\"}}}");
+    let mut line_bytes = payload.into_bytes();
+    line_bytes.push(b'\n');
+
+    let mut stdin = child.stdin.take().expect("child stdin");
+    stdin.write_all(&line_bytes).expect("write oversized line");
+    stdin.flush().expect("flush");
+
+    let stdout = child.stdout.take().expect("child stdout");
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("read response line");
+
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let v: serde_json::Value = serde_json::from_str(&line).expect("response is JSON");
+    assert_eq!(
+        v.get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_i64()),
+        Some(-32700),
+        "oversized line must return parse error -32700, got: {line}"
     );
 }

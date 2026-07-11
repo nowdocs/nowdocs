@@ -91,6 +91,32 @@ fn test_search_rejects_empty_query() {
     assert_eq!(result["code"].as_i64().unwrap(), -32602);
 }
 
+#[allow(non_snake_case)]
+#[test]
+fn tools_call_search_returns_isError_when_docset_missing() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (_tmp, _) = setup_cache("missing_docset");
+    // Fresh cache: no manifest for this docset -> NotInstalled business error.
+    let result = nowdocs::tools::handle_call(
+        "nowdocs_search",
+        json!({"query": "router", "docset": "ghost_docset"}),
+    );
+    // Business errors are tool results with isError:true, NOT JSON-RPC errors.
+    assert!(
+        result.get("isError").is_some_and(|v| *v == true),
+        "expected isError:true tool result, got: {result:?}"
+    );
+    assert!(
+        result.get("code").is_none(),
+        "business errors must not be JSON-RPC error objects, got: {result:?}"
+    );
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("ghost_docset") && text.contains("install"),
+        "hint must name the docset and the install command, got: {text:?}"
+    );
+}
+
 #[test]
 fn test_unknown_tool() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
