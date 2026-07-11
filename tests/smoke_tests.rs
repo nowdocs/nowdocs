@@ -464,3 +464,67 @@ fn test_list_installed_shows_broken_for_bad_manifest() {
         "list-installed should show 'broken' for bad manifest, got: {stdout}"
     );
 }
+
+// M23: smoke result formatting must surface the performance metrics
+// (embed_ms / search_ms / tokens_returned / truncated). Formatting is pure, so
+// this exercises the human + JSON renderers without the real embedder.
+#[test]
+fn test_smoke_output_contains_embed_ms_and_search_ms() {
+    let result = nowdocs::smoke::SmokeResult {
+        docset: "metrics-test".into(),
+        query: "q".into(),
+        elapsed_ms: 120,
+        embed_ms: 40,
+        search_ms: 80,
+        tokens_returned: 512,
+        truncated: false,
+        result_count: 1,
+        results: vec![nowdocs::smoke::SmokeHit {
+            rank: 1,
+            score: 0.9,
+            heading: "H".into(),
+            source_url: "https://example.com/0".into(),
+            chunk_idx: 0,
+            preview: "preview".into(),
+        }],
+    };
+
+    let human = nowdocs::smoke::format_human(&result);
+    assert!(
+        human.contains("embed_ms"),
+        "human output must show embed_ms, got: {human}"
+    );
+    assert!(
+        human.contains("search_ms"),
+        "human output must show search_ms, got: {human}"
+    );
+    assert!(
+        human.contains("tokens_returned"),
+        "human output must show tokens_returned, got: {human}"
+    );
+    assert!(
+        human.contains("truncated"),
+        "human output must show truncated, got: {human}"
+    );
+
+    let json = nowdocs::smoke::format_json(&result).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(
+        v.get("embed_ms").is_some(),
+        "JSON must include embed_ms, got: {json}"
+    );
+    assert!(
+        v.get("search_ms").is_some(),
+        "JSON must include search_ms, got: {json}"
+    );
+    assert!(
+        v.get("tokens_returned").is_some(),
+        "JSON must include tokens_returned, got: {json}"
+    );
+    assert!(
+        v.get("truncated").is_some(),
+        "JSON must include truncated, got: {json}"
+    );
+    assert_eq!(v["embed_ms"], 40);
+    assert_eq!(v["search_ms"], 80);
+}

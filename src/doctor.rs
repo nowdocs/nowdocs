@@ -28,6 +28,95 @@ pub struct Check {
 pub struct DoctorOutput {
     pub status: Severity,
     pub checks: Vec<Check>,
+    /// M23: cache/observability metrics attached to `doctor --json` output.
+    pub metrics: DoctorMetrics,
+}
+
+/// M23: cache-size and per-docset metrics for `doctor --json`. All fields are
+/// best-effort: unreadable paths report 0 so a corrupt cache still produces a
+/// complete JSON document.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct DoctorMetrics {
+    /// Total size of the model cache (`<cache>/nowdocs/models`) in bytes.
+    pub model_cache_bytes: u64,
+    /// Same as `model_cache_bytes`, rounded to 2-decimal MiB for quick reading.
+    pub model_cache_mb: f64,
+    /// Size of the docset store area (`db/`, `.lance` tables) in bytes.
+    pub db_bytes: u64,
+    /// Size of the manifest files in bytes.
+    pub manifests_bytes: u64,
+    /// Size of the staging area in bytes.
+    pub staging_bytes: u64,
+    /// Size of the rollback area in bytes.
+    pub rollback_bytes: u64,
+    /// Per-docset store/manifest counters.
+    pub docsets: Vec<DocsetMetric>,
+}
+
+/// M23: per-docset metrics row inside [`DoctorMetrics::docsets`].
+#[derive(Debug, Clone, Serialize)]
+pub struct DocsetMetric {
+    pub name: String,
+    /// Unified install-state label (M22 `InstalledDocsetState::label`).
+    pub state: String,
+    /// Live row count of the lance table (0 when the store is absent/unreadable).
+    pub store_rows: u64,
+    /// `source.chunk_count` from the manifest (0 when absent/unparseable).
+    pub manifest_chunk_count: u32,
+}
+
+impl DoctorMetrics {
+    /// Collect current cache metrics. Pure read-only disk inspection.
+    pub fn collect() -> Self {
+        let mut m = DoctorMetrics::default();
+        if let Ok(status) = cache::cache_status() {
+            m.model_cache_bytes = status.models_bytes;
+            m.model_cache_mb =
+                (status.models_bytes as f64 / (1024.0 * 1024.0) * 100.0).round() / 100.0;
+            m.db_bytes = status.db_bytes;
+            m.manifests_bytes = status.manifests_bytes;
+            m.staging_bytes = status.staging_bytes;
+            m.rollback_bytes = status.rollback_bytes;
+        }
+
+        let db_dir = cache::cache_root().join("db");
+        let mut names: Vec<String> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&db_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if let Some(stem) = name.strip_suffix(".lance") {
+                            names.push(stem.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        names.sort();
+        for name in names {
+            let state = cache::check_docset_state(&name).label().to_string();
+            let store_rows = if cache::db_path(&name).exists() {
+                crate::store::Store::open(&name)
+                    .and_then(|s| s.row_count())
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            let manifest_chunk_count = std::fs::read_to_string(cache::manifest_path(&name))
+                .ok()
+                .and_then(|raw| manifest::parse_manifest(&raw).ok())
+                .map(|mm| mm.source.chunk_count)
+                .unwrap_or(0);
+            m.docsets.push(DocsetMetric {
+                name,
+                state,
+                store_rows,
+                manifest_chunk_count,
+            });
+        }
+        m
+    }
 }
 
 fn aggregate_status(checks: &[Check]) -> Severity {
@@ -74,7 +163,11 @@ pub fn run_default_checks() -> DoctorOutput {
         Severity::Ok
     };
 
-    DoctorOutput { status, checks }
+    DoctorOutput {
+        status,
+        checks,
+        metrics: DoctorMetrics::collect(),
+    }
 }
 
 /// Run deep checks for a specific docset.
@@ -99,6 +192,7 @@ pub fn run_docset_checks(docset: &str) -> DoctorOutput {
             return DoctorOutput {
                 status: Severity::Fail,
                 checks,
+                metrics: DoctorMetrics::default(),
             };
         }
     }
@@ -239,7 +333,11 @@ pub fn run_docset_checks(docset: &str) -> DoctorOutput {
         Severity::Ok
     };
 
-    DoctorOutput { status, checks }
+    DoctorOutput {
+        status,
+        checks,
+        metrics: DoctorMetrics::collect(),
+    }
 }
 
 /// Run MCP smoke test (in-process, no network).
@@ -314,7 +412,11 @@ pub fn run_mcp_check() -> DoctorOutput {
         Severity::Ok
     };
 
-    DoctorOutput { status, checks }
+    DoctorOutput {
+        status,
+        checks,
+        metrics: DoctorMetrics::collect(),
+    }
 }
 
 /// Run model cache check.
@@ -343,6 +445,7 @@ pub fn run_model_check() -> DoctorOutput {
     DoctorOutput {
         status: aggregate_status(&checks),
         checks,
+        metrics: DoctorMetrics::default(),
     }
 }
 
@@ -387,6 +490,7 @@ pub fn run_repair() -> DoctorOutput {
     DoctorOutput {
         status: aggregate_status(&checks),
         checks,
+        metrics: DoctorMetrics::default(),
     }
 }
 
