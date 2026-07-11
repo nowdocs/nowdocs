@@ -103,21 +103,54 @@ fn eval_false_positive_rate_math() {
     );
 }
 
+/// M24 FP gate: `assert_negative_quality` passes at/below
+/// MAX_FALSE_POSITIVE_RATE and panics above it. Pure, no embedder.
+#[test]
+fn eval_assert_negative_quality_passes_below_gate() {
+    use nowdocs::eval::{assert_negative_quality, NegativeReport};
+    let report = NegativeReport {
+        false_positive_rate: 0.0,
+        answered: 0,
+        n: 12,
+        top_scores: vec![None; 12],
+    };
+    assert_negative_quality(&report);
+    let at_gate = NegativeReport {
+        false_positive_rate: nowdocs::eval::MAX_FALSE_POSITIVE_RATE,
+        answered: 1,
+        n: 10,
+        top_scores: vec![None; 10],
+    };
+    assert_negative_quality(&at_gate);
+}
+
+#[test]
+#[should_panic(expected = "false-positive rate")]
+fn eval_assert_negative_quality_panics_above_gate() {
+    use nowdocs::eval::{assert_negative_quality, NegativeReport};
+    let report = NegativeReport {
+        false_positive_rate: 0.5,
+        answered: 1,
+        n: 2,
+        top_scores: vec![Some(0.03), None],
+    };
+    assert_negative_quality(&report);
+}
+
 /// M24: end-to-end smoke of `evaluate_negatives` over the golden fixture
 /// corpus. Ignored: loads the real embedder.
 ///
 /// This test is STRUCTURAL + telemetry only — it asserts the API executes
 /// every query and stays internally consistent, and prints the metric lines
-/// the CI eval job tracks. It deliberately asserts NOTHING about the FP rate
-/// or top scores, because on the 3-file toy corpus those numbers are
-/// meaningless by construction: dense vector search always returns a rank-1
-/// neighbor, and a single-channel rank-1 RRF score (1/60 ≈ 0.0167) always
-/// clears the N4 no-answer gate (`MIN_RELEVANCE_THRESHOLD` = 0.015), so the
-/// FP rate is ~1.0 and 2/12 queries even get dual-channel rank-1 agreement
-/// (2/60 ≈ 0.0333, the maximum possible score). The no-answer gate's
-/// calibration is tracked as an open question; the FP-rate trend is watched
-/// by the CI eval job (`negative-eval:` / `negative-eval-nextjs:` lines)
-/// rather than hard-gated here.
+/// the CI eval job tracks. It deliberately does NOT hard-gate the FP rate:
+/// on the 3-file toy corpus the measured FP rate is 0.167 because two
+/// negative queries achieve dual-channel rank-1 agreement (RRF 0.0333), which
+/// is cheap on a tiny search space — any vaguely related chunk can top both
+/// channels against 3 files. This is a fixture-size pathology, not a gate
+/// failure: the same queries against the real Next.js corpus measure FP 0.000,
+/// and `test_eval_nextjs_real` enforces the hard gate there
+/// (`assert_negative_quality`). The FP-rate trend on the toy corpus is watched
+/// by the CI eval job (`negative-eval:` lines) as a smoke signal.
 #[test]
 #[ignore = "needs real embedder (~66MB download, ~30s)"]
 fn eval_negative_queries_return_empty_or_low_confidence() {
@@ -440,11 +473,10 @@ fn test_eval_nextjs_real() {
         "mrr {mrr} below the enforced floor (0.70; release bar 0.85 is a documented gap) on real nextjs corpus"
     );
 
-    // M24 telemetry: negative (out-of-scope) queries against the same real
-    // corpus — report-only, no hard gate. Measured FP rate is ~1.0 because
-    // dense vector search always returns a rank-1 neighbor whose RRF score
-    // (1/60 ≈ 0.0167) clears the N4 no-answer gate (0.015); the gate's
-    // calibration is an open question. The CI eval job tracks this line.
+    // M24 FP gate (enforced since the N4 gate redesign): negative
+    // (out-of-scope) queries against the same real corpus must stay below
+    // MAX_FALSE_POSITIVE_RATE. Measured 0.000 with the cosine gate (was ~1.0
+    // under the structural RRF-only gate). The CI eval job tracks this line.
     let neg_path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "tests", "fixtures", "golden"]
         .iter()
         .collect::<PathBuf>()
@@ -481,6 +513,8 @@ fn test_eval_nextjs_real() {
             q, top, top_cosine
         );
     }
+    // Hard FP gate on the real corpus (see MAX_FALSE_POSITIVE_RATE).
+    nowdocs::eval::assert_negative_quality(&neg_report);
 }
 
 /// Cosine similarity helper for gate-calibration prints (mirrors the private

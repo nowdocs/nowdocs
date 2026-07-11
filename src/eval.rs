@@ -107,15 +107,33 @@ pub fn evaluate(docset: &str, golden: &[GoldenQuery]) -> Result<EvalReport> {
 /// Maximum acceptable false-positive rate over the negative query set (M24).
 /// Starts at 10% and is tunable once real eval data accumulates.
 ///
-/// Status (2026-07): NOT yet enforceable. Measured FP rate is ~1.0 on every
-/// corpus (toy and the real Next.js ~7480-chunk store) because dense vector
-/// search always returns a rank-1 neighbor whose RRF score (1/60 ≈ 0.0167)
-/// clears the N4 no-answer gate (`MIN_RELEVANCE_THRESHOLD` = 0.015) — so every
-/// query is "answered" regardless of relevance. Until the no-answer gate is
-/// recalibrated (e.g. require dual-channel agreement, or threshold the raw
-/// vector cosine instead of the RRF score), this constant documents the
-/// intent only; the CI eval job reports the rate without gating on it.
+/// Status (2026-07-11): ENFORCEABLE on real corpora. The N4 gate redesign
+/// (cosine floor 0.82 + dual-channel rank-1 bypass) measured FP rate 0.000 on
+/// the real Next.js corpus (~7480 chunks, 12 negative queries), down from the
+/// structural ~1.0 of the old RRF-only gate. `assert_negative_quality` hard-
+/// gates on this constant; `test_eval_nextjs_real` calls it.
+///
+/// Known exception (documented gap, not a gate failure): on the 3-file toy
+/// fixture the FP rate is 0.167 — two negative queries achieve dual-channel
+/// rank-1 agreement, which is cheap on a tiny search space (any vaguely
+/// related chunk can top both channels against 3 files). The toy negative
+/// test therefore stays telemetry-only; the real-corpus eval carries the gate.
 pub const MAX_FALSE_POSITIVE_RATE: f32 = 0.10;
+
+/// Hard FP gate (M24): panic when a negative-eval report exceeds
+/// [`MAX_FALSE_POSITIVE_RATE`]. Called from the real-corpus eval test; kept
+/// out of `evaluate_negatives` itself so telemetry-only callers (toy fixture,
+/// CI trend lines) can still collect the report without gating on it.
+pub fn assert_negative_quality(report: &NegativeReport) {
+    assert!(
+        report.false_positive_rate <= MAX_FALSE_POSITIVE_RATE,
+        "negative-query false-positive rate {:.3} exceeds gate {:.3} ({}/{} answered)",
+        report.false_positive_rate,
+        MAX_FALSE_POSITIVE_RATE,
+        report.answered,
+        report.n
+    );
+}
 
 /// Negative-eval report (M24): how often out-of-scope queries still returned
 /// results above the no-answer relevance gate.
