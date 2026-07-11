@@ -54,6 +54,34 @@ fn requires_attribution_for_ccby() {
     assert!(validate(&m).is_err());
 }
 
+// A1.1 §3.8 spec-named aliases for the license/attribution invariants. M12
+// (`validate_manifest_for_docset`) deliberately does NOT re-check these — they
+// live in `manifest::validate` — so the spec names are asserted against
+// `validate` directly, which is where the allowlist / CC-BY rules are enforced.
+
+#[test]
+fn rejects_manifest_with_disallowed_license() {
+    let mut v: serde_json::Value = serde_json::from_str(VALID).unwrap();
+    v["legal"]["license"] = serde_json::json!("proprietary");
+    let m: nowdocs::manifest::Manifest = serde_json::from_value(v).unwrap();
+    assert!(
+        validate(&m).is_err(),
+        "a license outside the MIT/Apache-2.0/CC-BY-4.0 allowlist must be rejected"
+    );
+}
+
+#[test]
+fn rejects_ccby4_without_attribution() {
+    let mut v: serde_json::Value = serde_json::from_str(VALID).unwrap();
+    v["legal"]["license"] = serde_json::json!("CC-BY-4.0");
+    v["legal"]["attribution"] = serde_json::json!("");
+    let m: nowdocs::manifest::Manifest = serde_json::from_value(v).unwrap();
+    assert!(
+        validate(&m).is_err(),
+        "CC-BY-4.0 without attribution must be rejected"
+    );
+}
+
 #[test]
 fn rejects_wrong_embedder_model() {
     let mut v: serde_json::Value = serde_json::from_str(VALID).unwrap();

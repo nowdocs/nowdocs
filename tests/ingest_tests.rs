@@ -181,6 +181,7 @@ fn test_ingest_cc_by_with_attribution_persists_legal_and_source() {
         attribution: "React documentation by Meta, licensed CC BY 4.0.".to_string(),
         source_url: "https://github.com/reactjs/react.dev".to_string(),
         entry_url: "https://react.dev".to_string(),
+        source_url_base: None,
     };
     ingest_dir(dir.path(), "ccb_ds", &meta).unwrap();
 
@@ -249,4 +250,44 @@ fn test_ingest_stashes_source_license() {
     // CC-BY-4.0 attribution travel with the derived work).
     let stashed = fs::read_to_string(cache::license_text_path("test_ingest_lic")).unwrap();
     assert_eq!(stashed, "MIT License\n\nCopyright (c) Test Holder\n");
+}
+
+// ---- A1.1: ingest atomicity + manifest fixes (S4/M5/M20) ----
+
+#[test]
+fn manifest_chunk_size_tokens_is_384() {
+    // M20: chunk_size_tokens must come from the chunker's target_tokens (384),
+    // not the old hardcoded 512. Empty dir avoids loading the embedder.
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    ingest_dir(dir.path(), "cst_ds", &IngestMeta::default()).unwrap();
+
+    let m = manifest::parse_manifest(&fs::read_to_string(cache::manifest_path("cst_ds")).unwrap())
+        .unwrap();
+    assert_eq!(
+        m.retrieval.chunk_size_tokens, 384,
+        "chunk_size_tokens must equal chunker target_tokens (384)"
+    );
+}
+
+#[test]
+fn ingest_manifest_write_is_atomic() {
+    // M5: the manifest is written to a tmp file then renamed into place. After a
+    // successful ingest the final manifest exists and the tmp staging file does
+    // not (it was renamed, never left behind).
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    ingest_dir(dir.path(), "atomic_ds", &IngestMeta::default()).unwrap();
+
+    let manifest_path = cache::manifest_path("atomic_ds");
+    assert!(manifest_path.is_file(), "manifest must be published");
+    assert!(
+        !manifest_path.with_extension("tmp").exists(),
+        "manifest tmp file must be renamed away, not left behind"
+    );
+    // And the published manifest parses + validates (not a half-written file).
+    let m = manifest::parse_manifest(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest::validate(&m).unwrap();
 }

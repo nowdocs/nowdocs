@@ -222,6 +222,7 @@ fn test_eval_nextjs_real() {
         source_url: "https://github.com/vercel/next.js".into(),
         entry_url: "https://nextjs.org/docs".into(),
         attribution: String::new(),
+        source_url_base: None,
     };
     let stats = ingest_dir(&corpus, "nextjs_real", &meta).expect("ingest nextjs corpus");
     eprintln!(
@@ -306,6 +307,7 @@ fn test_eval_nextjs_diagnose() {
         source_url: "https://github.com/vercel/next.js".into(),
         entry_url: "https://nextjs.org/docs".into(),
         attribution: String::new(),
+        source_url_base: None,
     };
     let stats = ingest_dir(&corpus, "nextjs_real", &meta).expect("ingest nextjs corpus");
     eprintln!(
