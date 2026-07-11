@@ -12,7 +12,7 @@ use std::io::{self, BufRead, Write};
 
 use serde_json::{json, Value};
 
-use crate::{cache, tools};
+use crate::{cache, embedder, tools};
 
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const SERVER_NAME: &str = "nowdocs";
@@ -35,6 +35,11 @@ pub fn run_loop() -> io::Result<()> {
         eprintln!("nowdocs: cache layout error: {e}");
         return Err(io::Error::other(e.to_string()));
     }
+
+    // N3: warm the default embedder before the read loop so the first search is
+    // fast. Best-effort + offline-safe: a cold cache (model not yet downloaded)
+    // skips instantly and the first search loads on demand instead.
+    embedder::preload_default_embedder();
 
     let stdin = io::stdin();
     let stdout = io::stdout();

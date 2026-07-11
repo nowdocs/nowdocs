@@ -9,6 +9,7 @@
 //! are supported). Future async MCP transport or library embedding should
 //! introduce an `AsyncStore` variant (deferred to v2).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
@@ -189,6 +190,44 @@ impl Store {
         })?;
 
         parse_search_hits(&batches, 0.0)
+    }
+
+    /// Fetch raw f32 vectors for the given chunk indices (N1). Used by MMR to
+    /// compute inter-chunk cosine similarity for diversity reranking. Additive:
+    /// it does not modify `fetch_by_idx` or `hybrid_search`. Indices not present
+    /// in the table are simply absent from the returned map; an empty input
+    /// short-circuits to an empty map. Vectors are stored as f16 and converted
+    /// back to f32 here (the small round-trip error is immaterial for cosine).
+    pub fn fetch_vectors(&self, chunk_ids: &[u32]) -> Result<HashMap<u32, Vec<f32>>> {
+        if chunk_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let filter = chunk_ids
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let filter = format!("chunk_idx IN ({filter})");
+
+        let table = self
+            .runtime
+            .block_on(self.conn.open_table(&self.table_name).execute())
+            .context("failed to open table for fetch_vectors")?;
+
+        let batches: Vec<RecordBatch> = self.runtime.block_on(async {
+            let stream = table
+                .query()
+                .only_if(&filter)
+                .execute()
+                .await
+                .context("fetch_vectors query failed")?;
+            stream
+                .try_collect::<Vec<RecordBatch>>()
+                .await
+                .context("failed to collect fetch_vectors results")
+        })?;
+
+        parse_vectors(&batches)
     }
 
     /// Number of rows in the docset's table. Used by install's promote step to
@@ -489,6 +528,39 @@ fn parse_search_hits_with_score(batches: &[RecordBatch]) -> Result<Vec<SearchHit
         }
     }
     Ok(hits)
+}
+
+/// Parse record batches into a `{chunk_idx -> f32 vector}` map (for `fetch_vectors`).
+/// The `vector` column is a `FixedSizeList<Float16, 512>`; each row's list is
+/// converted back to f32 for cosine-similarity math in MMR.
+fn parse_vectors(batches: &[RecordBatch]) -> Result<HashMap<u32, Vec<f32>>> {
+    let mut out = HashMap::new();
+    for batch in batches {
+        if batch.column_by_name("chunk_idx").is_none() || batch.column_by_name("vector").is_none() {
+            continue;
+        }
+        let idx_col = batch
+            .column_by_name("chunk_idx")
+            .and_then(|c| c.as_any().downcast_ref::<UInt32Array>())
+            .context("missing chunk_idx column")?;
+        let vec_col = batch
+            .column_by_name("vector")
+            .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>())
+            .context("vector column is not FixedSizeList")?;
+        for row in 0..batch.num_rows() {
+            let list = vec_col.value(row);
+            let f16s = list
+                .as_any()
+                .downcast_ref::<Float16Array>()
+                .context("vector values are not Float16")?;
+            let mut v = Vec::with_capacity(f16s.len());
+            for i in 0..f16s.len() {
+                v.push(f16s.value(i).to_f32());
+            }
+            out.insert(idx_col.value(row), v);
+        }
+    }
+    Ok(out)
 }
 
 /// Ensure an existing table can accept the current RecordBatch schema.

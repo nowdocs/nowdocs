@@ -178,8 +178,9 @@ pub fn chunk_markdown(md: &str, cfg: &ChunkConfig) -> Vec<Chunk> {
     for block in blocks {
         match block {
             RawBlock::Code { path, body } => {
-                let text = with_path_prefix(&path, &body);
-                emit(&mut chunks, &path, ChunkType::Code, text, &mut idx);
+                for (part_path, text) in split_code_chunks(&path, &body, max) {
+                    emit(&mut chunks, &part_path, ChunkType::Code, text, &mut idx);
+                }
             }
             RawBlock::Prose { path, body } => {
                 // The heading-path prefix counts toward the chunk's token
@@ -211,6 +212,186 @@ fn path_prefix(path: &str) -> String {
 fn with_path_prefix(path: &str, body: &str) -> String {
     let prefix = path_prefix(path);
     format!("{prefix}{body}")
+}
+
+/// Split an oversized fenced code block into well-formed sub-chunks (N7/OQ12).
+///
+/// A block at or under `max` tokens is returned as-is with the original path.
+/// An oversized block is split on function boundaries (`fn `, `def `,
+/// `function `, `class `) when present, otherwise by 100-line windows. Each
+/// sub-chunk is re-wrapped with the original opening fence and a matching
+/// closing fence, and its heading path gets a ` (part N)` suffix.
+fn split_code_chunks(path: &str, body: &str, max: usize) -> Vec<(String, String)> {
+    let whole = with_path_prefix(path, body);
+    if count_tokens(&whole) <= max {
+        return vec![(path.to_string(), whole)];
+    }
+
+    let raw: Vec<&str> = body.lines().collect();
+    let open_line = raw.first().copied().unwrap_or("```");
+    let fence = fence_ticks(open_line);
+    let close_line = fence;
+    let inner: Vec<&str> = if raw.len() >= 2 && is_fence_line(raw.last().unwrap()) {
+        raw[1..raw.len() - 1].to_vec()
+    } else {
+        raw[1..].to_vec()
+    };
+
+    let overhead =
+        count_tokens(&path_prefix(path)) + count_tokens(open_line) + count_tokens(close_line) + 8; // slack for " (part N)" + newlines
+    let inner_budget = max.saturating_sub(overhead).max(1);
+
+    let pieces = inner_pieces(&inner, inner_budget);
+    let groups = pack_pieces(&pieces, inner_budget);
+
+    groups
+        .into_iter()
+        .enumerate()
+        .map(|(i, inner_text)| {
+            let part_path = format!("{path} (part {})", i + 1);
+            let text = format!(
+                "{}{}\n{}\n{}\n",
+                path_prefix(&part_path),
+                open_line,
+                inner_text,
+                close_line
+            );
+            (part_path, text)
+        })
+        .collect()
+}
+
+/// Return the leading run of backticks or tildes that form the fence (e.g.
+/// "```" or "~~~"). Defaults to backticks.
+fn fence_ticks(line: &str) -> &str {
+    let t = line.trim_start();
+    let Some(first) = t.chars().next() else {
+        return "```";
+    };
+    let n = t.chars().take_while(|&c| c == first).count();
+    &t[..n]
+}
+
+/// True for lines that look like a function/class definition boundary.
+fn is_code_boundary(line: &str) -> bool {
+    let t = line.trim_start();
+    ["fn ", "def ", "function ", "class "]
+        .iter()
+        .any(|kw| t.starts_with(kw))
+}
+
+/// Break the inner code body into pieces at function boundaries if possible,
+/// otherwise by token-budget line packing. Every returned piece is guaranteed
+/// to fit `budget` (Codex review fix: no unbounded fixed-size windows).
+fn inner_pieces(inner: &[&str], budget: usize) -> Vec<String> {
+    let boundaries: Vec<usize> = inner
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| is_code_boundary(l))
+        .map(|(i, _)| i)
+        .collect();
+
+    let segments: Vec<&[&str]> = if boundaries.is_empty() {
+        vec![inner]
+    } else {
+        let mut segs = Vec::new();
+        let mut start = 0;
+        for &b in &boundaries {
+            if b > start {
+                segs.push(&inner[start..b]);
+            }
+            start = b;
+        }
+        segs.push(&inner[start..]);
+        segs.into_iter().filter(|s| !s.is_empty()).collect()
+    };
+
+    let mut pieces = Vec::new();
+    for seg in segments {
+        let joined = seg.join("\n");
+        if count_tokens(&joined) <= budget {
+            pieces.push(joined);
+        } else {
+            // Fall back to token-budget line packing so every emitted piece
+            // is guaranteed to fit `budget` (Codex review fix).
+            pieces.extend(pack_lines_to_budget(seg, budget));
+        }
+    }
+    pieces
+}
+
+/// Greedily pack lines into pieces each ≤ `budget` tokens. If a single line
+/// itself exceeds `budget`, it is hard-split by characters as a last resort
+/// (handles minified/generated code).
+fn pack_lines_to_budget(lines: &[&str], budget: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    for line in lines {
+        if count_tokens(line) > budget {
+            // Flush what we have, then split the oversized line itself.
+            if !buf.is_empty() {
+                out.push(std::mem::take(&mut buf));
+            }
+            out.extend(split_line_to_budget(line, budget));
+            continue;
+        }
+        let candidate = if buf.is_empty() {
+            line.to_string()
+        } else {
+            format!("{buf}\n{line}")
+        };
+        if !buf.is_empty() && count_tokens(&candidate) > budget {
+            out.push(std::mem::take(&mut buf));
+            buf = line.to_string();
+        } else {
+            buf = candidate;
+        }
+    }
+    if !buf.is_empty() {
+        out.push(buf);
+    }
+    out
+}
+
+/// Hard-split a single over-long line by characters so each piece is ≤ `budget`
+/// tokens. Last resort for minified/generated code.
+fn split_line_to_budget(line: &str, budget: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for c in line.chars() {
+        cur.push(c);
+        if count_tokens(&cur) >= budget {
+            out.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Greedily pack consecutive pieces into the largest sub-chunks that still fit
+/// `budget`, minimizing fragmentation.
+fn pack_pieces(pieces: &[String], budget: usize) -> Vec<String> {
+    let mut groups = Vec::new();
+    let mut cur = String::new();
+    for piece in pieces {
+        let candidate = if cur.is_empty() {
+            piece.clone()
+        } else {
+            format!("{cur}\n{piece}")
+        };
+        if !cur.is_empty() && count_tokens(&candidate) > budget {
+            groups.push(std::mem::take(&mut cur));
+            cur = piece.clone();
+        } else {
+            cur = candidate;
+        }
+    }
+    if !cur.is_empty() {
+        groups.push(cur);
+    }
+    groups
 }
 
 /// Split a prose block into pieces each at or under `max` tokens, targeting

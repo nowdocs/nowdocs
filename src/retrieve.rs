@@ -1,5 +1,7 @@
 //! Retrieval pipeline: embed query -> hybrid search -> neighbor-window assembly.
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 
 use crate::chunker::ChunkType;
@@ -8,6 +10,25 @@ use crate::input::{resolve_max_tokens, resolve_top_k, validate_docset, validate_
 use crate::manifest;
 use crate::store::{SearchHit, Store};
 use crate::token::count_tokens;
+
+/// MMR lambda: weight of relevance vs. redundancy (0.7 = relevance-leaning).
+/// `MMR = lambda * relevance - (1 - lambda) * max_cosine_sim`. (N1/OQ4)
+const MMR_LAMBDA: f32 = 0.7;
+
+/// Minimum top-hit relevance to return any results (N4/OQ11). If the best hit
+/// is below this floor the docset is treated as having no answer and `search`
+/// returns empty rather than the irrelevant top-K.
+///
+/// The default RRF fusion constant is `k=60`, i.e. `score = 1/(rank + 60)`. A
+/// hit that surfaces in only ONE channel (vector-only or FTS-only) tops out at
+/// about `1/60 ≈ 0.0167` for rank 1, while a hit in BOTH channels can reach
+/// `2/61 ≈ 0.0328`. The gate must therefore stay BELOW the single-channel
+/// rank-1 floor (~0.0164) or it would discard every vector-only / FTS-only
+/// answer. 0.015 sits just under that floor so single-channel top matches pass
+/// while deep-noise hits (rank ≳ 10 single-channel, ~0.014) are still dropped.
+/// Proper calibration against real Next.js eval data is deferred to A1.3.
+// TODO(A1.3): calibrate threshold against real eval data.
+pub const MIN_RELEVANCE_THRESHOLD: f32 = 0.015;
 
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -56,19 +77,23 @@ pub fn search(
     // Embed query and run hybrid search.
     let query_vector = embedder.embed(&query)?;
     let store = Store::open(&docset)?;
-    // Over-fetch then de-dup by source_url: hybrid often returns multiple
-    // chunks from the same hub file (installation.md, glossary.md,
-    // backend-for-frontend.md) that match moderately on both channels — RRF
-    // fusion floats them into the top-K and squeezes the specific expected
-    // chunk to rank 9+ (see eval `test_eval_nextjs_diagnose`). Keeping only the
-    // highest-scoring chunk per source_url lets diverse files reach the top-K.
-    // The window pass below re-attaches same-file neighbor chunks as context,
-    // so per-file coverage is preserved.
+    // Over-fetch (top_k*3, min 15) then diversity-rerank with Maximal Marginal
+    // Relevance (N1/OQ4). MMR keeps multiple chunks from the same source_url
+    // when their vectors differ (e.g. distinct APIs on one reference page),
+    // fixing the old `dedup_by_source_url` heuristic that collapsed single-page
+    // API references. Over-fetching gives MMR a candidate pool to trade
+    // relevance off against redundancy before the window pass re-attaches
+    // same-file neighbors as context.
     let raw_k = (top_k * 3).max(15) as usize;
-    let hits = store.hybrid_search(&query_vector, &query, raw_k)?;
-    let hits = dedup_by_source_url(hits);
-    let hits: Vec<SearchHit> = hits.into_iter().take(top_k as usize).collect();
+    let candidates = store.hybrid_search(&query_vector, &query, raw_k)?;
+    let cand_ids: Vec<u32> = candidates.iter().map(|h| h.chunk_idx).collect();
+    let vectors = store.fetch_vectors(&cand_ids)?;
+    let hits = mmr_rerank(candidates, &vectors, top_k as usize, MMR_LAMBDA);
 
+    // N4/OQ11: if the best hit is still below the relevance floor, the docset
+    // likely has no answer (e.g. Vue syntax queried against React docs) — return
+    // empty rather than the irrelevant top-K.
+    let hits = apply_relevance_gate(hits);
     if hits.is_empty() {
         return Ok(SearchResult {
             chunks: vec![],
@@ -111,15 +136,122 @@ pub fn search(
     assemble_result(window_chunks, max_tokens)
 }
 
-/// Keep only the highest-scoring hit per `source_url`. `hits` must be in
-/// score-descending order (as returned by `Store::hybrid_search`), so the first
-/// occurrence of each source_url is the best — later duplicates from the same
-/// file are dropped. See `search` for why hub-file dedup lifts recall.
-fn dedup_by_source_url(hits: Vec<SearchHit>) -> Vec<SearchHit> {
-    let mut seen = std::collections::HashSet::new();
-    hits.into_iter()
-        .filter(|h| seen.insert(h.source_url.clone()))
-        .collect()
+/// Maximal Marginal Relevance rerank (N1/OQ4). Greedy: repeatedly pick the
+/// candidate maximizing `lambda * relevance - (1 - lambda) * max_sim`, where
+/// `max_sim` is the candidate's largest cosine similarity to any already-picked
+/// chunk. Replaces the old `dedup_by_source_url`: diversity comes from vector
+/// dissimilarity, so multiple chunks from one URL survive when they cover
+/// distinct APIs. Candidates without a fetched vector fall back to score order,
+/// appended after the MMR-selected hits (should not happen post-S1).
+pub fn mmr_rerank(
+    hits: Vec<SearchHit>,
+    vectors: &HashMap<u32, Vec<f32>>,
+    top_k: usize,
+    lambda: f32,
+) -> Vec<SearchHit> {
+    if hits.is_empty() || top_k == 0 {
+        return Vec::new();
+    }
+
+    let (mut pool, mut fallback): (Vec<SearchHit>, Vec<SearchHit>) = hits
+        .into_iter()
+        .partition(|h| vectors.contains_key(&h.chunk_idx));
+    fallback.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Codex review fix: RRF scores (~0.01-0.03) and cosine similarity (0-1)
+    // are on very different scales, so the raw diversity term would dominate
+    // after the first pick. Normalize the RRF relevance scores of the vector
+    // pool to [0, 1] within this candidate set so lambda=0.7 actually means
+    // "relevance-leaning" rather than "diversity-leaning".
+    let min_score = pool
+        .iter()
+        .map(|h| h.score)
+        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap_or(0.0);
+    let max_score = pool
+        .iter()
+        .map(|h| h.score)
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap_or(0.0);
+    let score_range = max_score - min_score;
+    let normalize_score = |s: f32| {
+        if score_range > 0.0 {
+            (s - min_score) / score_range
+        } else {
+            1.0
+        }
+    };
+
+    let mut selected: Vec<SearchHit> = Vec::with_capacity(top_k);
+
+    while selected.len() < top_k && !pool.is_empty() {
+        let mut best_i = 0;
+        let mut best_score = f32::MIN;
+        for (i, cand) in pool.iter().enumerate() {
+            let max_sim = max_cosine_to_selected(cand, &selected, vectors);
+            let rel = normalize_score(cand.score);
+            let mmr = lambda * rel - (1.0 - lambda) * max_sim;
+            if mmr > best_score {
+                best_score = mmr;
+                best_i = i;
+            }
+        }
+        selected.push(pool.remove(best_i));
+    }
+
+    // Pool exhausted: fill remaining slots from vector-less fallbacks (score order).
+    while selected.len() < top_k && !fallback.is_empty() {
+        selected.push(fallback.remove(0));
+    }
+
+    selected
+}
+
+fn max_cosine_to_selected(
+    cand: &SearchHit,
+    selected: &[SearchHit],
+    vectors: &HashMap<u32, Vec<f32>>,
+) -> f32 {
+    let Some(cv) = vectors.get(&cand.chunk_idx) else {
+        return 0.0;
+    };
+    let mut best: f32 = 0.0;
+    for s in selected {
+        if let Some(sv) = vectors.get(&s.chunk_idx) {
+            let sim = cosine(cv, sv);
+            if sim > best {
+                best = sim;
+            }
+        }
+    }
+    best
+}
+
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na * nb)
+    }
+}
+
+/// Apply the no-answer relevance gate (N4/OQ11): return `Vec::new()` when there
+/// are no hits or the top hit is below `MIN_RELEVANCE_THRESHOLD`, else return
+/// the hits unchanged. Exposed (`pub`) so the gate is unit-testable without a
+/// full docset.
+pub fn apply_relevance_gate(hits: Vec<SearchHit>) -> Vec<SearchHit> {
+    if hits.is_empty() || hits[0].score < MIN_RELEVANCE_THRESHOLD {
+        Vec::new()
+    } else {
+        hits
+    }
 }
 
 /// Build the relevance-ordered neighbor-window index list from hybrid search
@@ -132,10 +264,10 @@ fn dedup_by_source_url(hits: Vec<SearchHit>) -> Vec<SearchHit> {
 /// neighbors push hit5 from hybrid rank 5 to retrieve rank ~7 — a hit recalled
 /// by hybrid was squeezed out of the top-K window by *other hits'* context.
 /// Hit-first ordering keeps the window additive: it only ever appends context
-/// below the hits, never displaces them. (Note: `search` de-dups hits by
-/// source_url before this, so the hits here are already one-per-file; the
-/// window then re-expands per-file coverage via neighbors.) Indices are
-/// clamped to `[0, chunk_count)`.
+/// below the hits, never displaces them. (Note: `search` MMR-selects hits
+/// before this, so same-URL neighbors re-attached here may legitimately extend
+/// a page that contributed multiple diverse chunks.) Indices are clamped to
+/// `[0, chunk_count)`.
 pub fn window_ids_for(hits: &[SearchHit], chunk_count: u32) -> Vec<u32> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
