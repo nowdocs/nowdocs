@@ -254,6 +254,11 @@ pub fn new_staging_path(docset: &str) -> PathBuf {
     staging_root().join(format!("{}-{}-{}", docset, pid, timestamp))
 }
 
+/// `<cache>/nowdocs/rollback/` — root holding per-docset rollback directories.
+pub fn rollback_root() -> PathBuf {
+    cache_root().join("rollback")
+}
+
 /// `<cache>/nowdocs/rollback/<docset>-<pid>-<timestamp>/` — rollback path for active replacement.
 pub fn rollback_path(docset: &str) -> PathBuf {
     let pid = std::process::id();

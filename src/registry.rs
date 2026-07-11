@@ -5,12 +5,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::cache;
-use crate::chunker::{Chunk, ChunkType};
 use crate::errors::{archive_error, NowdocsError};
 use crate::input;
-use crate::manifest;
+use crate::manifest::{self, Manifest};
+use crate::sanitize;
 use crate::store::Store;
 
 fn detect_test_mode() -> bool {
@@ -54,15 +55,17 @@ fn is_allowed_registry_url(url: &str) -> bool {
         return is_test_mode();
     }
     let host = url_host(url);
+    // Path after the host, e.g. "/nowdocs-registry/foo/releases/...".
+    let after_scheme = url.split("://").nth(1).unwrap_or(url);
+    let path = after_scheme.strip_prefix(host).unwrap_or(after_scheme);
     match host {
         // github.com requires path prefix /nowdocs-registry/ to prevent
         // lookalike domains like github.com/nowdocs-registry.evil.com
-        "github.com" => {
-            let after_scheme = url.split("://").nth(1).unwrap_or(url);
-            let path = after_scheme.strip_prefix(host).unwrap_or(after_scheme);
-            path.starts_with("/nowdocs-registry/") || path == "/nowdocs-registry"
-        }
-        "registry.nowdocs.dev" => true,
+        "github.com" => path.starts_with("/nowdocs-registry/") || path == "/nowdocs-registry",
+        // registry.nowdocs.dev mirrors the github.com strictness: release
+        // artifacts must live under /releases/ so a bare-domain or unrelated
+        // path on the CDN host cannot be served as a nowdocs artifact.
+        "registry.nowdocs.dev" => path.starts_with("/releases/") || path == "/releases",
         _ => false,
     }
 }
@@ -75,16 +78,35 @@ fn is_valid_sha256(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-fn download_to_temp(url: &str) -> Result<PathBuf> {
+/// Build the curl argument list for a registry artifact download.
+///
+/// `-f` fail on HTTP error, `-sS` silent-but-show-errors, `-L` follow the
+/// single GitHub-Releases→CDN redirect, `--max-redirs 1` caps redirect
+/// following at one hop (github.com → its own CDN) so an open-redirect or a
+/// redirect chain to an attacker host is rejected. `-o` writes to `tmp`.
+fn curl_args(tmp: &Path, url: &str) -> Vec<String> {
+    vec![
+        "-fsSL".to_string(),
+        "--max-redirs".to_string(),
+        "1".to_string(),
+        "-o".to_string(),
+        tmp.to_string_lossy().into_owned(),
+        url.to_string(),
+    ]
+}
+
+fn download_to_temp(url: &str, docset: &str) -> Result<PathBuf> {
     if !is_allowed_registry_url(url) {
         anyhow::bail!(
-            "registry URL not in allowed domains: {} (allowed: github.com/nowdocs-registry, registry.nowdocs.dev)",
+            "registry URL not in allowed domains: {} (allowed: github.com/nowdocs-registry, registry.nowdocs.dev/releases)",
             url
         );
     }
-    let tmp = std::env::temp_dir().join(format!("nowdocs_dl_{}", std::process::id()));
+    // M11: include docset + pid + timestamp so concurrent installs (future MCP
+    // server) never collide on the temp filename.
+    let tmp = std::env::temp_dir().join(download_temp_name(docset));
     let status = std::process::Command::new("curl")
-        .args(["-fsSL", "-o", tmp.to_str().unwrap(), url])
+        .args(curl_args(&tmp, url))
         .status()
         .context("failed to spawn curl")?;
     if !status.success() {
@@ -92,6 +114,81 @@ fn download_to_temp(url: &str) -> Result<PathBuf> {
         anyhow::bail!("curl failed for {}", url);
     }
     Ok(tmp)
+}
+
+/// Lowercase hex encode a byte slice (no `hex` dependency).
+fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+/// Lowercase hex sha256 of an in-memory byte slice.
+///
+/// Exported (hidden) so the integrity tests can compute an archive's expected
+/// hash without adding `sha2` as a dev-dependency (Cargo.toml is a red-line
+/// file). It is the in-memory counterpart to `sha256_file` and is also useful
+/// to any caller that already holds the artifact bytes.
+#[doc(hidden)]
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex_encode(&hasher.finalize())
+}
+
+/// Build the transient download filename for a docset install (M11).
+///
+/// Format: `nowdocs_dl_{docset}_{pid}_{timestamp_millis}`. The docset ties the
+/// file to its install; pid + millisecond timestamp keep concurrent installs
+/// (e.g. a future MCP server) from colliding on one path. Factored out so the
+/// naming contract is unit-testable offline.
+fn download_temp_name(docset: &str) -> String {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    format!("nowdocs_dl_{}_{}_{}", docset, std::process::id(), timestamp)
+}
+
+/// Streaming sha256 of a file (64 KiB buffer; never loads the whole file).
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut hasher = Sha256::new();
+    let mut f =
+        std::fs::File::open(path).with_context(|| format!("open {} for sha256", path.display()))?;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = f.read(&mut buf).context("read for sha256")?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex_encode(&hasher.finalize()))
+}
+
+/// Verify an archive's sha256 against the catalog-expected value. On mismatch,
+/// remove the file when it is a transient download (`is_temp`) — never delete a
+/// caller-supplied `file://` fixture — and bail with `ARCHIVE_SHA256_MISMATCH`.
+fn verify_archive_integrity(path: &Path, expected: &str, is_temp: bool) -> Result<()> {
+    let actual = sha256_file(path)?;
+    if actual != expected {
+        if is_temp {
+            let _ = std::fs::remove_file(path);
+        }
+        let err = archive_error(
+            "ARCHIVE_SHA256_MISMATCH",
+            format!(
+                "archive sha256 {actual} does not match expected {expected} ({})",
+                path.display()
+            ),
+            "re-run install; if it persists, report the broken registry release",
+        );
+        return Err(anyhow::anyhow!("{}", err));
+    }
+    Ok(())
 }
 
 /// Minimal ustar tar reader (no GNU extensions, no PAX).
@@ -260,11 +357,36 @@ pub const MAX_ENTRY_COUNT: usize = 100_000;
 /// Basenames that must appear at most once in the archive.
 const DUPLICATE_GUARD_BASENAMES: &[&str] = &["manifest.json", "chunks.jsonl", "LICENSE", "NOTICES"];
 
-/// Validate archive entries before writing active cache.
+/// Archive artifact kind. The two kinds have distinct trust boundaries and
+/// validation rules (architecture spec §3.2, OQ1 Method A):
+///
+/// - `ShareBundle`: contributor output (`nowdocs share`) — text-only
+///   (`chunks.jsonl` + `manifest.json` + `LICENSE`); must NOT carry vectors.
+/// - `RegistryRelease`: CI-built install artifact — a prebuilt `.lance` table
+///   directory plus `manifest.json`; `chunks.jsonl` is optional and vectors are
+///   trusted (CI rebuilt them with the pinned standard model).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchiveType {
+    ShareBundle,
+    RegistryRelease,
+}
+
+/// Validate archive entries before writing active cache, using `ShareBundle`
+/// rules (text-only; reject vectors; require `chunks.jsonl`). This is the
+/// public, contributor-side contract. Install uses `validate_archive_with_mode`
+/// with `RegistryRelease` instead.
 ///
 /// Returns `Ok(())` if the archive passes all safety checks, or a structured
 /// `NowdocsError` with a stable code and actionable hint.
 pub fn validate_archive(entries: &[(String, Vec<u8>)]) -> Result<(), NowdocsError> {
+    validate_archive_with_mode(entries, ArchiveType::ShareBundle)
+}
+
+/// Validate archive entries under the given artifact contract.
+fn validate_archive_with_mode(
+    entries: &[(String, Vec<u8>)],
+    mode: ArchiveType,
+) -> Result<(), NowdocsError> {
     // Entry count guardrail.
     if entries.len() > MAX_ENTRY_COUNT {
         return Err(archive_error(
@@ -282,6 +404,7 @@ pub fn validate_archive(entries: &[(String, Vec<u8>)]) -> Result<(), NowdocsErro
     let mut seen_duplicates: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut has_manifest = false;
     let mut has_chunks = false;
+    let mut has_lance = false;
 
     for (name, data) in entries {
         total_bytes += data.len() as u64;
@@ -322,25 +445,44 @@ pub fn validate_archive(entries: &[(String, Vec<u8>)]) -> Result<(), NowdocsErro
         }
 
         // Vector artifact detection — check every path component, not just the
-        // full name suffix.  LanceDB stores are directories like
+        // full name suffix. LanceDB stores are directories like
         // `index.lance/data.bin` where child files don't end in `.lance`.
         let basename = path
             .file_name()
             .map(|f| f.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let has_vector_component = path.components().any(|c| {
+        let mut component_is_lance = false;
+        let mut component_is_other_vector = false;
+        for c in path.components() {
             let s = c.as_os_str().to_string_lossy();
-            s.ends_with(".lance")
-                || s.ends_with(".faiss")
-                || s.starts_with("vectors.")
-                || s.starts_with("embeddings.")
-        });
-        if has_vector_component {
+            if s.ends_with(".lance") {
+                component_is_lance = true;
+            }
+            if s.ends_with(".faiss") || s.starts_with("vectors.") || s.starts_with("embeddings.") {
+                component_is_other_vector = true;
+            }
+        }
+        // Non-lance vector artifacts are rejected in every mode.
+        if component_is_other_vector {
             return Err(archive_error(
                 "ARCHIVE_VECTOR_ARTIFACT",
                 format!("archive contains vector artifact: {}", name),
                 "share must not include vector data; rebuild vectors with CI",
             ));
+        }
+        if component_is_lance {
+            match mode {
+                ArchiveType::ShareBundle => {
+                    return Err(archive_error(
+                        "ARCHIVE_VECTOR_ARTIFACT",
+                        format!("archive contains vector artifact: {}", name),
+                        "share must not include vector data; rebuild vectors with CI",
+                    ));
+                }
+                ArchiveType::RegistryRelease => {
+                    has_lance = true;
+                }
+            }
         }
 
         // Duplicate guard for security-sensitive basenames.
@@ -383,76 +525,227 @@ pub fn validate_archive(entries: &[(String, Vec<u8>)]) -> Result<(), NowdocsErro
         ));
     }
 
-    if !has_chunks {
-        return Err(archive_error(
-            "ARCHIVE_MISSING_CHUNKS",
-            "registry archive is missing chunks.jsonl",
-            "retry install, or report the broken registry release",
-        ));
+    match mode {
+        ArchiveType::ShareBundle => {
+            if !has_chunks {
+                return Err(archive_error(
+                    "ARCHIVE_MISSING_CHUNKS",
+                    "registry archive is missing chunks.jsonl",
+                    "retry install, or report the broken registry release",
+                ));
+            }
+            // M8: row-level validation of chunks.jsonl against the manifest.
+            let manifest_entry = entries
+                .iter()
+                .find(|(n, _)| n.ends_with("manifest.json"))
+                .expect("has_manifest checked above");
+            let manifest_json = std::str::from_utf8(&manifest_entry.1).map_err(|_| {
+                archive_error(
+                    "ARCHIVE_INVALID_MANIFEST",
+                    "manifest.json is not valid UTF-8",
+                    "report the broken registry release",
+                )
+            })?;
+            let m = manifest::parse_manifest(manifest_json).map_err(|e| {
+                archive_error(
+                    "ARCHIVE_INVALID_MANIFEST",
+                    format!("manifest.json failed to parse: {e}"),
+                    "report the broken registry release",
+                )
+            })?;
+            let chunks_entry = entries
+                .iter()
+                .find(|(n, _)| n.ends_with("chunks.jsonl"))
+                .expect("has_chunks checked above");
+            let rows = parse_chunks_jsonl(&chunks_entry.1)?;
+            validate_chunks_jsonl(&m, &rows)?;
+        }
+        ArchiveType::RegistryRelease => {
+            if !has_lance {
+                return Err(archive_error(
+                    "ARCHIVE_MISSING_STORE",
+                    "registry release archive is missing a .lance table directory",
+                    "retry install, or report the broken registry release",
+                ));
+            }
+        }
     }
 
     Ok(())
 }
 
-/// Install a docset from an archive URL.
+/// Parse a `chunks.jsonl` byte blob into rows (skipping blank lines).
+fn parse_chunks_jsonl(data: &[u8]) -> Result<Vec<JsonlChunk>, NowdocsError> {
+    let text = std::str::from_utf8(data).map_err(|_| {
+        archive_error(
+            "ARCHIVE_INVALID_CHUNKS",
+            "chunks.jsonl is not valid UTF-8",
+            "report the broken registry release",
+        )
+    })?;
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let row: JsonlChunk = serde_json::from_str(line).map_err(|e| {
+            archive_error(
+                "ARCHIVE_INVALID_CHUNKS",
+                format!("chunks.jsonl line failed to parse: {e}"),
+                "report the broken registry release",
+            )
+        })?;
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+/// M8: row-level validation of `chunks.jsonl` against its manifest.
+///
+/// - `idx` must be the contiguous sequence 0, 1, …, N-1 (no gaps, no dupes).
+/// - the row count must equal `manifest.source.chunk_count`.
+/// - `text` must be non-empty after sanitize (strips injection/whitespace).
+/// - `chunk_type`, if present, must be "Code" or "Info".
+fn validate_chunks_jsonl(manifest: &Manifest, rows: &[JsonlChunk]) -> Result<(), NowdocsError> {
+    let expected = manifest.source.chunk_count as usize;
+    if rows.len() != expected {
+        return Err(archive_error(
+            "ARCHIVE_INVALID_CHUNKS",
+            format!(
+                "chunks.jsonl has {} rows but manifest chunk_count is {}",
+                rows.len(),
+                expected
+            ),
+            "report the broken registry release",
+        ));
+    }
+    for (i, row) in rows.iter().enumerate() {
+        if row.idx as usize != i {
+            return Err(archive_error(
+                "ARCHIVE_INVALID_CHUNKS",
+                format!(
+                    "chunks.jsonl idx {} at position {} is not contiguous 0..N-1",
+                    row.idx, i
+                ),
+                "report the broken registry release",
+            ));
+        }
+        if sanitize::sanitize_chunk(&row.text).trim().is_empty() {
+            return Err(archive_error(
+                "ARCHIVE_INVALID_CHUNKS",
+                format!("chunks.jsonl row {} has empty text after sanitize", i),
+                "report the broken registry release",
+            ));
+        }
+        match row.chunk_type.as_deref() {
+            Some("Code") | Some("Info") | None => {}
+            Some(other) => {
+                return Err(archive_error(
+                    "ARCHIVE_INVALID_CHUNKS",
+                    format!("chunks.jsonl row {} has invalid chunk_type {:?}", i, other),
+                    "report the broken registry release",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Install a docset from an archive URL (no sha256 enforcement).
+///
+/// Used by tests with `file://` fixtures and as a convenience entry point. The
+/// production binary path uses `install_with_sha256` after looking up the
+/// catalog hash, so registry installs always verify integrity.
 ///
 /// **Security**: production URLs must be on `nowdocs-registry` domains.
 /// Test `file://` URLs are allowed (test fixture bypass).
 pub fn install(docset: &str, url: &str) -> Result<()> {
+    install_inner(docset, url, None)
+}
+
+/// Install a docset, verifying the archive's sha256 against `expected_sha256`
+/// (S2). A mismatch removes any transient download and bails with
+/// `ARCHIVE_SHA256_MISMATCH` before any active cache path is touched.
+pub fn install_with_sha256(docset: &str, url: &str, expected_sha256: &str) -> Result<()> {
+    install_inner(docset, url, Some(expected_sha256))
+}
+
+fn install_inner(docset: &str, url: &str, expected_sha256: Option<&str>) -> Result<()> {
     let docset = input::validate_docset(docset)?;
     cache::ensure_layout()?;
 
-    // Check if there's an existing active docset for rollback
-    let has_existing = cache::manifest_path(&docset).is_file();
-    let existing_backup = if has_existing {
-        Some(backup_existing(&docset)?)
-    } else {
-        None
-    };
+    // N6: exclusive per-docset lock for the duration of the install. The guard
+    // removes the lockfile on drop (success, failure, or panic).
+    let _lock = acquire_install_lock(&docset)?;
 
-    // Install to staging first
-    let staging_path = install_to_staging(&docset, url)?;
+    // Build a complete, verified candidate under staging (no active writes yet).
+    let staging_path = install_to_staging(&docset, url, expected_sha256)?;
 
-    // Promote staging to active
-    match promote_staging(&docset, &staging_path) {
-        Ok(()) => {
-            // Success: cleanup staging and any rollback backup (best-effort so a
-            // cleanup hiccup never masks a successful install).
-            if let Err(cleanup_err) = cleanup_staging(&staging_path) {
-                eprintln!("warning: failed to clean up staging: {}", cleanup_err);
-            }
-            if let Some(backup) = existing_backup {
-                if let Err(cleanup_err) = cleanup_rollback(&backup) {
-                    eprintln!("warning: failed to clean up rollback: {}", cleanup_err);
-                }
-            }
-            Ok(())
+    // Atomically promote staging -> active (rename-based). On failure this
+    // restores the previous active docset and leaves staging for diagnostics.
+    promote_staging(&docset, &staging_path)?;
+
+    Ok(())
+}
+
+/// N6: an exclusive per-docset install lock. Removed on drop.
+struct InstallLock {
+    path: PathBuf,
+}
+
+impl Drop for InstallLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Acquire the per-docset install lock using `O_EXCL` (`create_new`). The lock
+/// file content is the epoch-seconds of creation; a lock older than one hour is
+/// treated as stale and replaced. A fresh lock yields the spec-mandated busy
+/// error: "docset {docset} is currently being installed by another process".
+fn acquire_install_lock(docset: &str) -> Result<InstallLock> {
+    std::fs::create_dir_all(cache::staging_root())?;
+    let path = cache::staging_root().join(format!("{docset}.lock"));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(mut f) => {
+            use std::io::Write;
+            let _ = writeln!(f, "{now}");
+            Ok(InstallLock { path })
         }
-        Err(e) => {
-            // Promotion failed.
-            if let Some(backup) = existing_backup {
-                // Had a prior active docset: restore it (best-effort).
-                if let Err(restore_err) = restore_from_backup(&docset, &backup) {
-                    eprintln!("warning: failed to restore from backup: {}", restore_err);
-                }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let stale = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .map(|t| now.saturating_sub(t) >= 3600)
+                .unwrap_or(false);
+            if stale {
+                let _ = std::fs::remove_file(&path);
+                let mut f = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)?;
+                use std::io::Write;
+                let _ = writeln!(f, "{now}");
+                Ok(InstallLock { path })
             } else {
-                // Fresh install: remove any partially-promoted active paths so we
-                // never leave a broken active docset behind (no backup to restore).
-                if let Err(cleanup_err) = cleanup_partial_active(&docset) {
-                    eprintln!(
-                        "warning: failed to clean up partial active: {}",
-                        cleanup_err
-                    );
-                }
+                anyhow::bail!("docset {docset} is currently being installed by another process")
             }
-            // Leave staging for diagnostics
-            Err(e)
         }
+        Err(e) => Err(e).with_context(|| format!("create install lock {}", path.display())),
     }
 }
 
 /// Install a docset to a staging directory (not active paths).
-fn install_to_staging(docset: &str, url: &str) -> Result<PathBuf> {
+fn install_to_staging(docset: &str, url: &str, expected_sha256: Option<&str>) -> Result<PathBuf> {
     let staging_path = cache::new_staging_path(docset);
     std::fs::create_dir_all(&staging_path)?;
 
@@ -460,8 +753,15 @@ fn install_to_staging(docset: &str, url: &str) -> Result<PathBuf> {
         let path = url.strip_prefix("file://").unwrap();
         (PathBuf::from(path), false)
     } else {
-        (download_to_temp(url)?, true)
+        (download_to_temp(url, docset)?, true)
     };
+
+    // S2: streaming sha256 integrity check. On mismatch, transient downloads
+    // are removed (fixtures are never deleted) and we bail before any active
+    // cache path is touched.
+    if let Some(expected) = expected_sha256 {
+        verify_archive_integrity(&archive_path, expected, is_temp)?;
+    }
 
     let mut file = std::fs::File::open(&archive_path).context("open archive")?;
     let entries = extract_tar(&mut file)?;
@@ -470,46 +770,28 @@ fn install_to_staging(docset: &str, url: &str) -> Result<PathBuf> {
         let _ = std::fs::remove_file(&archive_path);
     }
 
-    // R1: validate archive before writing any active cache paths.
-    validate_archive(&entries).map_err(|e| anyhow::anyhow!("{}", e))?;
+    // S1: registry releases accept a prebuilt `.lance` table and do not require
+    // `chunks.jsonl` (OQ1 Method A — vectors are CI-built with the pinned model).
+    validate_archive_with_mode(&entries, ArchiveType::RegistryRelease)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    // Validate archive has manifest
-    let manifest_entry = entries
-        .iter()
-        .find(|(name, _)| name.ends_with("manifest.json"))
-        .context("archive missing manifest.json")?;
-
-    let manifest_json = std::str::from_utf8(&manifest_entry.1).context("manifest utf8")?;
-    let m = manifest::parse_manifest(manifest_json)?;
-    manifest::validate(&m)?;
-
-    // Write manifest to staging
-    let staging_manifest = staging_path.join("manifest.json");
-    std::fs::write(&staging_manifest, &manifest_entry.1)?;
-
-    // Persist LICENSE to staging if present
-    let license_entry = entries.iter().find(|(name, _)| {
-        std::path::Path::new(name)
-            .file_name()
-            .map(|f| f == std::ffi::OsStr::new("LICENSE"))
-            .unwrap_or(false)
-    });
-    if let Some((_, data)) = license_entry {
-        let staging_license = staging_path.join("license.txt");
-        std::fs::write(&staging_license, data)?;
+    // Materialize every entry to staging, preserving relative paths so the
+    // `.lance` table tree is reproduced for a rename-based promote.
+    for (name, data) in &entries {
+        let dest = staging_path.join(name);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&dest, data)?;
     }
 
-    // Save chunks to staging for later materialization
-    let chunks_entry = entries
-        .iter()
-        .find(|(name, _)| name.ends_with("chunks.jsonl"));
-    if let Some((_, data)) = chunks_entry {
-        let staging_chunks = staging_path.join("chunks.jsonl");
-        std::fs::write(&staging_chunks, data)?;
-    }
-
-    // Verify staged manifest (incl. identity binding to the install name)
+    // S7: identity binding + schema/model/license validation.
     verify_staging(&staging_path, docset)?;
+    // M12: install-context business invariants (chunk_count, traceable URL).
+    let m = manifest::parse_manifest(&std::fs::read_to_string(
+        staging_path.join("manifest.json"),
+    )?)?;
+    manifest::validate_manifest_for_docset(&m, docset)?;
 
     Ok(staging_path)
 }
@@ -537,122 +819,146 @@ fn verify_staging(staging_path: &Path, expected_docset: &str) -> Result<()> {
     Ok(())
 }
 
-/// Promote staging to active cache.
+/// Locate the single `.lance` table directory materialized under staging.
+fn find_lance_dir(staging_path: &Path) -> Result<PathBuf> {
+    let mut candidates = Vec::new();
+    for entry in std::fs::read_dir(staging_path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".lance") {
+                candidates.push(entry.path());
+            }
+        }
+    }
+    match candidates.len() {
+        0 => anyhow::bail!("staging contains no .lance table directory"),
+        1 => Ok(candidates.remove(0)),
+        _ => anyhow::bail!(
+            "staging contains {} .lance directories (expected exactly one)",
+            candidates.len()
+        ),
+    }
+}
+
+/// Promote a verified staging candidate to the active cache using rename-based
+/// atomic replacement (S1+S4). No zero vectors, no `chunks.jsonl`
+/// materialization, and no `std::fs::copy` for the store.
+///
+/// Flow: backup active (rename) -> rename staging `.lance` to active db ->
+/// atomic-write manifest (tmp + rename) -> copy license text -> reopen store
+/// and verify row count == manifest chunk_count. On any failure after backup,
+/// restore the previous active docset and leave staging for diagnostics. On
+/// success, best-effort cleanup of rollback + staging.
 fn promote_staging(docset: &str, staging_path: &Path) -> Result<()> {
     let active_manifest = cache::manifest_path(docset);
-    let _active_db = cache::db_path(docset);
+    let active_db = cache::db_path(docset);
     let active_license = cache::license_text_path(docset);
 
-    // Ensure parent directories exist
-    if let Some(parent) = active_manifest.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    // Copy manifest from staging to active
     let staging_manifest = staging_path.join("manifest.json");
-    std::fs::copy(&staging_manifest, &active_manifest)?;
+    let manifest_raw = std::fs::read_to_string(&staging_manifest)?;
+    let expected_rows = manifest::parse_manifest(&manifest_raw)?.source.chunk_count as u64;
 
-    // Copy license if present
-    let staging_license = staging_path.join("license.txt");
-    if staging_license.is_file() {
-        if let Some(parent) = active_license.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::copy(&staging_license, &active_license)?;
-    }
+    let staging_lance = find_lance_dir(staging_path)?;
+    let staging_license = staging_path.join("LICENSE");
 
-    // Materialize chunks from staging to active store
-    let staging_chunks = staging_path.join("chunks.jsonl");
-    if staging_chunks.is_file() {
-        let jsonl = std::fs::read_to_string(&staging_chunks)?;
-        let parsed: Vec<JsonlChunk> = jsonl
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(serde_json::from_str::<JsonlChunk>)
-            .collect::<Result<Vec<_>, _>>()
-            .context("parse chunks.jsonl")?;
-
-        let chunks: Vec<Chunk> = parsed
-            .into_iter()
-            .map(|c| Chunk {
-                idx: c.idx,
-                heading_path: c.heading_path,
-                source_url: c.source_url,
-                api_version: c.api_version,
-                chunk_type: match c.chunk_type.as_deref() {
-                    Some("Code") => ChunkType::Code,
-                    _ => ChunkType::Info,
-                },
-                text: c.text,
-            })
-            .collect();
-
-        let zero_vectors: Vec<Vec<f32>> = vec![vec![0.0f32; 512]; chunks.len()];
-        let store = Store::open(docset)?;
-        store.insert(&chunks, &zero_vectors)?;
-    }
-
-    Ok(())
-}
-
-/// Backup existing active docset for rollback.
-fn backup_existing(docset: &str) -> Result<PathBuf> {
-    let backup_path = cache::rollback_path(docset);
-    std::fs::create_dir_all(&backup_path)?;
-
-    let active_manifest = cache::manifest_path(docset);
-    let active_db = cache::db_path(docset);
-    let active_license = cache::license_text_path(docset);
-
-    // Backup manifest
-    if active_manifest.is_file() {
-        std::fs::copy(&active_manifest, backup_path.join("manifest.json"))?;
-    }
-
-    // Backup license
-    if active_license.is_file() {
-        std::fs::copy(&active_license, backup_path.join("license.txt"))?;
-    }
-
-    // Backup store (db directory)
-    if active_db.exists() {
-        copy_dir_all(&active_db, &backup_path.join("store.lance"))?;
-    }
-
-    Ok(backup_path)
-}
-
-/// Restore from backup.
-fn restore_from_backup(docset: &str, backup_path: &Path) -> Result<()> {
-    let active_manifest = cache::manifest_path(docset);
-    let active_db = cache::db_path(docset);
-    let active_license = cache::license_text_path(docset);
-
-    // Restore manifest
-    let backup_manifest = backup_path.join("manifest.json");
-    if backup_manifest.is_file() {
-        std::fs::copy(&backup_manifest, &active_manifest)?;
-    }
-
-    // Restore license
-    let backup_license = backup_path.join("license.txt");
-    if backup_license.is_file() {
-        if let Some(parent) = active_license.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::copy(&backup_license, &active_license)?;
-    }
-
-    // Restore store (db directory)
-    let backup_store = backup_path.join("store.lance");
-    if backup_store.exists() {
+    // 1. Backup the current active docset via rename (same filesystem).
+    let had_active = active_db.exists() || active_manifest.is_file();
+    let rollback = if had_active {
+        let rb = cache::rollback_path(docset);
+        std::fs::create_dir_all(&rb)?;
         if active_db.exists() {
-            std::fs::remove_dir_all(&active_db)?;
+            std::fs::rename(&active_db, rb.join("db.lance"))?;
         }
-        copy_dir_all(&backup_store, &active_db)?;
-    }
+        if active_manifest.is_file() {
+            std::fs::rename(&active_manifest, rb.join("manifest.json"))?;
+        }
+        if active_license.is_file() {
+            std::fs::rename(&active_license, rb.join("license.txt"))?;
+        }
+        Some(rb)
+    } else {
+        None
+    };
 
-    Ok(())
+    // 2. Promote + verify. Isolated in a closure so any failure restores backup.
+    let promote_result = (|| -> Result<()> {
+        if let Some(parent) = active_db.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::rename(&staging_lance, &active_db)?;
+
+        if let Some(parent) = active_manifest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let tmp_manifest = active_manifest.with_extension("manifest.json.tmp");
+        std::fs::write(&tmp_manifest, &manifest_raw)?;
+        std::fs::rename(&tmp_manifest, &active_manifest)?;
+
+        if staging_license.is_file() {
+            if let Some(parent) = active_license.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&staging_license, &active_license)?;
+        }
+
+        // 3. Verify: reopen the installed table and confirm it is readable and
+        // has exactly the manifest-declared number of chunks.
+        let store = Store::open(docset)?;
+        let rows = store.row_count()?;
+        if rows == 0 {
+            anyhow::bail!("installed store for {docset} has 0 rows");
+        }
+        if rows != expected_rows {
+            anyhow::bail!(
+                "installed store row_count {rows} != manifest chunk_count {expected_rows} for {docset}"
+            );
+        }
+        Ok(())
+    })();
+
+    match promote_result {
+        Ok(()) => {
+            if let Some(rb) = rollback {
+                if let Err(e) = cleanup_rollback(&rb) {
+                    eprintln!("warning: failed to clean up rollback: {e}");
+                }
+            }
+            if let Err(e) = cleanup_staging(staging_path) {
+                eprintln!("warning: failed to clean up staging: {e}");
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // Restore the previous active docset (or clear partial active for a
+            // fresh install). Best-effort: never mask the original error.
+            if active_db.exists() {
+                let _ = std::fs::remove_dir_all(&active_db);
+            }
+            if active_manifest.is_file() {
+                let _ = std::fs::remove_file(&active_manifest);
+            }
+            if active_license.is_file() {
+                let _ = std::fs::remove_file(&active_license);
+            }
+            if let Some(rb) = rollback {
+                let rb_db = rb.join("db.lance");
+                let rb_manifest = rb.join("manifest.json");
+                let rb_license = rb.join("license.txt");
+                if rb_db.exists() {
+                    let _ = std::fs::rename(&rb_db, &active_db);
+                }
+                if rb_manifest.is_file() {
+                    let _ = std::fs::rename(&rb_manifest, &active_manifest);
+                }
+                if rb_license.is_file() {
+                    let _ = std::fs::rename(&rb_license, &active_license);
+                }
+                let _ = cleanup_rollback(&rb);
+            }
+            Err(e)
+        }
+    }
 }
 
 /// Cleanup staging directory.
@@ -667,39 +973,6 @@ fn cleanup_staging(staging_path: &Path) -> Result<()> {
 fn cleanup_rollback(rollback_path: &Path) -> Result<()> {
     if rollback_path.exists() {
         std::fs::remove_dir_all(rollback_path)?;
-    }
-    Ok(())
-}
-
-/// Remove any partially-promoted active paths left after a failed fresh install
-/// (no backup existed to restore from). Best-effort; called only on the error path.
-fn cleanup_partial_active(docset: &str) -> Result<()> {
-    let mp = cache::manifest_path(docset);
-    let db = cache::db_path(docset);
-    let lic = cache::license_text_path(docset);
-    if mp.is_file() {
-        std::fs::remove_file(&mp)?;
-    }
-    if db.exists() {
-        std::fs::remove_dir_all(&db)?;
-    }
-    if lic.is_file() {
-        std::fs::remove_file(&lic)?;
-    }
-    Ok(())
-}
-
-/// Copy directory recursively.
-fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        if ty.is_dir() {
-            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
-        } else {
-            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
-        }
     }
     Ok(())
 }
@@ -719,6 +992,17 @@ pub fn share(docset: &str, out_dir: &Path) -> Result<PathBuf> {
     let chunks = store.dump_chunks()?;
 
     let share_dir = out_dir.join(&docset);
+    // M10: refuse to write into a pre-existing non-empty output directory so a
+    // stale bundle from a prior share cannot silently mix with the fresh one.
+    if share_dir.exists() {
+        let is_empty = std::fs::read_dir(&share_dir)?.next().is_none();
+        if !is_empty {
+            anyhow::bail!(
+                "output directory {} already exists and is non-empty; remove it first or use a different path",
+                share_dir.display()
+            );
+        }
+    }
     std::fs::create_dir_all(&share_dir)?;
 
     std::fs::write(share_dir.join("manifest.json"), &raw)?;
@@ -786,6 +1070,10 @@ fn build_notice(m: &manifest::Manifest) -> String {
     s
 }
 
+// On-disk `chunks.jsonl` row schema. `idx`/`text`/`chunk_type` are checked by
+// `validate_chunks_jsonl` (M8); the metadata fields are part of the contributor
+// bundle schema and retained for forward-compatible deserialization.
+#[allow(dead_code)]
 #[derive(serde::Deserialize)]
 struct JsonlChunk {
     idx: u32,
@@ -824,7 +1112,8 @@ pub fn update(docset: &str) -> Result<()> {
     install(&docset, &url)
 }
 
-/// Uninstall a docset: remove its db and manifest from the cache.
+/// Uninstall a docset: remove its db and manifest from the cache, plus any
+/// docset-scoped leftovers (stashed license, staging dirs, rollback dirs).
 pub fn uninstall(docset: &str) -> Result<()> {
     let docset = input::validate_docset(docset)?;
     let db = cache::db_path(&docset);
@@ -835,7 +1124,37 @@ pub fn uninstall(docset: &str) -> Result<()> {
     if mp.is_file() {
         std::fs::remove_file(&mp).context("remove manifest")?;
     }
+
+    // M9: best-effort cleanup of docset-scoped leftovers. Failures here must
+    // not mask a successful uninstall of the active db/manifest above.
+    let lic = cache::license_text_path(&docset);
+    if lic.is_file() {
+        let _ = std::fs::remove_file(&lic);
+    }
+    remove_docset_dirs(cache::staging_root(), &docset);
+    remove_docset_dirs(cache::rollback_root(), &docset);
     Ok(())
+}
+
+/// Best-effort removal of `<root>/<docset>-*` directories (staging/rollback
+/// leftovers for one docset). Other docsets' dirs are left untouched.
+fn remove_docset_dirs(root: PathBuf, docset: &str) {
+    let prefix = format!("{docset}-");
+    let entries = match std::fs::read_dir(&root) {
+        Ok(it) => it,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let name_match = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with(&prefix));
+        if is_dir && name_match {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
 }
 
 // ===== Registry catalog discovery (U3: list / search) =====
@@ -882,7 +1201,7 @@ pub fn fetch_index_from(url: &str) -> Result<RegistryIndex> {
     let tmp = if is_test_file_url(url) {
         PathBuf::from(url.strip_prefix("file://").unwrap_or(url))
     } else {
-        download_to_temp(url)?
+        download_to_temp(url, "index")?
     };
     let text = std::fs::read_to_string(&tmp)
         .with_context(|| format!("reading registry index at {tmp:?}"))?;
@@ -992,4 +1311,90 @@ pub fn search_index(query: &str, json: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- S2: sha256 integrity verification ---
+
+    #[test]
+    fn sha256_mismatch_deletes_temp_file() {
+        // is_temp = true → the transient download is removed on mismatch.
+        let path = std::env::temp_dir().join(download_temp_name("sha256-temp"));
+        std::fs::write(&path, b"registry artifact bytes").unwrap();
+        let wrong = "0".repeat(64);
+        let res = verify_archive_integrity(&path, &wrong, true);
+        assert!(res.is_err(), "wrong sha256 must be rejected");
+        assert!(
+            format!("{}", res.unwrap_err()).contains("ARCHIVE_SHA256_MISMATCH"),
+            "error must carry the mismatch code"
+        );
+        assert!(
+            !path.exists(),
+            "transient download must be deleted on sha256 mismatch"
+        );
+    }
+
+    #[test]
+    fn sha256_mismatch_preserves_caller_file() {
+        // is_temp = false → a caller-supplied file:// fixture is never deleted.
+        let path = std::env::temp_dir().join(download_temp_name("sha256-keep"));
+        std::fs::write(&path, b"registry artifact bytes").unwrap();
+        let wrong = "0".repeat(64);
+        let res = verify_archive_integrity(&path, &wrong, false);
+        assert!(res.is_err(), "wrong sha256 must be rejected");
+        assert!(
+            path.exists(),
+            "caller-supplied fixture must NOT be deleted on mismatch"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // --- OQ6: curl must cap redirect following ---
+
+    #[test]
+    fn curl_does_not_follow_redirects() {
+        let args = curl_args(
+            Path::new("/tmp/nowdocs_test_dl"),
+            "https://github.com/nowdocs-registry/x/releases/download/v1/x.tar",
+        );
+        let idx = args
+            .iter()
+            .position(|a| a == "--max-redirs")
+            .expect("curl args must include --max-redirs");
+        assert_eq!(
+            args.get(idx + 1).map(String::as_str),
+            Some("1"),
+            "--max-redirs must be capped at 1 (github.com -> its CDN only)"
+        );
+    }
+
+    // --- M11: download temp filename is docset/pid/timestamp scoped ---
+
+    #[test]
+    fn concurrent_downloads_use_different_temp_files() {
+        let name = download_temp_name("alpha");
+        // Structure: nowdocs_dl_{docset}_{pid}_{timestamp_millis}
+        let parts: Vec<&str> = name.split('_').collect();
+        assert_eq!(
+            parts.len(),
+            5,
+            "temp name must be nowdocs_dl_{{docset}}_{{pid}}_{{ts}}, got: {name}"
+        );
+        assert_eq!(parts[0], "nowdocs");
+        assert_eq!(parts[1], "dl");
+        assert_eq!(parts[2], "alpha", "temp name must include the docset");
+        assert!(
+            parts[3].parse::<u32>().is_ok(),
+            "temp name must include the numeric pid, got: {}",
+            parts[3]
+        );
+        assert!(
+            parts[4].parse::<u64>().is_ok(),
+            "temp name must include a numeric timestamp, got: {}",
+            parts[4]
+        );
+    }
 }
