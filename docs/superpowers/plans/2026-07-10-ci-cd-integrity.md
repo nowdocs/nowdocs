@@ -36,6 +36,7 @@
 
 - [x] Change the unused-dependency job so a `cargo udeps` finding fails the job instead of emitting a warning and exiting successfully.
 - [x] Pin the cargo-udeps and nightly Rust versions to make weekly results reproducible.
+- [x] Pass the documented advisory exceptions to cargo-audit and grant only the check-writing permission its action requires.
 - [x] Verify workflow YAML structure and confirm no failure-masking shell construct remains.
 
 ### Task 3: Coverage baseline and scheduled evaluation alignment

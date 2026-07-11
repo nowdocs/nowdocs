@@ -8,6 +8,10 @@ on:
     - cron: "0 17 * * 5"
   workflow_dispatch:
 
+permissions:
+  contents: read
+  checks: write
+
 env:
   CARGO_TERM_COLOR: always
   RUST_VERSION: 1.97.0
@@ -22,6 +26,8 @@ jobs:
       - uses: rustsec/audit-check@v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # Align with the documented, time-bounded exceptions in deny.toml.
+          ignore: RUSTSEC-2026-0194,RUSTSEC-2026-0195
 
   udeps:
     name: Dead Code (cargo-udeps)
