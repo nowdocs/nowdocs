@@ -251,25 +251,37 @@ pub fn preload_default_embedder() {
     }
 }
 
-/// True when the default model's weights are already present in the nowdocs
-/// model cache (hf-hub `models--<id>/snapshots/<rev>/` layout). Used to decide
-/// whether `serve`-time preloading is free (warm) or would require a download
-/// (cold — skip and load lazily instead).
+/// True when every file `load_uncached` needs for the default model is already
+/// present in the nowdocs model cache (hf-hub `models--<id>/snapshots/<rev>/`
+/// layout): weights (safetensors *or* pytorch bin) + `config.json` +
+/// `tokenizer.json`.
+///
+/// Used to decide whether `serve`-time preloading is free (warm) or would need a
+/// download (cold — skip and load lazily instead). Requiring ALL files, not just
+/// the weights, keeps an interrupted earlier load (weights written but config/
+/// tokenizer missing) from tricking preload into a surprise network fetch on an
+/// offline or restricted server.
 pub fn default_model_cached() -> bool {
-    default_weights_path().is_some()
+    let Some(snapshots) = default_snapshot_dir() else {
+        return false;
+    };
+    let has_weights = ["model.safetensors", "pytorch_model.bin"]
+        .iter()
+        .any(|name| snapshots.join(name).exists());
+    has_weights
+        && snapshots.join("config.json").exists()
+        && snapshots.join("tokenizer.json").exists()
 }
 
-fn default_weights_path() -> Option<std::path::PathBuf> {
+fn default_snapshot_dir() -> Option<std::path::PathBuf> {
     let cache = crate::cache::model_path(DEFAULT_MODEL_ID);
     let repo_dir = cache.join(format!("models--{}", DEFAULT_MODEL_ID.replace('/', "--")));
     let snapshots = repo_dir.join("snapshots").join(DEFAULT_REVISION);
-    for name in ["model.safetensors", "pytorch_model.bin"] {
-        let p = snapshots.join(name);
-        if p.exists() {
-            return Some(p);
-        }
+    if snapshots.is_dir() {
+        Some(snapshots)
+    } else {
+        None
     }
-    None
 }
 
 /// Remove `auto_map` from the HF config.json to prevent arbitrary code execution (A3).

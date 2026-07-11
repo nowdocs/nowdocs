@@ -193,6 +193,48 @@ fn test_preload_skips_when_model_uncached() {
 }
 
 #[test]
+fn test_default_model_cached_requires_all_files() {
+    // Cold-cache / interrupted-load guard: weights alone must NOT count as
+    // "cached", otherwise serve-time preload would try to fetch the missing
+    // config/tokenizer on an offline server. Only when weights + config.json +
+    // tokenizer.json are ALL present should preload run.
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+
+    let snapshots = nowdocs::cache::model_path(S0_MODEL_ID)
+        .join(format!("models--{}", S0_MODEL_ID.replace('/', "--")))
+        .join("snapshots")
+        .join(S0_REVISION);
+    std::fs::create_dir_all(&snapshots).unwrap();
+
+    assert!(
+        !nowdocs::embedder::default_model_cached(),
+        "empty snapshot dir must be cold"
+    );
+
+    // Weights only: still cold (config + tokenizer missing).
+    std::fs::write(snapshots.join("model.safetensors"), b"").unwrap();
+    assert!(
+        !nowdocs::embedder::default_model_cached(),
+        "weights-only snapshot must be cold"
+    );
+
+    // Weights + config: still cold (tokenizer missing).
+    std::fs::write(snapshots.join("config.json"), b"{}").unwrap();
+    assert!(
+        !nowdocs::embedder::default_model_cached(),
+        "weights+config snapshot must be cold"
+    );
+
+    // All three required files: warm.
+    std::fs::write(snapshots.join("tokenizer.json"), b"{}").unwrap();
+    assert!(
+        nowdocs::embedder::default_model_cached(),
+        "weights+config+tokenizer snapshot must be warm"
+    );
+}
+
+#[test]
 #[ignore = "slow: runs a full 8191-token forward pass on CPU; cap logic is covered by the embedder::tests::cap_to_max_position_* unit tests"]
 fn test_embedder_truncates_oversized_input_without_panic() {
     // N7: an input far beyond the model's 8192 max-position must be truncated
