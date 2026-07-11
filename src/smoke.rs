@@ -74,8 +74,9 @@ pub fn smoke(docset: &str, query: Option<&str>, top_k: Option<u32>) -> Result<Sm
     // embedder is process-cached (N3), so retrieve's internal reload is a cheap
     // handle clone after this probe.
     let embed_start = Instant::now();
-    let embedder = crate::embedder::Embedder::load()
-        .context("embedder load failed — model may need downloading; try `nowdocs doctor --model`")?;
+    let embedder = crate::embedder::Embedder::load().context(
+        "embedder load failed — model may need downloading; try `nowdocs doctor --model`",
+    )?;
     embedder
         .embed(query)
         .context("query embed failed — try `nowdocs doctor --model`")?;

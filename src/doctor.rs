@@ -207,15 +207,24 @@ pub fn run_docset_checks(docset: &str) -> DoctorOutput {
         let (severity, message) = match state {
             cache::InstalledDocsetState::Healthy => (
                 Severity::Ok,
-                format!("Docset state: {} (manifest + store consistent)", state.label()),
+                format!(
+                    "Docset state: {} (manifest + store consistent)",
+                    state.label()
+                ),
             ),
             cache::InstalledDocsetState::ManifestOnly => (
                 Severity::Warn,
-                format!("Docset state: {} (manifest present, store missing)", state.label()),
+                format!(
+                    "Docset state: {} (manifest present, store missing)",
+                    state.label()
+                ),
             ),
             cache::InstalledDocsetState::StoreOnly => (
                 Severity::Fail,
-                format!("Docset state: {} (store present, manifest missing)", state.label()),
+                format!(
+                    "Docset state: {} (store present, manifest missing)",
+                    state.label()
+                ),
             ),
             cache::InstalledDocsetState::SchemaMismatch => (
                 Severity::Fail,
@@ -230,7 +239,10 @@ pub fn run_docset_checks(docset: &str) -> DoctorOutput {
             ),
             cache::InstalledDocsetState::NotInstalled => (
                 Severity::Fail,
-                format!("Docset state: {} (neither manifest nor store)", state.label()),
+                format!(
+                    "Docset state: {} (neither manifest nor store)",
+                    state.label()
+                ),
             ),
         };
         checks.push(Check {
@@ -655,11 +667,9 @@ fn check_installed_docsets() -> Vec<Check> {
         // list-installed / smoke / nowdocs_list on partial installs.
         let state = cache::check_docset_state(docset);
         let (severity, message, remediation) = match state {
-            cache::InstalledDocsetState::Healthy => (
-                Severity::Ok,
-                format!("Docset '{docset}' is healthy"),
-                None,
-            ),
+            cache::InstalledDocsetState::Healthy => {
+                (Severity::Ok, format!("Docset '{docset}' is healthy"), None)
+            }
             cache::InstalledDocsetState::ManifestOnly => (
                 Severity::Warn,
                 format!("Docset '{docset}' has manifest but no store"),

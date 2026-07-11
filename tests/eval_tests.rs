@@ -126,8 +126,8 @@ fn eval_negative_queries_return_empty_or_low_confidence() {
         ingest_dir(&fixture_dir, docset, &IngestMeta::default()).expect("ingest fixture corpus");
     assert!(stats.chunks > 0, "fixture must produce chunks");
 
-    let raw = std::fs::read_to_string(fixture_dir.join("negative.json"))
-        .expect("read negative.json");
+    let raw =
+        std::fs::read_to_string(fixture_dir.join("negative.json")).expect("read negative.json");
     let entries: Vec<serde_json::Value> =
         serde_json::from_str(&raw).expect("negative.json must be a JSON array");
     let queries: Vec<String> = entries

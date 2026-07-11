@@ -289,11 +289,7 @@ fn test_doctor_metrics_report_docset_row_counts() {
         "legal": { "license": "MIT", "copyright_holder": "Example", "attribution": "" },
         "refresh_strategy": { "tier": "stable", "auto_days": 30 }
     }"#;
-    std::fs::write(
-        nowdocs::cache::manifest_path("metrics-ds"),
-        manifest_json,
-    )
-    .unwrap();
+    std::fs::write(nowdocs::cache::manifest_path("metrics-ds"), manifest_json).unwrap();
 
     let metrics = doctor::DoctorMetrics::collect();
     let ds = metrics
