@@ -50,25 +50,6 @@ fn test_chunks_jsonl() -> &'static str {
 "#
 }
 
-fn make_tar_archive(_dir: &std::path::Path) -> Vec<u8> {
-    let manifest_data = test_manifest_json().as_bytes();
-    let chunks_data = test_chunks_jsonl().as_bytes();
-
-    let files: Vec<(&str, &[u8])> = vec![
-        ("manifest.json", manifest_data),
-        ("chunks.jsonl", chunks_data),
-    ];
-
-    let mut archive = Vec::new();
-    for (name, data) in &files {
-        archive.extend_from_slice(&make_tar_entry(name, data));
-    }
-    // Two zero blocks to end the archive.
-    archive.extend_from_slice(&[0u8; 512]);
-    archive.extend_from_slice(&[0u8; 512]);
-    archive
-}
-
 fn make_tar_entry(name: &str, data: &[u8]) -> Vec<u8> {
     let mut header = [0u8; 512];
     // name (0..100)
