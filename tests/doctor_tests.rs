@@ -216,3 +216,167 @@ fn test_doctor_default_reports_warn_when_model_missing() {
         "missing model should make default checks report Warn status"
     );
 }
+
+// M23: `doctor --json` must carry cache/observability metrics (model cache
+// size, per-area sizes, per-docset counters).
+#[test]
+fn test_doctor_json_includes_model_cache_size() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let output = doctor::run_default_checks();
+    let json = serde_json::to_string(&output).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    let metrics = parsed
+        .get("metrics")
+        .expect("doctor JSON must include a metrics object");
+    for field in [
+        "model_cache_bytes",
+        "model_cache_mb",
+        "db_bytes",
+        "manifests_bytes",
+        "staging_bytes",
+        "rollback_bytes",
+        "docsets",
+    ] {
+        assert!(
+            metrics.get(field).is_some(),
+            "metrics must include {field}, got: {json}"
+        );
+    }
+}
+
+// M23: per-docset metric rows report the live store row count, the manifest
+// chunk_count, and the unified install-state label.
+#[test]
+fn test_doctor_metrics_report_docset_row_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+    nowdocs::cache::ensure_layout().unwrap();
+
+    // Build a real 2-row store + matching manifest (dummy vectors, no embedder).
+    use nowdocs::chunker::{Chunk, ChunkType};
+    let chunks: Vec<Chunk> = (0..2)
+        .map(|i| Chunk {
+            idx: i as u32,
+            heading_path: format!("H{i}"),
+            source_url: format!("https://example.com/{i}"),
+            api_version: None,
+            chunk_type: ChunkType::Info,
+            text: format!("chunk {i}"),
+        })
+        .collect();
+    let vecs: Vec<Vec<f32>> = chunks.iter().map(|_| vec![0.0f32; 512]).collect();
+    let store = nowdocs::store::Store::open("metrics-ds").unwrap();
+    store.insert(&chunks, &vecs).unwrap();
+
+    let manifest_json = r#"{
+        "docset": "metrics-ds",
+        "doc_version": "1.0.0",
+        "nowdocs_schema_version": 1,
+        "embedder": {
+            "model_id": "jinaai/jina-embeddings-v2-small-en",
+            "model_version": "0.1.0",
+            "model_revision": "abc123",
+            "model_sha256": "deadbeef",
+            "vector_dim": 512,
+            "engine": "candle",
+            "dtype": "f16"
+        },
+        "retrieval": { "tokenizer": "default", "chunk_size_tokens": 512, "window_tokens": 64 },
+        "source": { "entry_url": "https://example.com/docs", "source_url": "https://example.com", "scraped_at": "2026-01-01T00:00:00Z", "chunk_count": 2 },
+        "legal": { "license": "MIT", "copyright_holder": "Example", "attribution": "" },
+        "refresh_strategy": { "tier": "stable", "auto_days": 30 }
+    }"#;
+    std::fs::write(nowdocs::cache::manifest_path("metrics-ds"), manifest_json).unwrap();
+
+    let metrics = doctor::DoctorMetrics::collect();
+    let ds = metrics
+        .docsets
+        .iter()
+        .find(|d| d.name == "metrics-ds")
+        .expect("metrics must list the docset");
+    assert_eq!(ds.store_rows, 2, "store_rows must reflect the live table");
+    assert_eq!(
+        ds.manifest_chunk_count, 2,
+        "manifest_chunk_count must come from the manifest"
+    );
+    assert_eq!(ds.state, "ok", "healthy docset must report state 'ok'");
+}
+
+// N5: when the model is missing, doctor must point at the pre-warm command.
+#[test]
+fn doctor_suggests_model_download_when_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let output = doctor::run_model_check();
+    let model_check = output
+        .checks
+        .iter()
+        .find(|c| c.id == "model-cache-exists")
+        .expect("model-cache-exists check present");
+    let remediation = model_check
+        .remediation
+        .as_deref()
+        .expect("missing model must carry a remediation hint");
+    assert!(
+        remediation.contains("doctor --model"),
+        "remediation must suggest `nowdocs doctor --model`, got: {remediation}"
+    );
+}
+
+// N5: install success output prints the shared pre-warm hint; it must tell the
+// user to pre-download the model via `nowdocs doctor --model`.
+#[test]
+fn install_output_contains_model_prewarm_hint() {
+    let hint = doctor::MODEL_PREWARM_HINT;
+    assert!(
+        hint.contains("doctor --model"),
+        "hint must mention doctor --model, got: {hint}"
+    );
+    assert!(
+        hint.contains("pre-download"),
+        "hint must say pre-download, got: {hint}"
+    );
+}
+
+// OQ6: curl availability is detected from a (mocked) PATH.
+#[test]
+fn doctor_warns_when_curl_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_str().unwrap();
+
+    // PATH with no curl in it -> unavailable (doctor would Warn).
+    assert!(
+        !doctor::is_curl_available_in_path(path),
+        "PATH without curl must report unavailable"
+    );
+
+    // Plant an executable `curl` -> resolves.
+    let curl = dir.path().join("curl");
+    std::fs::write(&curl, "#!/bin/sh\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    assert!(
+        doctor::is_curl_available_in_path(path),
+        "PATH with an executable curl must report available"
+    );
+}
+
+// OQ6: default checks include the curl availability check.
+#[test]
+fn doctor_default_includes_curl_check() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let output = doctor::run_default_checks();
+    assert!(
+        output.checks.iter().any(|c| c.id == "curl-available"),
+        "default checks must include curl-available check"
+    );
+}

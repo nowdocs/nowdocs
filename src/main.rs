@@ -157,7 +157,9 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             } else if mcp {
                 nowdocs::doctor::run_mcp_check()
             } else if model {
-                nowdocs::doctor::run_model_check()
+                // N5: `--model` is the pre-warm path — it actually downloads
+                // the embedder, so install output can point users at it.
+                nowdocs::doctor::run_model_prewarm()
             } else {
                 nowdocs::doctor::run_default_checks()
             };
@@ -293,6 +295,8 @@ fn print_install_success(docset: &str) {
     let (version, chunks, license) = nowdocs::cache::read_docset_meta(docset);
     println!("installed {docset} v{version} ({chunks} chunks, {license})");
     println!("next: nowdocs smoke {docset}");
+    // N5: point users at the pre-warm path so the first search doesn't stall.
+    println!("{}", nowdocs::doctor::MODEL_PREWARM_HINT);
 }
 
 /// Print enriched success output after update.

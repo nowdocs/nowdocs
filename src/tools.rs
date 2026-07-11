@@ -209,29 +209,36 @@ fn handle_search(args: Value) -> Value {
 
 fn handle_list() -> Value {
     let db_dir = cache::cache_root().join("db");
-    let mut docsets: Vec<String> = Vec::new();
+    // M22: pair each docset with its unified install state so nowdocs_list
+    // reports partial installs the same way list-installed / doctor / smoke do.
+    let mut entries: Vec<(String, cache::InstalledDocsetState)> = Vec::new();
 
-    if let Ok(entries) = std::fs::read_dir(&db_dir) {
-        for entry in entries.flatten() {
+    if let Ok(read) = std::fs::read_dir(&db_dir) {
+        for entry in read.flatten() {
             let path = entry.path();
             if path.is_dir() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if let Some(stem) = name.strip_suffix(".lance") {
-                        docsets.push(stem.to_string());
+                        entries.push((stem.to_string(), cache::check_docset_state(stem)));
                     }
                 }
             }
         }
     }
 
-    docsets.sort();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let text = if docsets.is_empty() {
+    let text = if entries.is_empty() {
         "no docsets installed".to_string()
     } else {
         // S6: docset names are returned to the LLM; sanitize defensively even
         // though input::validate_docset already constrains the on-disk names.
-        sanitize::sanitize_metadata(&docsets.join(", "))
+        let joined = entries
+            .iter()
+            .map(|(name, state)| format!("{name} ({})", state.label()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        sanitize::sanitize_metadata(&joined)
     };
 
     json!({

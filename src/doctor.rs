@@ -28,6 +28,95 @@ pub struct Check {
 pub struct DoctorOutput {
     pub status: Severity,
     pub checks: Vec<Check>,
+    /// M23: cache/observability metrics attached to `doctor --json` output.
+    pub metrics: DoctorMetrics,
+}
+
+/// M23: cache-size and per-docset metrics for `doctor --json`. All fields are
+/// best-effort: unreadable paths report 0 so a corrupt cache still produces a
+/// complete JSON document.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct DoctorMetrics {
+    /// Total size of the model cache (`<cache>/nowdocs/models`) in bytes.
+    pub model_cache_bytes: u64,
+    /// Same as `model_cache_bytes`, rounded to 2-decimal MiB for quick reading.
+    pub model_cache_mb: f64,
+    /// Size of the docset store area (`db/`, `.lance` tables) in bytes.
+    pub db_bytes: u64,
+    /// Size of the manifest files in bytes.
+    pub manifests_bytes: u64,
+    /// Size of the staging area in bytes.
+    pub staging_bytes: u64,
+    /// Size of the rollback area in bytes.
+    pub rollback_bytes: u64,
+    /// Per-docset store/manifest counters.
+    pub docsets: Vec<DocsetMetric>,
+}
+
+/// M23: per-docset metrics row inside [`DoctorMetrics::docsets`].
+#[derive(Debug, Clone, Serialize)]
+pub struct DocsetMetric {
+    pub name: String,
+    /// Unified install-state label (M22 `InstalledDocsetState::label`).
+    pub state: String,
+    /// Live row count of the lance table (0 when the store is absent/unreadable).
+    pub store_rows: u64,
+    /// `source.chunk_count` from the manifest (0 when absent/unparseable).
+    pub manifest_chunk_count: u32,
+}
+
+impl DoctorMetrics {
+    /// Collect current cache metrics. Pure read-only disk inspection.
+    pub fn collect() -> Self {
+        let mut m = DoctorMetrics::default();
+        if let Ok(status) = cache::cache_status() {
+            m.model_cache_bytes = status.models_bytes;
+            m.model_cache_mb =
+                (status.models_bytes as f64 / (1024.0 * 1024.0) * 100.0).round() / 100.0;
+            m.db_bytes = status.db_bytes;
+            m.manifests_bytes = status.manifests_bytes;
+            m.staging_bytes = status.staging_bytes;
+            m.rollback_bytes = status.rollback_bytes;
+        }
+
+        let db_dir = cache::cache_root().join("db");
+        let mut names: Vec<String> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&db_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if let Some(stem) = name.strip_suffix(".lance") {
+                            names.push(stem.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        names.sort();
+        for name in names {
+            let state = cache::check_docset_state(&name).label().to_string();
+            let store_rows = if cache::db_path(&name).exists() {
+                crate::store::Store::open(&name)
+                    .and_then(|s| s.row_count())
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            let manifest_chunk_count = std::fs::read_to_string(cache::manifest_path(&name))
+                .ok()
+                .and_then(|raw| manifest::parse_manifest(&raw).ok())
+                .map(|mm| mm.source.chunk_count)
+                .unwrap_or(0);
+            m.docsets.push(DocsetMetric {
+                name,
+                state,
+                store_rows,
+                manifest_chunk_count,
+            });
+        }
+        m
+    }
 }
 
 fn aggregate_status(checks: &[Check]) -> Severity {
@@ -59,6 +148,9 @@ pub fn run_default_checks() -> DoctorOutput {
     // Check for stale staging directories
     checks.push(check_stale_staging());
 
+    // Check curl is available for registry downloads (OQ6)
+    checks.push(check_curl());
+
     // Check model cache status (M15)
     checks.extend(run_model_check().checks);
 
@@ -74,7 +166,11 @@ pub fn run_default_checks() -> DoctorOutput {
         Severity::Ok
     };
 
-    DoctorOutput { status, checks }
+    DoctorOutput {
+        status,
+        checks,
+        metrics: DoctorMetrics::collect(),
+    }
 }
 
 /// Run deep checks for a specific docset.
@@ -99,8 +195,62 @@ pub fn run_docset_checks(docset: &str) -> DoctorOutput {
             return DoctorOutput {
                 status: Severity::Fail,
                 checks,
+                metrics: DoctorMetrics::default(),
             };
         }
+    }
+
+    // M22: unified install-state summary for this docset, sourced from the same
+    // `check_docset_state` used by list-installed / smoke / nowdocs_list.
+    {
+        let state = cache::check_docset_state(docset);
+        let (severity, message) = match state {
+            cache::InstalledDocsetState::Healthy => (
+                Severity::Ok,
+                format!(
+                    "Docset state: {} (manifest + store consistent)",
+                    state.label()
+                ),
+            ),
+            cache::InstalledDocsetState::ManifestOnly => (
+                Severity::Warn,
+                format!(
+                    "Docset state: {} (manifest present, store missing)",
+                    state.label()
+                ),
+            ),
+            cache::InstalledDocsetState::StoreOnly => (
+                Severity::Fail,
+                format!(
+                    "Docset state: {} (store present, manifest missing)",
+                    state.label()
+                ),
+            ),
+            cache::InstalledDocsetState::SchemaMismatch => (
+                Severity::Fail,
+                format!("Docset state: {} (schema incompatible)", state.label()),
+            ),
+            cache::InstalledDocsetState::RowCountMismatch => (
+                Severity::Warn,
+                format!(
+                    "Docset state: {} (store row count != manifest chunk_count)",
+                    state.label()
+                ),
+            ),
+            cache::InstalledDocsetState::NotInstalled => (
+                Severity::Fail,
+                format!(
+                    "Docset state: {} (neither manifest nor store)",
+                    state.label()
+                ),
+            ),
+        };
+        checks.push(Check {
+            id: "docset-state".to_string(),
+            severity,
+            message,
+            remediation: None,
+        });
     }
 
     // Check manifest exists
@@ -198,7 +348,11 @@ pub fn run_docset_checks(docset: &str) -> DoctorOutput {
         Severity::Ok
     };
 
-    DoctorOutput { status, checks }
+    DoctorOutput {
+        status,
+        checks,
+        metrics: DoctorMetrics::collect(),
+    }
 }
 
 /// Run MCP smoke test (in-process, no network).
@@ -273,8 +427,19 @@ pub fn run_mcp_check() -> DoctorOutput {
         Severity::Ok
     };
 
-    DoctorOutput { status, checks }
+    DoctorOutput {
+        status,
+        checks,
+        metrics: DoctorMetrics::collect(),
+    }
 }
+
+/// Pre-warm hint appended to install/update output and shown by the
+/// missing-model check (N5 / A1.3). Pre-downloading the ~66 MB embedder keeps
+/// the first `nowdocs_search` from stalling long enough to hit MCP client
+/// timeouts. Single source of truth shared by the CLI and doctor.
+pub const MODEL_PREWARM_HINT: &str =
+    "tip: run 'nowdocs doctor --model' to pre-download the embedding model";
 
 /// Run model cache check.
 pub fn run_model_check() -> DoctorOutput {
@@ -295,13 +460,48 @@ pub fn run_model_check() -> DoctorOutput {
             id: "model-cache-exists".to_string(),
             severity: Severity::Warn,
             message: "Model cache not found".to_string(),
-            remediation: Some("Model will be downloaded on first use".to_string()),
+            remediation: Some(MODEL_PREWARM_HINT.to_string()),
         });
     }
 
     DoctorOutput {
         status: aggregate_status(&checks),
         checks,
+        metrics: DoctorMetrics::default(),
+    }
+}
+
+/// Pre-download the embedder model (`nowdocs doctor --model`).
+///
+/// Unlike [`run_model_check`] (read-only status), this intentionally performs
+/// the ~66 MB download: it is the pre-warm path that install/update output and
+/// the missing-model hint point users at (N5), so the first `nowdocs_search`
+/// doesn't stall. On success the model is downloaded, sha256-verified, and
+/// loaded; on failure the check is `Fail` with the error chain as remediation.
+pub fn run_model_prewarm() -> DoctorOutput {
+    let model_id = "jinaai/jina-embeddings-v2-small-en";
+    let checks = match crate::embedder::Embedder::load() {
+        Ok(_) => vec![Check {
+            id: "model-prewarm".to_string(),
+            severity: Severity::Ok,
+            message: format!(
+                "Embedding model {model_id} is cached and loadable at {}",
+                cache::model_path(model_id).display()
+            ),
+            remediation: None,
+        }],
+        Err(e) => vec![Check {
+            id: "model-prewarm".to_string(),
+            severity: Severity::Fail,
+            message: format!("Failed to pre-download embedding model {model_id}"),
+            remediation: Some(format!("{e:#}")),
+        }],
+    };
+
+    DoctorOutput {
+        status: aggregate_status(&checks),
+        checks,
+        metrics: DoctorMetrics::collect(),
     }
 }
 
@@ -346,6 +546,7 @@ pub fn run_repair() -> DoctorOutput {
     DoctorOutput {
         status: aggregate_status(&checks),
         checks,
+        metrics: DoctorMetrics::default(),
     }
 }
 
@@ -462,31 +663,49 @@ fn check_installed_docsets() -> Vec<Check> {
     }
 
     for docset in &docsets {
-        let manifest_path = cache::manifest_path(docset);
-        let db_path = cache::db_path(docset);
-
-        if manifest_path.is_file() && db_path.exists() {
-            checks.push(Check {
-                id: format!("docset-{}", docset),
-                severity: Severity::Ok,
-                message: format!("Docset '{}' is healthy", docset),
-                remediation: None,
-            });
-        } else if manifest_path.is_file() && !db_path.exists() {
-            checks.push(Check {
-                id: format!("docset-{}", docset),
-                severity: Severity::Warn,
-                message: format!("Docset '{}' has manifest but no store", docset),
-                remediation: Some("Reinstall the docset to rebuild the store".to_string()),
-            });
-        } else if !manifest_path.is_file() && db_path.exists() {
-            checks.push(Check {
-                id: format!("docset-{}", docset),
-                severity: Severity::Fail,
-                message: format!("Docset '{}' has store but no manifest", docset),
-                remediation: Some("Reinstall the docset".to_string()),
-            });
-        }
+        // M22: route through the unified state model so doctor agrees with
+        // list-installed / smoke / nowdocs_list on partial installs.
+        let state = cache::check_docset_state(docset);
+        let (severity, message, remediation) = match state {
+            cache::InstalledDocsetState::Healthy => {
+                (Severity::Ok, format!("Docset '{docset}' is healthy"), None)
+            }
+            cache::InstalledDocsetState::ManifestOnly => (
+                Severity::Warn,
+                format!("Docset '{docset}' has manifest but no store"),
+                Some("Reinstall the docset to rebuild the store".to_string()),
+            ),
+            cache::InstalledDocsetState::StoreOnly => (
+                Severity::Fail,
+                format!("Docset '{docset}' has store but no manifest"),
+                Some("Reinstall the docset".to_string()),
+            ),
+            cache::InstalledDocsetState::SchemaMismatch => (
+                Severity::Fail,
+                format!("Docset '{docset}' schema version is incompatible with this binary"),
+                Some(format!(
+                    "Run `nowdocs rebuild {docset}` to migrate the local cache"
+                )),
+            ),
+            cache::InstalledDocsetState::RowCountMismatch => (
+                Severity::Warn,
+                format!("Docset '{docset}' store row count disagrees with its manifest"),
+                Some("Reinstall or rebuild the docset to repair the store".to_string()),
+            ),
+            cache::InstalledDocsetState::NotInstalled => (
+                Severity::Fail,
+                format!("Docset '{docset}' is not installed"),
+                Some(format!(
+                    "Install the docset with `nowdocs install {docset}`"
+                )),
+            ),
+        };
+        checks.push(Check {
+            id: format!("docset-{docset}"),
+            severity,
+            message,
+            remediation,
+        });
     }
 
     checks
@@ -520,5 +739,62 @@ fn check_stale_staging() -> Check {
             message: format!("Cannot check staging directories: {}", e),
             remediation: None,
         },
+    }
+}
+
+/// OQ6: registry downloads go through `curl`, so doctor verifies it is on PATH.
+fn check_curl() -> Check {
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    if is_curl_available_in_path(&path_var) {
+        Check {
+            id: "curl-available".to_string(),
+            severity: Severity::Ok,
+            message: "curl is available on PATH".to_string(),
+            remediation: None,
+        }
+    } else {
+        Check {
+            id: "curl-available".to_string(),
+            severity: Severity::Warn,
+            message: "curl not found on PATH".to_string(),
+            remediation: Some("install curl for registry downloads".to_string()),
+        }
+    }
+}
+
+/// OQ6: whether `curl` resolves as an executable on the given PATH string
+/// (`:`-separated). Split out from [`check_curl`] so tests can mock PATH.
+pub fn is_curl_available_in_path(path_var: &str) -> bool {
+    if path_var.is_empty() {
+        return false;
+    }
+    for dir in path_var.split(':') {
+        if dir.is_empty() {
+            continue;
+        }
+        let candidate = std::path::Path::new(dir).join("curl");
+        if is_executable_file(&candidate) {
+            return true;
+        }
+        #[cfg(windows)]
+        if is_executable_file(&candidate.with_extension("exe")) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_executable_file(path: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match path.metadata() {
+            Ok(m) => m.is_file() && (m.permissions().mode() & 0o111) != 0,
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
     }
 }
