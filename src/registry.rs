@@ -85,8 +85,15 @@ fn is_allowed_package_url(url: &str) -> bool {
     let path = after_scheme.strip_prefix(host).unwrap_or(after_scheme);
     match host {
         "github.com" => {
+            // Require the real GitHub Releases download shape:
+            //   /<repo>/releases/download/<tag>/<asset>
+            //   /<repo>/releases/latest/download/<asset>
+            // A raw/blob path that merely contains "/releases/" — e.g.
+            // /nowdocs-registry/foo/raw/main/releases/foo.tar — is a mutable
+            // branch file, not a release artifact, and must NOT pass.
             (path.starts_with("/nowdocs-registry/") || path == "/nowdocs-registry")
-                && path.contains("/releases/")
+                && (path.contains("/releases/download/")
+                    || path.contains("/releases/latest/download/"))
         }
         "registry.nowdocs.dev" => path.starts_with("/releases/") || path == "/releases",
         _ => false,
@@ -1544,5 +1551,68 @@ mod tests {
         // Uppercase expected (as catalog validation permits) must still match.
         verify_archive_integrity(&path, &upper, false).expect("uppercase sha256 must match");
         let _ = std::fs::remove_file(&path);
+    }
+
+    // --- OQ6/P2: package URL must be a real GitHub Releases download ---
+
+    #[test]
+    fn package_url_rejects_github_raw_path_with_releases_segment() {
+        // Contains "/releases/" but is a mutable raw/branch file, NOT a GitHub
+        // Releases download — must not pass the package gate.
+        assert!(!is_allowed_package_url(
+            "https://github.com/nowdocs-registry/foo/raw/main/releases/foo.tar"
+        ));
+        assert!(!is_allowed_package_url(
+            "https://github.com/nowdocs-registry/foo/blob/main/releases/foo.tar"
+        ));
+    }
+
+    #[test]
+    fn package_url_accepts_github_latest_release_download() {
+        assert!(is_allowed_package_url(
+            "https://github.com/nowdocs-registry/nextjs/releases/latest/download/nextjs.tar"
+        ));
+    }
+
+    // --- P1: directory entries (typeflag 5) in release tarballs are skipped ---
+
+    /// Minimal tar entry builder for `extract_tar` tests. `extract_tar` only
+    /// reads name/size/typeflag, so checksum/ustar fields are left zeroed.
+    fn tar_entry_for_test(name: &str, data: &[u8], typeflag: u8) -> Vec<u8> {
+        let mut header = [0u8; 512];
+        let nb = name.as_bytes();
+        header[..nb.len()].copy_from_slice(nb);
+        let size = format!("{:011o}\0", data.len());
+        header[124..124 + size.len()].copy_from_slice(size.as_bytes());
+        header[156] = typeflag;
+        let mut entry = header.to_vec();
+        entry.extend_from_slice(data);
+        let padded = data.len().div_ceil(512) * 512;
+        if padded > data.len() {
+            entry.extend(vec![0u8; padded - data.len()]);
+        }
+        entry
+    }
+
+    #[test]
+    fn extract_tar_skips_directory_entries() {
+        // A normal `tar` over `<docset>.lance/` emits typeflag-5 directory
+        // entries for the LanceDB tree. They must be skipped (not rejected as
+        // ARCHIVE_UNSUPPORTED_ENTRY) so real CI-built release artifacts install.
+        let mut archive = Vec::new();
+        archive.extend(tar_entry_for_test("pkg.lance/", &[], b'5'));
+        archive.extend(tar_entry_for_test("pkg.lance/data.bin", b"vec", 0));
+        archive.extend_from_slice(&[0u8; 512]);
+        archive.extend_from_slice(&[0u8; 512]);
+
+        let mut cursor = std::io::Cursor::new(archive);
+        let files = extract_tar(&mut cursor).expect("directory entries must not be rejected");
+        let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["pkg.lance/data.bin"],
+            "directory entry must be skipped, file entry preserved"
+        );
+        assert_eq!(files[0].1, b"vec");
     }
 }
