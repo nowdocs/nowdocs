@@ -30,13 +30,13 @@ cargo fmt --check
 echo "✓ fmt 干净"
 
 # --- clippy (增量秒级，首次编译分钟级) ---
-echo "=== [2/3] cargo clippy --all-targets -- -D warnings ==="
-cargo clippy --all-targets -- -D warnings
+echo "=== [2/3] cargo clippy --locked --all-targets -- -D warnings ==="
+cargo clippy --locked --all-targets -- -D warnings
 echo "✓ clippy 无 warning"
 
 # --- test (串行: registry 测试已知 flake，embedder 共享缓存文件需互斥) ---
-echo "=== [3/3] cargo test -- --test-threads=1 ==="
-cargo test -- --test-threads=1
+echo "=== [3/3] cargo test --locked -- --test-threads=1 ==="
+cargo test --locked -- --test-threads=1
 echo "✓ test 全过"
 
 echo "=== L2 本地检查全过 (与 CI Quality Gates 对齐) ==="

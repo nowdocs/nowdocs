@@ -34,7 +34,7 @@ fi
 
 # 2. Run cargo run --release -- ingest to create the lance database + manifest
 echo "Ingesting Next.js corpus to create fixture 'nextjs_real'..."
-cargo run --release -- ingest "$REBUILT_DIR" nextjs_real \
+cargo run --locked --release -- ingest "$REBUILT_DIR" nextjs_real \
     --license MIT \
     --copyright-holder "Vercel, Inc." \
     --source-url "https://github.com/vercel/next.js" \
