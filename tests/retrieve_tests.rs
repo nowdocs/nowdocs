@@ -299,15 +299,25 @@ fn test_mmr_normalizes_scores_to_avoid_over_penalizing_near_duplicates() {
     assert_eq!(ids[2], 2);
 }
 
-// --- A1.2 N4: no-answer relevance threshold ---
+// --- A1.2 N4 + gate fix: dual-signal answer gate (cosine primary, RRF secondary) ---
 
-use nowdocs::retrieve::{apply_relevance_gate, MIN_RELEVANCE_THRESHOLD};
+use nowdocs::retrieve::{apply_answer_gate, MIN_ANSWER_COSINE, MIN_RELEVANCE_THRESHOLD};
+
+/// Build a unit vector whose cosine similarity to the query vector `[1, 0]`
+/// is exactly `c`: `[c, sqrt(1 - c^2)]`.
+fn vec_with_cosine(c: f32) -> Vec<f32> {
+    vec![c, (1.0 - c * c).max(0.0).sqrt()]
+}
 
 #[test]
 fn test_search_returns_empty_when_top_score_below_threshold() {
+    // High cosine but RRF score below the secondary floor (deep-noise rank)
+    // must still be blocked.
     let hits = vec![hit(0, MIN_RELEVANCE_THRESHOLD / 2.0), hit(1, 0.001)];
+    let qv = vec![1.0, 0.0];
+    let vectors = vecs(&[(0, vec_with_cosine(0.90)), (1, vec_with_cosine(0.85))]);
     assert!(
-        apply_relevance_gate(hits).is_empty(),
+        apply_answer_gate(hits, &qv, &vectors).is_empty(),
         "top score below threshold must yield empty (no-answer)"
     );
 }
@@ -315,11 +325,58 @@ fn test_search_returns_empty_when_top_score_below_threshold() {
 #[test]
 fn test_search_returns_results_when_top_score_above_threshold() {
     let hits = vec![hit(0, MIN_RELEVANCE_THRESHOLD + 1.0), hit(1, 0.0)];
-    let gated = apply_relevance_gate(hits);
+    let qv = vec![1.0, 0.0];
+    let vectors = vecs(&[(0, vec_with_cosine(0.90)), (1, vec_with_cosine(0.10))]);
+    let gated = apply_answer_gate(hits, &qv, &vectors);
     assert_eq!(gated.len(), 2, "above-threshold top hit must pass through");
 }
 
 #[test]
 fn test_relevance_gate_empty_stays_empty() {
-    assert!(apply_relevance_gate(Vec::new()).is_empty());
+    let qv = vec![1.0, 0.0];
+    assert!(apply_answer_gate(Vec::new(), &qv, &HashMap::new()).is_empty());
+}
+
+#[test]
+fn answer_gate_blocks_low_cosine_hit() {
+    // Strong RRF score (dual-channel rank-1) but top-hit cosine 0.60 — below
+    // MIN_ANSWER_COSINE — must be blocked even though the old RRF-only gate
+    // would have passed it.
+    let hits = vec![hit(0, 0.033), hit(1, 0.016)];
+    let qv = vec![1.0, 0.0];
+    let low = MIN_ANSWER_COSINE - 0.10;
+    let vectors = vecs(&[(0, vec_with_cosine(low)), (1, vec_with_cosine(low - 0.05))]);
+    assert!(
+        apply_answer_gate(hits, &qv, &vectors).is_empty(),
+        "top hit below MIN_ANSWER_COSINE must yield empty (no-answer)"
+    );
+}
+
+#[test]
+fn answer_gate_passes_high_cosine_hit() {
+    let hits = vec![hit(0, 0.033), hit(1, 0.016)];
+    let qv = vec![1.0, 0.0];
+    let high = MIN_ANSWER_COSINE + 0.10;
+    let vectors = vecs(&[(0, vec_with_cosine(high)), (1, vec_with_cosine(0.20))]);
+    let gated = apply_answer_gate(hits, &qv, &vectors);
+    assert_eq!(
+        gated.len(),
+        2,
+        "top hit above MIN_ANSWER_COSINE with a healthy RRF score must pass"
+    );
+}
+
+#[test]
+fn answer_gate_combines_cosine_and_rrf() {
+    // A hit with high cosine (0.90) but an extremely low RRF score — rank ~50
+    // single-channel, 1/(50+60) ≈ 0.0091 — is deep noise that happens to have
+    // moderate vector similarity; the secondary RRF filter must still block it.
+    let rank50_rrf = 1.0 / (50.0 + 60.0);
+    let hits = vec![hit(0, rank50_rrf)];
+    let qv = vec![1.0, 0.0];
+    let vectors = vecs(&[(0, vec_with_cosine(0.90))]);
+    assert!(
+        apply_answer_gate(hits, &qv, &vectors).is_empty(),
+        "high-cosine but deep-rank hit must be blocked by the secondary RRF filter"
+    );
 }

@@ -365,6 +365,23 @@ fn test_eval_nextjs_real() {
     let _cache_guard = ensure_nextjs_real();
     let golden = golden_nextjs();
 
+    // Calibration instrumentation (gate fix): load embedder + store directly so
+    // each query's top-hit COSINE can be printed alongside its rank. The N4
+    // gate redesign thresholds on cosine, so the positive-query distribution
+    // here (vs the negative-query distribution below) is what calibrates
+    // `MIN_ANSWER_COSINE`.
+    let manifest_json =
+        std::fs::read_to_string(nowdocs::cache::manifest_path("nextjs_real")).unwrap();
+    let manifest = nowdocs::manifest::parse_manifest(&manifest_json).unwrap();
+    nowdocs::manifest::validate(&manifest).unwrap();
+    let spec = nowdocs::embedder::EmbedderSpec {
+        model_id: manifest.embedder.model_id.clone(),
+        model_revision: manifest.embedder.model_revision.clone(),
+        model_sha256: manifest.embedder.model_sha256.clone(),
+    };
+    let embedder = nowdocs::embedder::Embedder::load_for(&spec).expect("load embedder");
+    let store = nowdocs::store::Store::open("nextjs_real").expect("open store");
+
     let mut ranks: Vec<Option<usize>> = Vec::with_capacity(golden.len());
     for q in &golden {
         let result = retrieve::search("nextjs_real", &q.query, Some(4000), Some(5))
@@ -375,11 +392,19 @@ fn test_eval_nextjs_real() {
             .take(5)
             .position(|c| c.source_url == q.expected_source_url)
             .map(|p| p + 1);
+        // Top-hit cosine for gate calibration (query vector vs the returned
+        // top chunk's stored vector; None when the gate returned empty).
+        let top_cosine = result.chunks.first().and_then(|c| {
+            let qv = embedder.embed(&q.query).ok()?;
+            let vecs = store.fetch_vectors(&[c.chunk_idx]).ok()?;
+            vecs.get(&c.chunk_idx).map(|hv| cosine_sim(&qv, hv))
+        });
         eprintln!(
-            "  q={:?} expected={:?} rank={:?} hits={}",
+            "  q={:?} expected={:?} rank={:?} top_cosine={:?} hits={}",
             q.query,
             q.expected_source_url,
             rank,
+            top_cosine,
             result
                 .chunks
                 .iter()
@@ -424,7 +449,37 @@ fn test_eval_nextjs_real() {
         neg_report.n, neg_report.answered, neg_report.false_positive_rate
     );
     for (q, top) in neg_queries.iter().zip(neg_report.top_scores.iter()) {
-        eprintln!("negative-eval-nextjs: q={:?} top_score={:?}", q, top);
+        // Calibration: raw top-hit cosine even when the gate blocked the query
+        // (top_score is None then) — the negative-band distribution is what
+        // sets the upper edge of MIN_ANSWER_COSINE.
+        let qv = embedder.embed(q).expect("embed negative query");
+        let raw = store
+            .hybrid_search(&qv, q, 1)
+            .expect("hybrid search negative query");
+        let top_cosine = raw.first().and_then(|h| {
+            store
+                .fetch_vectors(&[h.chunk_idx])
+                .ok()
+                .and_then(|v| v.get(&h.chunk_idx).map(|hv| cosine_sim(&qv, hv)))
+        });
+        eprintln!(
+            "negative-eval-nextjs: q={:?} top_score={:?} top_cosine={:?}",
+            q, top, top_cosine
+        );
+    }
+}
+
+/// Cosine similarity helper for gate-calibration prints (mirrors the private
+/// `retrieve::cosine`; duplicated here to keep the calibration instrumentation
+/// test-local).
+fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na * nb)
     }
 }
 

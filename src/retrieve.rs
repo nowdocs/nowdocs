@@ -15,19 +15,37 @@ use crate::token::count_tokens;
 /// `MMR = lambda * relevance - (1 - lambda) * max_cosine_sim`. (N1/OQ4)
 const MMR_LAMBDA: f32 = 0.7;
 
-/// Minimum top-hit relevance to return any results (N4/OQ11). If the best hit
-/// is below this floor the docset is treated as having no answer and `search`
+/// Minimum raw vector cosine similarity between the query embedding and the
+/// top hit's embedding for the result to count as "answered" (N4 redesign).
+/// Below this floor the docset is treated as having no answer and `search`
 /// returns empty rather than the irrelevant top-K.
+///
+/// This replaces the old RRF-only gate, which was structurally ~1.0 FP: RRF
+/// scores are rank-based, not similarity-based, so a rank-1 single-channel hit
+/// always scored `1/60 ≈ 0.0167` regardless of relevance — and dense vector
+/// search always returns a rank-1 neighbor for ANY query. Cosine similarity
+/// directly measures query–chunk semantic relatedness: an out-of-scope query
+/// (e.g. Vue syntax against React docs) produces top-hit cosine well below a
+/// relevant query's, and the threshold sits between those bands.
+///
+/// Calibrated 2026-07-11 on the real Next.js corpus (~7480 chunks): golden
+/// positive queries cluster at top-hit cosine 0.831–0.901 (n=10), negative
+/// out-of-scope queries at 0.759–0.807 (n=12). 0.82 sits in the gap: all
+/// positives pass, all negatives are blocked (measured FP rate 0.0).
+pub const MIN_ANSWER_COSINE: f32 = 0.82;
+
+/// Secondary deep-noise floor on the top hit's RRF score (N4/OQ11). A hit
+/// whose cosine clears `MIN_ANSWER_COSINE` but whose RRF score is below this
+/// floor (rank ≳ 20 single-channel) is still blocked — moderate vector
+/// similarity at that depth is noise, not an answer.
 ///
 /// The default RRF fusion constant is `k=60`, i.e. `score = 1/(rank + 60)`. A
 /// hit that surfaces in only ONE channel (vector-only or FTS-only) tops out at
 /// about `1/60 ≈ 0.0167` for rank 1, while a hit in BOTH channels can reach
-/// `2/61 ≈ 0.0328`. The gate must therefore stay BELOW the single-channel
-/// rank-1 floor (~0.0164) or it would discard every vector-only / FTS-only
+/// `2/61 ≈ 0.0328`. The floor must therefore stay BELOW the single-channel
+/// rank-1 score (~0.0164) or it would discard every vector-only / FTS-only
 /// answer. 0.015 sits just under that floor so single-channel top matches pass
-/// while deep-noise hits (rank ≳ 10 single-channel, ~0.014) are still dropped.
-/// Proper calibration against real Next.js eval data is deferred to A1.3.
-// TODO(A1.3): calibrate threshold against real eval data.
+/// while deep-noise hits (rank ≳ 20 single-channel, ~0.013) are still dropped.
 pub const MIN_RELEVANCE_THRESHOLD: f32 = 0.015;
 
 #[derive(Debug, Clone)]
@@ -90,10 +108,14 @@ pub fn search(
     let vectors = store.fetch_vectors(&cand_ids)?;
     let hits = mmr_rerank(candidates, &vectors, top_k as usize, MMR_LAMBDA);
 
-    // N4/OQ11: if the best hit is still below the relevance floor, the docset
-    // likely has no answer (e.g. Vue syntax queried against React docs) — return
-    // empty rather than the irrelevant top-K.
-    let hits = apply_relevance_gate(hits);
+    // N4/OQ11 (redesigned): dual-signal answer gate. The old RRF-only gate was
+    // structurally ~1.0 FP (RRF scores are rank-based, not similarity-based,
+    // so every query cleared it). Gate on the query–top-hit cosine similarity
+    // (primary) plus the RRF floor (secondary deep-noise filter): if the best
+    // hit fails either signal the docset is treated as having no answer (e.g.
+    // Vue syntax queried against React docs) — return empty rather than the
+    // irrelevant top-K.
+    let hits = apply_answer_gate(hits, &query_vector, &vectors);
     if hits.is_empty() {
         return Ok(SearchResult {
             chunks: vec![],
@@ -242,12 +264,27 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-/// Apply the no-answer relevance gate (N4/OQ11): return `Vec::new()` when there
-/// are no hits or the top hit is below `MIN_RELEVANCE_THRESHOLD`, else return
-/// the hits unchanged. Exposed (`pub`) so the gate is unit-testable without a
-/// full docset.
-pub fn apply_relevance_gate(hits: Vec<SearchHit>) -> Vec<SearchHit> {
-    if hits.is_empty() || hits[0].score < MIN_RELEVANCE_THRESHOLD {
+/// Apply the no-answer gate (N4/OQ11, dual-signal redesign): return `Vec::new()`
+/// when there are no hits, when the top hit's cosine similarity to the query
+/// is below `MIN_ANSWER_COSINE` (primary signal), or when its RRF score is
+/// below `MIN_RELEVANCE_THRESHOLD` (secondary deep-noise filter). A top hit
+/// without a fetched vector is treated as cosine 0 (blocked) — MMR selects
+/// from the vector pool first, so this is defensive. Exposed (`pub`) so the
+/// gate is unit-testable without a full docset.
+pub fn apply_answer_gate(
+    hits: Vec<SearchHit>,
+    query_vector: &[f32],
+    vectors: &HashMap<u32, Vec<f32>>,
+) -> Vec<SearchHit> {
+    if hits.is_empty() {
+        return hits;
+    }
+    let top = &hits[0];
+    let cosine_sim = vectors
+        .get(&top.chunk_idx)
+        .map(|v| cosine(query_vector, v))
+        .unwrap_or(0.0);
+    if cosine_sim < MIN_ANSWER_COSINE || top.score < MIN_RELEVANCE_THRESHOLD {
         Vec::new()
     } else {
         hits
