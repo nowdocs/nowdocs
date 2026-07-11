@@ -302,3 +302,73 @@ pub fn ensure_layout() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+/// Metadata about an installed docset.
+#[derive(Debug, Serialize)]
+pub struct InstalledDocset {
+    pub name: String,
+    pub version: String,
+    pub chunks: String,
+    pub license: String,
+    pub status: String,
+}
+
+/// Read manifest metadata for a docset, returning (version, chunk_count, license).
+pub fn read_docset_meta(docset: &str) -> (String, String, String) {
+    let manifest_path = manifest_path(docset);
+    if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
+        if let Ok(m) = crate::manifest::parse_manifest(&raw) {
+            return (
+                m.doc_version,
+                m.source.chunk_count.to_string(),
+                m.legal.license,
+            );
+        }
+    }
+    ("?".into(), "?".into(), "?".into())
+}
+
+/// Check if a docset manifest parses and validates successfully.
+pub fn is_docset_healthy(docset: &str) -> bool {
+    let manifest_path = manifest_path(docset);
+    if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
+        if let Ok(m) = crate::manifest::parse_manifest(&raw) {
+            return crate::manifest::validate(&m).is_ok();
+        }
+    }
+    false
+}
+
+/// List installed docsets with metadata.
+pub fn list_installed() -> std::io::Result<Vec<InstalledDocset>> {
+    let db_dir = cache_root().join("db");
+    let mut docsets: Vec<InstalledDocset> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&db_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if let Some(stem) = name.strip_suffix(".lance") {
+                        let (version, chunks, license) = read_docset_meta(stem);
+                        let status = if is_docset_healthy(stem) {
+                            "ok"
+                        } else if manifest_path(stem).is_file() {
+                            "broken"
+                        } else {
+                            "no-manifest"
+                        };
+                        docsets.push(InstalledDocset {
+                            name: stem.to_string(),
+                            version,
+                            chunks,
+                            license,
+                            status: status.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    docsets.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(docsets)
+}

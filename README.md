@@ -102,9 +102,9 @@ nowdocs 针对不同使用场景提供三条清晰路径：
 2. **贡献者 (Contributor)**: 使用 `nowdocs ingest <dir>` 导入 Markdown 文档，并通过 `nowdocs share <docset>` 打包分享到 registry 社区。
 3. **诊断与排错 (Troubleshooting)**: 使用 `nowdocs doctor` 诊断本地环境，用 `nowdocs smoke <docset> [query]` 冒烟测试检索质量。
 
-> **架构安全声明**：
-> - **MCP 工具是只读的**：MCP 接口暴露的工具（`nowdocs_search`、`nowdocs_list`）是纯只读查询，LLM agent 绝无可能通过 MCP 触发任何写操作（如安装、卸载、导入等）。
-> - **有副作用的操作均为 CLI 独占**：所有修改状态、写入文件和下载数据的敏感指令（如 `install`、`uninstall`、`ingest` 等）必须在终端中由用户手动运行 CLI 指令执行。
+> **架构安全声明 (Security Boundaries)**：
+> - **MCP tools are read-only / MCP 工具是只读的**：MCP 接口暴露的工具（`nowdocs_search`、`nowdocs_list`）是纯只读查询 (read-only queries)，LLM agent 绝无可能通过 MCP 触发任何写操作（如安装、卸载、导入等）。
+> - **Side-effect commands are CLI-only / 有副作用的操作均为 CLI 独占**：所有修改状态、写入文件和下载数据的敏感指令 (side-effect commands, such as `install`, `uninstall`, `ingest` etc.) 必须在终端中由用户手动运行 CLI 指令执行。
 
 ## 工作原理
 

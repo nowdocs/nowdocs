@@ -175,3 +175,44 @@ fn test_run_model_check_missing_model_is_warn() {
         out.status
     );
 }
+
+#[test]
+fn test_doctor_default_includes_model_check() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let output = doctor::run_default_checks();
+    assert!(
+        output.checks.iter().any(|c| c.id == "model-cache-exists"),
+        "default checks must include model-cache-exists check"
+    );
+}
+
+#[test]
+fn test_doctor_default_includes_mcp_check() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let output = doctor::run_default_checks();
+    assert!(
+        output.checks.iter().any(|c| c.id == "mcp-initialize"),
+        "default checks must include mcp-initialize check"
+    );
+    assert!(
+        output.checks.iter().any(|c| c.id == "mcp-tools"),
+        "default checks must include mcp-tools check"
+    );
+}
+
+#[test]
+fn test_doctor_default_reports_warn_when_model_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let output = doctor::run_default_checks();
+    assert_eq!(
+        output.status,
+        doctor::Severity::Warn,
+        "missing model should make default checks report Warn status"
+    );
+}

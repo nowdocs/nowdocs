@@ -28,3 +28,12 @@ fn longer_text_has_more_tokens_than_shorter() {
     let long = count_tokens("Rust is a systems programming language that runs blazingly fast");
     assert!(long > short, "longer text should have more tokens");
 }
+
+#[test]
+fn test_fallback_estimate_quality() {
+    let text = "Rust is a systems programming language";
+    let real = count_tokens(text);
+    let est = text.split_whitespace().count() * 4 / 3;
+    // Est should be reasonably close to real count (within 5 tokens)
+    assert!((real as isize - est as isize).abs() < 5);
+}

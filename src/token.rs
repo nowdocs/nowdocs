@@ -6,12 +6,11 @@
 use std::sync::OnceLock;
 use tiktoken_rs::CoreBPE;
 
-static BPE: OnceLock<CoreBPE> = OnceLock::new();
+static BPE: OnceLock<Result<CoreBPE, String>> = OnceLock::new();
 
-fn bpe() -> &'static CoreBPE {
-    BPE.get_or_init(|| {
-        tiktoken_rs::cl100k_base().expect("cl100k_base BPE must load; bundled with tiktoken-rs")
-    })
+fn get_bpe() -> Result<&'static CoreBPE, &'static String> {
+    BPE.get_or_init(|| tiktoken_rs::cl100k_base().map_err(|e| e.to_string()))
+        .as_ref()
 }
 
 /// Count the number of cl100k_base tokens in `text`.
@@ -23,5 +22,24 @@ pub fn count_tokens(text: &str) -> usize {
     if text.is_empty() {
         return 0;
     }
-    bpe().encode_ordinary(text).len()
+    match get_bpe() {
+        Ok(b) => b.encode_ordinary(text).len(),
+        Err(_) => fallback_estimate(text),
+    }
+}
+
+fn fallback_estimate(text: &str) -> usize {
+    text.split_whitespace().count() * 4 / 3
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fallback_estimate() {
+        assert_eq!(fallback_estimate(""), 0);
+        assert_eq!(fallback_estimate("hello world"), 2);
+        assert_eq!(fallback_estimate("Rust is systems programming"), 5);
+    }
 }

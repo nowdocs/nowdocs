@@ -37,7 +37,7 @@ fn re_display_none() -> &'static Regex {
 fn re_override() -> &'static Regex {
     RE_OVERRIDE.get_or_init(|| {
         Regex::new(
-            r"(?i)ignore (?:previous|prior) instructions|note for the assistant|you (?:may|can) (?:run|execute)|as an ai|system prompt",
+            r"(?i)ignore (?:previous|prior) instructions|note for the assistant|you (?:may|can) (?:run|execute)|as an ai\b|system prompt",
         )
         .unwrap()
     })
@@ -66,7 +66,16 @@ pub fn sanitize_chunk(text: &str) -> String {
     let s = strip_zero_width(&s);
     let s = re_override().replace_all(&s, "").into_owned();
     // Collapse any whitespace left behind by removed flags/phrases.
-    let s = re_danger().replace_all(&s, " ").into_owned();
+    let s = re_danger()
+        .replace_all(&s, |caps: &regex::Captures| {
+            let full_match = caps.get(0).unwrap();
+            if s[full_match.end()..].starts_with('-') {
+                full_match.as_str().to_string()
+            } else {
+                caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string()
+            }
+        })
+        .into_owned();
     collapse_whitespace(&s)
 }
 
