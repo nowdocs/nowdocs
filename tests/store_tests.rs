@@ -181,3 +181,40 @@ async fn test_store_open_allows_spawn_blocking() {
         res.err()
     );
 }
+
+// --- A1.2 N1: fetch_vectors (additive; feeds MMR diversity reranking) ---
+
+#[test]
+fn test_fetch_vectors_returns_correct_vectors() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let store = Store::open("test_fetch_vectors").unwrap();
+    let chunks = make_chunks();
+    let vectors: Vec<Vec<f32>> = chunks.iter().map(|c| embed_stub(&c.text)).collect();
+    store.insert(&chunks, &vectors).unwrap();
+
+    let fetched = store.fetch_vectors(&[0, 2]).unwrap();
+    assert_eq!(fetched.len(), 2, "should return exactly the requested ids");
+    let v0 = fetched.get(&0).expect("chunk 0 vector");
+    let v2 = fetched.get(&2).expect("chunk 2 vector");
+    assert_eq!(v0.len(), 512);
+    assert_eq!(v2.len(), 512);
+    // f32 -> f16 -> f32 round-trip loses a little precision; compare loosely.
+    for (a, b) in v0.iter().zip(vectors[0].iter()) {
+        assert!((a - b).abs() < 1e-3, "vector[0] mismatch: {a} vs {b}");
+    }
+    for (a, b) in v2.iter().zip(vectors[2].iter()) {
+        assert!((a - b).abs() < 1e-3, "vector[2] mismatch: {a} vs {b}");
+    }
+    assert!(fetched.get(&1).is_none(), "unrequested id must be absent");
+}
+
+#[test]
+fn test_fetch_vectors_empty_input_returns_empty_map() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+    let store = Store::open("test_fetch_vectors_empty").unwrap();
+    let fetched = store.fetch_vectors(&[]).unwrap();
+    assert!(fetched.is_empty());
+}

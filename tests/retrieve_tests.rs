@@ -169,3 +169,131 @@ fn test_reorder_drops_chunks_outside_window() {
     let got: Vec<u32> = ordered.iter().map(|c| c.chunk_idx).collect();
     assert_eq!(got, vec![2, 1, 9]);
 }
+
+// --- A1.2 N1: true vector MMR (replaces source_url dedup) ---
+
+use nowdocs::retrieve::mmr_rerank;
+use std::collections::HashMap;
+
+fn hit_url(chunk_idx: u32, url: &str, score: f32) -> SearchHit {
+    SearchHit {
+        score,
+        chunk_idx,
+        heading_path: String::new(),
+        source_url: url.to_string(),
+        api_version: None,
+        chunk_type: ChunkType::Info,
+        text: String::new(),
+    }
+}
+
+fn vecs(pairs: &[(u32, Vec<f32>)]) -> HashMap<u32, Vec<f32>> {
+    pairs.iter().cloned().collect()
+}
+
+#[test]
+fn test_mmr_lambda_1_equals_pure_relevance_ordering() {
+    // lambda=1 collapses MMR to relevance (the diversity term vanishes), so the
+    // result is strictly score-descending regardless of vector similarity.
+    let hits = vec![
+        hit_url(0, "u0", 0.5),
+        hit_url(1, "u1", 0.4),
+        hit_url(2, "u2", 0.3),
+    ];
+    let v = vecs(&[
+        (0, vec![1.0, 0.0, 0.0]),
+        (1, vec![1.0, 0.0, 0.0]), // identical to 0 — would be penalized if lambda<1
+        (2, vec![1.0, 0.0, 0.0]),
+    ]);
+    let out = mmr_rerank(hits, &v, 3, 1.0);
+    let ids: Vec<u32> = out.iter().map(|h| h.chunk_idx).collect();
+    assert_eq!(
+        ids,
+        vec![0, 1, 2],
+        "lambda=1 must yield score-descending order"
+    );
+}
+
+#[test]
+fn test_mmr_prefers_diverse_urls_when_scores_similar() {
+    // Equal scores: after the first pick, MMR must prefer the orthogonal
+    // (diverse) chunk over a near-duplicate of the first.
+    let hits = vec![
+        hit_url(0, "u0", 0.5),
+        hit_url(1, "u1", 0.5),
+        hit_url(2, "u2", 0.5),
+    ];
+    let v = vecs(&[
+        (0, vec![1.0, 0.0, 0.0]),
+        (1, vec![0.99, 0.01, 0.0]), // ~identical to 0
+        (2, vec![0.0, 1.0, 0.0]),   // orthogonal to 0 -> diverse
+    ]);
+    let out = mmr_rerank(hits, &v, 3, 0.7);
+    let ids: Vec<u32> = out.iter().map(|h| h.chunk_idx).collect();
+    assert_eq!(ids[0], 0, "first pick is the top-scored input (h0)");
+    assert_eq!(
+        ids[1], 2,
+        "second pick must be the diverse chunk, got {ids:?}"
+    );
+    assert_eq!(ids[2], 1, "near-duplicate is pushed to last, got {ids:?}");
+}
+
+#[test]
+fn test_mmr_keeps_multiple_chunks_from_same_url_when_relevant() {
+    // Same URL but orthogonal vectors + high scores: MMR must keep BOTH (it
+    // diversifies by vector similarity, not by source_url). This is the core
+    // fix vs the old dedup_by_source_url, which collapsed same-URL API chunks.
+    let hits = vec![hit_url(0, "same.md", 0.5), hit_url(1, "same.md", 0.49)];
+    let v = vecs(&[(0, vec![1.0, 0.0, 0.0]), (1, vec![0.0, 1.0, 0.0])]);
+    let out = mmr_rerank(hits, &v, 2, 0.7);
+    let ids: Vec<u32> = out.iter().map(|h| h.chunk_idx).collect();
+    assert_eq!(out.len(), 2, "both same-URL chunks must be retained");
+    assert!(ids.contains(&0) && ids.contains(&1));
+}
+
+#[test]
+fn test_mmr_with_missing_vector_falls_back_to_score_order() {
+    // Hits without a fetched vector fall back to score order, appended after the
+    // MMR-selected (vectored) hits.
+    let hits = vec![
+        hit_url(0, "u0", 0.5),
+        hit_url(1, "u1", 0.9), // no vector
+        hit_url(2, "u2", 0.4),
+        hit_url(3, "u3", 0.8), // no vector
+    ];
+    let v = vecs(&[(0, vec![1.0, 0.0, 0.0]), (2, vec![0.0, 1.0, 0.0])]);
+    let out = mmr_rerank(hits, &v, 4, 0.7);
+    let ids: Vec<u32> = out.iter().map(|h| h.chunk_idx).collect();
+    // Vectored hits (0, 2) lead; vector-less fallbacks (1, 3) follow in
+    // score-descending order (0.9 before 0.8).
+    assert_eq!(
+        ids,
+        vec![0, 2, 1, 3],
+        "fallbacks must be score-ordered: {ids:?}"
+    );
+}
+
+// --- A1.2 N4: no-answer relevance threshold ---
+
+use nowdocs::retrieve::{apply_relevance_gate, MIN_RELEVANCE_THRESHOLD};
+
+#[test]
+fn test_search_returns_empty_when_top_score_below_threshold() {
+    let hits = vec![hit(0, MIN_RELEVANCE_THRESHOLD / 2.0), hit(1, 0.001)];
+    assert!(
+        apply_relevance_gate(hits).is_empty(),
+        "top score below threshold must yield empty (no-answer)"
+    );
+}
+
+#[test]
+fn test_search_returns_results_when_top_score_above_threshold() {
+    let hits = vec![hit(0, MIN_RELEVANCE_THRESHOLD + 1.0), hit(1, 0.0)];
+    let gated = apply_relevance_gate(hits);
+    assert_eq!(gated.len(), 2, "above-threshold top hit must pass through");
+}
+
+#[test]
+fn test_relevance_gate_empty_stays_empty() {
+    assert!(apply_relevance_gate(Vec::new()).is_empty());
+}
