@@ -36,6 +36,11 @@ pub enum Commands {
         /// Entry/docs site URL for the source block.
         #[arg(long)]
         entry_url: Option<String>,
+        /// Base URL prepended to each chunk's relative path to form a traceable
+        /// per-chunk source_url (e.g. https://github.com/vercel/next.js/tree/canary/docs).
+        /// Canonical registry docsets should always set this. Omit for local private docs.
+        #[arg(long)]
+        source_url_base: Option<String>,
     },
     /// Package a local docset for registry contribution (text+manifest, NOT vectors)
     Share {

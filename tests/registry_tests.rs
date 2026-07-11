@@ -50,25 +50,6 @@ fn test_chunks_jsonl() -> &'static str {
 "#
 }
 
-fn make_tar_archive(_dir: &std::path::Path) -> Vec<u8> {
-    let manifest_data = test_manifest_json().as_bytes();
-    let chunks_data = test_chunks_jsonl().as_bytes();
-
-    let files: Vec<(&str, &[u8])> = vec![
-        ("manifest.json", manifest_data),
-        ("chunks.jsonl", chunks_data),
-    ];
-
-    let mut archive = Vec::new();
-    for (name, data) in &files {
-        archive.extend_from_slice(&make_tar_entry(name, data));
-    }
-    // Two zero blocks to end the archive.
-    archive.extend_from_slice(&[0u8; 512]);
-    archive.extend_from_slice(&[0u8; 512]);
-    archive
-}
-
 fn make_tar_entry(name: &str, data: &[u8]) -> Vec<u8> {
     let mut header = [0u8; 512];
     // name (0..100)
@@ -122,7 +103,19 @@ fn write_test_manifest(_dir: &std::path::Path, docset: &str) {
 
 fn populate_test_store(docset: &str) {
     let store = Store::open(docset).unwrap();
-    let chunks = vec![
+    let chunks = two_chunks();
+    let vectors: Vec<Vec<f32>> = chunks.iter().map(|_| vec![0.0f32; 512]).collect();
+    store.insert(&chunks, &vectors).unwrap();
+}
+
+// --- A1.1: RegistryRelease (.lance) archive fixtures ---
+//
+// `install` now consumes CI-prebuilt `.lance` tables (OQ1 Method A), not
+// `chunks.jsonl`. These helpers build a real Lance table via the local `Store`
+// and tar it up as a registry release (`manifest.json` + `<docset>.lance/...`).
+
+fn two_chunks() -> Vec<Chunk> {
+    vec![
         Chunk {
             idx: 0,
             heading_path: "Intro".into(),
@@ -139,9 +132,74 @@ fn populate_test_store(docset: &str) {
             chunk_type: ChunkType::Info,
             text: "world".into(),
         },
-    ];
-    let vectors: Vec<Vec<f32>> = chunks.iter().map(|_| vec![0.0f32; 512]).collect();
-    store.insert(&chunks, &vectors).unwrap();
+    ]
+}
+
+fn zero_vectors(n: usize) -> Vec<Vec<f32>> {
+    vec![vec![0.0f32; 512]; n]
+}
+
+/// Recursively tar every file under `dir`, prefixing entry names with `prefix`.
+fn add_dir_to_tar(archive: &mut Vec<u8>, dir: &std::path::Path, prefix: &str) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        let name = format!("{}/{}", prefix, entry.file_name().to_string_lossy());
+        if path.is_dir() {
+            add_dir_to_tar(archive, &path, &name);
+        } else {
+            let data = std::fs::read(&path).unwrap();
+            archive.extend_from_slice(&make_tar_entry(&name, &data));
+        }
+    }
+}
+
+/// Build a registry-release tar: `manifest.json` + a real `<docset>.lance/`
+/// table (built from `chunks`/`vectors`), optionally with a `LICENSE` entry.
+///
+/// The table is materialized under a scratch cache so it never collides with
+/// the calling test's cache root; `XDG_CACHE_HOME` is restored afterwards.
+fn make_registry_release(
+    docset: &str,
+    manifest_json: &str,
+    chunks: &[Chunk],
+    vectors: &[Vec<f32>],
+    license: Option<&[u8]>,
+) -> Vec<u8> {
+    let saved = std::env::var("XDG_CACHE_HOME").ok();
+    let src = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", src.path()) };
+    nowdocs::cache::ensure_layout().unwrap();
+    {
+        let store = Store::open(docset).unwrap();
+        if !chunks.is_empty() {
+            store.insert(chunks, vectors).unwrap();
+        }
+    }
+    let lance_dir = nowdocs::cache::db_path(docset);
+
+    let mut archive = Vec::new();
+    archive.extend_from_slice(&make_tar_entry("manifest.json", manifest_json.as_bytes()));
+    add_dir_to_tar(&mut archive, &lance_dir, &format!("{docset}.lance"));
+    if let Some(lic) = license {
+        archive.extend_from_slice(&make_tar_entry("LICENSE", lic));
+    }
+    archive.extend_from_slice(&[0u8; 512]);
+    archive.extend_from_slice(&[0u8; 512]);
+
+    match saved {
+        Some(v) => unsafe { std::env::set_var("XDG_CACHE_HOME", v) },
+        None => unsafe { std::env::remove_var("XDG_CACHE_HOME") },
+    }
+    archive
+}
+
+/// Convenience: a valid 2-chunk registry release for `docset` using the
+/// standard `test_manifest_json` (chunk_count == 2).
+fn make_default_release(docset: &str) -> Vec<u8> {
+    let chunks = two_chunks();
+    let vecs = zero_vectors(chunks.len());
+    make_registry_release(docset, test_manifest_json(), &chunks, &vecs, None)
 }
 
 // --- Test: uninstall removes db and manifest ---
@@ -206,7 +264,7 @@ fn test_install_rejects_docset_identity_mismatch() {
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
     // Archive manifest declares docset "test-docset".
-    let archive = make_tar_archive(dir.path());
+    let archive = make_default_release("test-docset");
     let tar_path = dir.path().join("archive.tar");
     std::fs::write(&tar_path, &archive).unwrap();
     let url = format!("file://{}", tar_path.display());
@@ -229,7 +287,7 @@ fn test_install_from_file_url() {
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
     let docset = "test-docset";
-    let archive = make_tar_archive(dir.path());
+    let archive = make_default_release("test-docset");
     let tar_path = dir.path().join("archive.tar");
     std::fs::write(&tar_path, &archive).unwrap();
 
@@ -262,17 +320,17 @@ fn test_install_persists_license_for_reshare() {
     let docset = "test-docset";
     let license_body = "MIT license body, upstream notice\n";
 
-    // Build an archive that includes a LICENSE entry alongside manifest + chunks.
-    let mut archive = Vec::new();
-    for (name, data) in [
-        ("manifest.json", test_manifest_json().as_bytes()),
-        ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
-        ("LICENSE", license_body.as_bytes()),
-    ] {
-        archive.extend_from_slice(&make_tar_entry(name, data));
-    }
-    archive.extend_from_slice(&[0u8; 512]);
-    archive.extend_from_slice(&[0u8; 512]);
+    // Build a registry release that includes a LICENSE entry alongside manifest
+    // + a real `.lance` table.
+    let chunks = two_chunks();
+    let vecs = zero_vectors(chunks.len());
+    let archive = make_registry_release(
+        docset,
+        test_manifest_json(),
+        &chunks,
+        &vecs,
+        Some(license_body.as_bytes()),
+    );
 
     let tar_path = dir.path().join("archive_lic.tar");
     std::fs::write(&tar_path, &archive).unwrap();
@@ -454,23 +512,12 @@ fn test_update_refreshes_manifest() {
     let m_before = manifest::parse_manifest(&before).unwrap();
     assert_eq!(m_before.doc_version, "1.0.0");
 
-    // Create a v2 archive with updated doc_version.
+    // Create a v2 registry release with updated doc_version (chunk_count stays
+    // 2, so the `.lance` table must carry 2 rows).
     let v2_json = test_manifest_json().replace("1.0.0", "2.0.0");
-    let v2_chunks = r#"{"idx":0,"heading_path":"Updated","source_url":"https://example.com/v2","api_version":null,"chunk_type":"Info","text":"updated content"}
-"#;
-    let v2_archive = {
-        let files: Vec<(&str, &[u8])> = vec![
-            ("manifest.json", v2_json.as_bytes()),
-            ("chunks.jsonl", v2_chunks.as_bytes()),
-        ];
-        let mut archive = Vec::new();
-        for (name, data) in &files {
-            archive.extend_from_slice(&make_tar_entry(name, data));
-        }
-        archive.extend_from_slice(&[0u8; 512]);
-        archive.extend_from_slice(&[0u8; 512]);
-        archive
-    };
+    let chunks = two_chunks();
+    let vecs = zero_vectors(chunks.len());
+    let v2_archive = make_registry_release(docset, &v2_json, &chunks, &vecs, None);
 
     let tar_path = dir.path().join("v2.tar");
     std::fs::write(&tar_path, &v2_archive).unwrap();
@@ -582,22 +629,25 @@ fn test_r1_missing_manifest_rejected() {
 // --- R1: missing chunks rejected ---
 
 #[test]
-fn test_r1_missing_chunks_rejected() {
+fn test_r1_manifest_only_rejected_missing_store() {
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
+    // A manifest-only archive has no `.lance` table. Under the RegistryRelease
+    // contract (Method A) `chunks.jsonl` is optional but a `.lance` dir is
+    // required, so this is rejected as ARCHIVE_MISSING_STORE.
     let url = write_archive_to_tar(
         dir.path(),
-        "no_chunks.tar",
+        "manifest_only.tar",
         &[("manifest.json", test_manifest_json().as_bytes())],
     );
 
-    let result = nowdocs::registry::install("r1_no_chunks", &url);
-    assert!(result.is_err(), "missing chunks should be rejected");
+    let result = nowdocs::registry::install("r1_manifest_only", &url);
+    assert!(result.is_err(), "manifest-only archive should be rejected");
     let err_str = format!("{}", result.unwrap_err());
     assert!(
-        err_str.contains("ARCHIVE_MISSING_CHUNKS"),
-        "error should contain ARCHIVE_MISSING_CHUNKS code, got: {}",
+        err_str.contains("ARCHIVE_MISSING_STORE"),
+        "error should contain ARCHIVE_MISSING_STORE code, got: {}",
         err_str
     );
 }
@@ -651,6 +701,61 @@ fn test_r1_absolute_path_rejected() {
     assert!(
         err_str.contains("ARCHIVE_UNSAFE_PATH"),
         "error should contain ARCHIVE_UNSAFE_PATH code, got: {}",
+        err_str
+    );
+}
+
+// --- R1: Windows absolute/drive-prefixed path rejected ---
+
+#[test]
+fn test_r1_windows_absolute_path_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let url = write_archive_to_tar(
+        dir.path(),
+        "win_absolute.tar",
+        &[
+            ("C:\\Windows\\System32\\cmd.exe", b"bad"),
+            ("manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_win_absolute", &url);
+    assert!(result.is_err(), "Windows absolute path should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_UNSAFE_PATH"),
+        "error should contain ARCHIVE_UNSAFE_PATH, got: {}",
+        err_str
+    );
+}
+
+#[test]
+fn test_r1_windows_drive_prefix_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let url = write_archive_to_tar(
+        dir.path(),
+        "win_drive.tar",
+        &[
+            ("D:file.txt", b"bad"),
+            ("manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_win_drive", &url);
+    assert!(
+        result.is_err(),
+        "Windows drive prefix path should be rejected"
+    );
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_UNSAFE_PATH"),
+        "error should contain ARCHIVE_UNSAFE_PATH, got: {}",
         err_str
     );
 }
@@ -715,27 +820,24 @@ fn test_r1_duplicate_chunks_rejected() {
 
 #[test]
 fn test_r1_vector_artifact_rejected() {
-    let dir = tempfile::tempdir().unwrap();
-    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
-
-    let url = write_archive_to_tar(
-        dir.path(),
-        "vector.tar",
-        &[
-            ("manifest.json", test_manifest_json().as_bytes()),
-            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
-            ("data.lance", b"vector data"),
-        ],
-    );
-
-    let result = nowdocs::registry::install("r1_vector", &url);
+    // Share bundles (contributor artifacts) must not carry vector data. The
+    // install path now uses RegistryRelease mode (which accepts `.lance`), so
+    // the share-bundle rejection is exercised through the public
+    // `validate_archive` contract (ShareBundle mode).
+    let entries = vec![
+        (
+            "manifest.json".to_string(),
+            test_manifest_json().as_bytes().to_vec(),
+        ),
+        (
+            "chunks.jsonl".to_string(),
+            test_chunks_jsonl().as_bytes().to_vec(),
+        ),
+        ("data.lance".to_string(), b"vector data".to_vec()),
+    ];
+    let result = nowdocs::registry::validate_archive(&entries);
     assert!(result.is_err(), "vector artifact should be rejected");
-    let err_str = format!("{}", result.unwrap_err());
-    assert!(
-        err_str.contains("ARCHIVE_VECTOR_ARTIFACT"),
-        "error should contain ARCHIVE_VECTOR_ARTIFACT code, got: {}",
-        err_str
-    );
+    assert_eq!(result.unwrap_err().code, "ARCHIVE_VECTOR_ARTIFACT");
 }
 
 // --- R1: .faiss artifact rejected ---
@@ -769,32 +871,29 @@ fn test_r1_faiss_artifact_rejected() {
 
 #[test]
 fn test_r1_file_inside_lance_dir_rejected() {
-    let dir = tempfile::tempdir().unwrap();
-    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
-
-    // LanceDB stores are directories: `mydb.lance/data.bin`.
-    // The child file doesn't end in `.lance`, so the old check missed it.
-    let url = write_archive_to_tar(
-        dir.path(),
-        "lance_dir.tar",
-        &[
-            ("manifest.json", test_manifest_json().as_bytes()),
-            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
-            ("mydb.lance/data.bin", b"vector data inside lance dir"),
-        ],
-    );
-
-    let result = nowdocs::registry::install("r1_lance_dir", &url);
+    // LanceDB stores are directories: `mydb.lance/data.bin`. The child file
+    // doesn't end in `.lance`, so the old check missed it. The share-bundle
+    // contract (public `validate_archive`) still rejects it.
+    let entries = vec![
+        (
+            "manifest.json".to_string(),
+            test_manifest_json().as_bytes().to_vec(),
+        ),
+        (
+            "chunks.jsonl".to_string(),
+            test_chunks_jsonl().as_bytes().to_vec(),
+        ),
+        (
+            "mydb.lance/data.bin".to_string(),
+            b"vector data inside lance dir".to_vec(),
+        ),
+    ];
+    let result = nowdocs::registry::validate_archive(&entries);
     assert!(
         result.is_err(),
         "file inside .lance directory should be rejected"
     );
-    let err_str = format!("{}", result.unwrap_err());
-    assert!(
-        err_str.contains("ARCHIVE_VECTOR_ARTIFACT"),
-        "error should contain ARCHIVE_VECTOR_ARTIFACT, got: {}",
-        err_str
-    );
+    assert_eq!(result.unwrap_err().code, "ARCHIVE_VECTOR_ARTIFACT");
 }
 
 // --- R1: vectors.* artifact rejected ---
@@ -957,7 +1056,7 @@ fn test_r1_valid_archive_installs() {
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
     let docset = "test-docset";
-    let archive = make_tar_archive(dir.path());
+    let archive = make_default_release("test-docset");
     let tar_path = dir.path().join("valid.tar");
     std::fs::write(&tar_path, &archive).unwrap();
 
@@ -1076,7 +1175,7 @@ fn test_successful_install_promotes_active_manifest_and_store() {
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
 
     let docset = "test-docset";
-    let archive = make_tar_archive(dir.path());
+    let archive = make_default_release("test-docset");
     let tar_path = dir.path().join("archive.tar");
     std::fs::write(&tar_path, &archive).unwrap();
 
@@ -1108,7 +1207,7 @@ fn test_failed_update_preserves_old_active_manifest_and_store() {
     let docset = "test-docset";
 
     // First, install a valid docset
-    let archive = make_tar_archive(dir.path());
+    let archive = make_default_release("test-docset");
     let tar_path = dir.path().join("good.tar");
     std::fs::write(&tar_path, &archive).unwrap();
 
@@ -1163,30 +1262,18 @@ fn test_successful_update_cleans_rollback() {
     let docset = "test-docset";
 
     // First, install a valid docset
-    let archive = make_tar_archive(dir.path());
+    let archive = make_default_release("test-docset");
     let tar_path = dir.path().join("good.tar");
     std::fs::write(&tar_path, &archive).unwrap();
 
     let url = format!("file://{}", tar_path.display());
     nowdocs::registry::install(docset, &url).unwrap();
 
-    // Create a v2 archive
+    // Create a v2 registry release (chunk_count stays 2 → 2 rows in the table).
     let v2_json = test_manifest_json().replace("1.0.0", "2.0.0");
-    let v2_chunks = r#"{"idx":0,"heading_path":"Updated","source_url":"https://example.com/v2","api_version":null,"chunk_type":"Info","text":"updated content"}
-"#;
-    let v2_archive = {
-        let files: Vec<(&str, &[u8])> = vec![
-            ("manifest.json", v2_json.as_bytes()),
-            ("chunks.jsonl", v2_chunks.as_bytes()),
-        ];
-        let mut archive = Vec::new();
-        for (name, data) in &files {
-            archive.extend_from_slice(&make_tar_entry(name, data));
-        }
-        archive.extend_from_slice(&[0u8; 512]);
-        archive.extend_from_slice(&[0u8; 512]);
-        archive
-    };
+    let chunks = two_chunks();
+    let vecs = zero_vectors(chunks.len());
+    let v2_archive = make_registry_release(docset, &v2_json, &chunks, &vecs, None);
 
     let v2_tar_path = dir.path().join("v2.tar");
     std::fs::write(&v2_tar_path, &v2_archive).unwrap();
@@ -1242,5 +1329,617 @@ fn test_stale_staging_detection() {
     assert_eq!(
         staging_dirs[0], stale_dir,
         "should detect the correct stale staging directory"
+    );
+}
+
+// ============================================================
+// A1.1 — registry artifact contract / integrity / atomicity
+// (spec: docs/superpowers/specs/2026-07-10-a1-registry-artifact-contract.md)
+// ============================================================
+
+fn epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+/// One JSONL chunk row (chunk_type "Info") for the M8 share-bundle tests.
+fn chunk_line(idx: u32, text: &str) -> String {
+    format!(
+        r#"{{"idx":{idx},"heading_path":"H","source_url":"u","api_version":null,"chunk_type":"Info","text":"{text}"}}"#
+    )
+}
+
+/// Build ShareBundle entries (`manifest.json` + `chunks.jsonl`) for the
+/// contributor-side `validate_archive` contract.
+fn share_entries(manifest_json: &str, chunks_jsonl: &str) -> Vec<(String, Vec<u8>)> {
+    vec![
+        (
+            "manifest.json".to_string(),
+            manifest_json.as_bytes().to_vec(),
+        ),
+        ("chunks.jsonl".to_string(), chunks_jsonl.as_bytes().to_vec()),
+    ]
+}
+
+/// Build a corrupt "registry release": a valid manifest plus a `.lance` entry
+/// that is NOT a real Lance table. RegistryRelease validation accepts it
+/// (a `.lance` component is present), but `Store::open` / `row_count` fails
+/// during promote, exercising the rollback path.
+fn corrupt_release(docset: &str, manifest_json: &str) -> Vec<u8> {
+    let mut archive = Vec::new();
+    archive.extend_from_slice(&make_tar_entry("manifest.json", manifest_json.as_bytes()));
+    archive.extend_from_slice(&make_tar_entry(
+        &format!("{docset}.lance/junk.bin"),
+        b"this is not a real lance table",
+    ));
+    archive.extend_from_slice(&[0u8; 512]);
+    archive.extend_from_slice(&[0u8; 512]);
+    archive
+}
+
+// --- S2: sha256 integrity ---
+
+#[test]
+fn install_accepts_tarball_with_correct_sha256() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "test-docset";
+    let archive = make_default_release(docset);
+    let expected = nowdocs::registry::sha256_hex(&archive);
+
+    let tar_path = dir.path().join("good.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    let url = format!("file://{}", tar_path.display());
+
+    nowdocs::registry::install_with_sha256(docset, &url, &expected)
+        .expect("correct sha256 must install");
+
+    let store = Store::open(docset).unwrap();
+    assert_eq!(store.dump_chunks().unwrap().len(), 2);
+}
+
+#[test]
+fn install_rejects_tarball_with_wrong_sha256() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "test-docset";
+    let archive = make_default_release(docset);
+    let tar_path = dir.path().join("bad.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    let url = format!("file://{}", tar_path.display());
+
+    let wrong = "0".repeat(64);
+    let result = nowdocs::registry::install_with_sha256(docset, &url, &wrong);
+    assert!(result.is_err(), "wrong sha256 must be rejected");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("ARCHIVE_SHA256_MISMATCH"),
+        "error must carry ARCHIVE_SHA256_MISMATCH, got: {msg}"
+    );
+    // Integrity is verified before any active cache path is touched.
+    assert!(
+        !cache::manifest_path(docset).is_file(),
+        "no active manifest on sha256 mismatch"
+    );
+    assert!(
+        !cache::db_path(docset).exists(),
+        "no active store on sha256 mismatch"
+    );
+}
+
+// --- S1+S4: two archive types + atomic promote ---
+
+#[test]
+fn install_registry_release_accepts_lance_table() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "test-docset";
+    let archive = make_default_release(docset);
+    let tar_path = dir.path().join("rel.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    let url = format!("file://{}", tar_path.display());
+
+    nowdocs::registry::install(docset, &url).expect("registry release must install");
+    assert!(
+        cache::db_path(docset).exists(),
+        ".lance table promoted to active"
+    );
+    assert_eq!(Store::open(docset).unwrap().dump_chunks().unwrap().len(), 2);
+}
+
+#[test]
+fn install_share_bundle_rejects_lance() {
+    // The contributor/share contract (public `validate_archive` = ShareBundle
+    // mode) must still reject vector artifacts.
+    let entries = vec![
+        (
+            "manifest.json".to_string(),
+            test_manifest_json().as_bytes().to_vec(),
+        ),
+        (
+            "chunks.jsonl".to_string(),
+            test_chunks_jsonl().as_bytes().to_vec(),
+        ),
+        ("db.lance".to_string(), b"vector data".to_vec()),
+    ];
+    let result = nowdocs::registry::validate_archive(&entries);
+    assert!(result.is_err(), "share bundle must reject .lance");
+    assert_eq!(result.unwrap_err().code, "ARCHIVE_VECTOR_ARTIFACT");
+}
+
+#[test]
+fn install_after_promote_has_real_vectors() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "test-docset";
+    let chunks = two_chunks();
+    // Distinct, non-zero vectors so the nearest-neighbour of v0 is chunk 0.
+    let v0: Vec<f32> = (0..512).map(|i| 0.1 + (i as f32) * 0.001).collect();
+    let v1: Vec<f32> = (0..512).map(|i| 2.0 - (i as f32) * 0.002).collect();
+    let archive = make_registry_release(
+        docset,
+        test_manifest_json(),
+        &chunks,
+        &[v0.clone(), v1],
+        None,
+    );
+
+    let tar_path = dir.path().join("realvec.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    let url = format!("file://{}", tar_path.display());
+    nowdocs::registry::install(docset, &url).unwrap();
+
+    // The promoted store must carry the REAL vectors from the release (not the
+    // old zero-vector materialization): querying with v0 returns chunk 0.
+    let store = Store::open(docset).unwrap();
+    let hits = store.vector_search(&v0, 1).unwrap();
+    assert!(!hits.is_empty(), "vector search must return hits");
+    assert_eq!(
+        hits[0].chunk_idx, 0,
+        "nearest neighbour of the inserted v0 must be chunk 0 (real vectors, not zeros)"
+    );
+}
+
+#[test]
+fn promote_uses_rename_not_copy() {
+    // Build a real Lance table in a scratch cache, snapshot its ENTIRE file tree
+    // (relative path -> bytes), then tar it as a registry release.
+    fn snapshot_tree(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for entry in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else {
+                    let rel = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+                    let bytes = std::fs::read(&p).unwrap();
+                    out.push((rel, bytes));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    let scratch = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", scratch.path()) };
+    nowdocs::cache::ensure_layout().unwrap();
+    let docset = "rnndoc";
+    let src_lance = nowdocs::cache::db_path(docset);
+    {
+        let store = Store::open(docset).unwrap();
+        let chunks = two_chunks();
+        let vecs = zero_vectors(chunks.len());
+        store.insert(&chunks, &vecs).unwrap();
+    }
+    let src_tree = snapshot_tree(&src_lance);
+    assert!(
+        !src_tree.is_empty(),
+        "scratch .lance table must contain files"
+    );
+
+    // Manifest docset must match the install name (S7 identity binding). The
+    // table was built under "rnndoc", so the manifest declares "rnndoc" too.
+    let manifest =
+        test_manifest_json().replace("\"docset\": \"test-docset\"", "\"docset\": \"rnndoc\"");
+
+    // Tar manifest.json + the real <docset>.lance tree.
+    let mut archive = Vec::new();
+    archive.extend_from_slice(&make_tar_entry("manifest.json", manifest.as_bytes()));
+    add_dir_to_tar(&mut archive, &src_lance, &format!("{docset}.lance"));
+    archive.extend_from_slice(&[0u8; 512]);
+    archive.extend_from_slice(&[0u8; 512]);
+
+    // Install into a fresh active cache.
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+    let tar_path = dir.path().join("rnn.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    let url = format!("file://{}", tar_path.display());
+    nowdocs::registry::install(docset, &url).unwrap();
+
+    // Every prebuilt file must appear in the active db byte-for-byte. A
+    // rebuild-from-zero would mint fresh UUIDs/timestamps; only a rename of the
+    // original tree preserves the whole file set verbatim.
+    let active_lance = nowdocs::cache::db_path(docset);
+    for (rel, bytes) in &src_tree {
+        let active_path = active_lance.join(rel);
+        assert!(
+            active_path.is_file(),
+            "active db must carry prebuilt file {rel}"
+        );
+        let active_bytes = std::fs::read(&active_path).unwrap();
+        assert_eq!(
+            &active_bytes, bytes,
+            "promote must rename (byte-identical), not rebuild, file {rel}"
+        );
+    }
+}
+
+#[test]
+fn install_corrupt_lance_fails_without_modifying_active() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "test-docset";
+    // Seed a healthy v1.
+    let good = make_default_release(docset);
+    let good_path = dir.path().join("good.tar");
+    std::fs::write(&good_path, &good).unwrap();
+    nowdocs::registry::install(docset, &format!("file://{}", good_path.display())).unwrap();
+
+    // Corrupt release: valid manifest, bogus .lance.
+    let bad = corrupt_release(docset, test_manifest_json());
+    let bad_path = dir.path().join("bad.tar");
+    std::fs::write(&bad_path, &bad).unwrap();
+    let result = nowdocs::registry::install(docset, &format!("file://{}", bad_path.display()));
+    assert!(result.is_err(), "corrupt .lance must fail promote");
+
+    // Original v1 store is untouched.
+    let store = Store::open(docset).unwrap();
+    let rows = store.dump_chunks().unwrap();
+    assert_eq!(
+        rows.len(),
+        2,
+        "active store must be preserved after corrupt install"
+    );
+    assert_eq!(rows[0].text, "hello");
+    assert_eq!(rows[1].text, "world");
+}
+
+#[test]
+fn promote_failure_restores_rollback() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "test-docset";
+    let good = make_default_release(docset);
+    let good_path = dir.path().join("good.tar");
+    std::fs::write(&good_path, &good).unwrap();
+    nowdocs::registry::install(docset, &format!("file://{}", good_path.display())).unwrap();
+
+    let mp = cache::manifest_path(docset);
+    assert_eq!(
+        manifest::parse_manifest(&std::fs::read_to_string(&mp).unwrap())
+            .unwrap()
+            .doc_version,
+        "1.0.0"
+    );
+
+    // Failed promote (corrupt .lance) must restore the v1 manifest from rollback.
+    let bad = corrupt_release(docset, test_manifest_json());
+    let bad_path = dir.path().join("bad.tar");
+    std::fs::write(&bad_path, &bad).unwrap();
+    let _ = nowdocs::registry::install(docset, &format!("file://{}", bad_path.display()));
+
+    let m = manifest::parse_manifest(&std::fs::read_to_string(&mp).unwrap()).unwrap();
+    assert_eq!(
+        m.doc_version, "1.0.0",
+        "rollback must restore the previous active manifest after a failed promote"
+    );
+}
+
+// --- M8: chunks.jsonl row-level validation (ShareBundle path) ---
+
+#[test]
+fn rejects_chunks_with_duplicate_idx() {
+    let jsonl = format!("{}\n{}\n", chunk_line(0, "hello"), chunk_line(0, "world"));
+    let result = nowdocs::registry::validate_archive(&share_entries(test_manifest_json(), &jsonl));
+    assert!(result.is_err(), "duplicate idx must be rejected");
+    assert_eq!(result.unwrap_err().code, "ARCHIVE_INVALID_CHUNKS");
+}
+
+#[test]
+fn rejects_chunks_with_gap_in_idx() {
+    let jsonl = format!("{}\n{}\n", chunk_line(0, "hello"), chunk_line(2, "world"));
+    let result = nowdocs::registry::validate_archive(&share_entries(test_manifest_json(), &jsonl));
+    assert!(result.is_err(), "gap in idx must be rejected");
+    assert_eq!(result.unwrap_err().code, "ARCHIVE_INVALID_CHUNKS");
+}
+
+#[test]
+fn rejects_chunks_count_mismatch() {
+    // Manifest declares chunk_count 3, but only 2 rows are present.
+    let manifest = test_manifest_json().replace("\"chunk_count\": 2", "\"chunk_count\": 3");
+    let jsonl = format!("{}\n{}\n", chunk_line(0, "hello"), chunk_line(1, "world"));
+    let result = nowdocs::registry::validate_archive(&share_entries(&manifest, &jsonl));
+    assert!(result.is_err(), "count mismatch must be rejected");
+    assert_eq!(result.unwrap_err().code, "ARCHIVE_INVALID_CHUNKS");
+}
+
+#[test]
+fn rejects_empty_text_chunk() {
+    let jsonl = format!("{}\n{}\n", chunk_line(0, "hello"), chunk_line(1, ""));
+    let result = nowdocs::registry::validate_archive(&share_entries(test_manifest_json(), &jsonl));
+    assert!(result.is_err(), "empty text must be rejected");
+    assert_eq!(result.unwrap_err().code, "ARCHIVE_INVALID_CHUNKS");
+}
+
+#[test]
+fn accepts_valid_chunks_jsonl() {
+    let jsonl = format!("{}\n{}\n", chunk_line(0, "hello"), chunk_line(1, "world"));
+    let result = nowdocs::registry::validate_archive(&share_entries(test_manifest_json(), &jsonl));
+    assert!(
+        result.is_ok(),
+        "valid chunks.jsonl must pass: {:?}",
+        result.err().map(|e| e.code)
+    );
+}
+
+// --- M9: uninstall cleans docset-scoped leftovers ---
+
+#[test]
+fn uninstall_removes_license() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+    let docset = "test-docset";
+    let archive = make_default_release(docset);
+    let tar_path = dir.path().join("a.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    nowdocs::registry::install(docset, &format!("file://{}", tar_path.display())).unwrap();
+
+    std::fs::write(cache::license_text_path(docset), "MIT body\n").unwrap();
+    assert!(cache::license_text_path(docset).is_file());
+
+    nowdocs::registry::uninstall(docset).unwrap();
+    assert!(
+        !cache::license_text_path(docset).exists(),
+        "uninstall must remove the stashed license text"
+    );
+}
+
+#[test]
+fn uninstall_removes_staging() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+    let docset = "test-docset";
+    let archive = make_default_release(docset);
+    let tar_path = dir.path().join("a.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    nowdocs::registry::install(docset, &format!("file://{}", tar_path.display())).unwrap();
+
+    let stale = cache::staging_root().join(format!("{docset}-123-456"));
+    std::fs::create_dir_all(&stale).unwrap();
+    std::fs::write(stale.join("leftover"), b"x").unwrap();
+
+    nowdocs::registry::uninstall(docset).unwrap();
+    assert!(!stale.exists(), "uninstall must remove docset staging dirs");
+}
+
+#[test]
+fn uninstall_removes_rollback() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+    let docset = "test-docset";
+    let archive = make_default_release(docset);
+    let tar_path = dir.path().join("a.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    nowdocs::registry::install(docset, &format!("file://{}", tar_path.display())).unwrap();
+
+    let rb = cache::rollback_root().join(format!("{docset}-123-456"));
+    std::fs::create_dir_all(&rb).unwrap();
+    std::fs::write(rb.join("db.lance"), b"x").unwrap();
+
+    nowdocs::registry::uninstall(docset).unwrap();
+    assert!(!rb.exists(), "uninstall must remove docset rollback dirs");
+}
+
+#[test]
+fn uninstall_preserves_other_docsets() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    // Install docset A.
+    let a = "test-docset";
+    let archive = make_default_release(a);
+    let tar_path = dir.path().join("a.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    nowdocs::registry::install(a, &format!("file://{}", tar_path.display())).unwrap();
+
+    // Staging leftovers for A and for an unrelated docset B.
+    let a_staging = cache::staging_root().join(format!("{a}-1-2"));
+    let b_staging = cache::staging_root().join("other-doc-1-2");
+    std::fs::create_dir_all(&a_staging).unwrap();
+    std::fs::create_dir_all(&b_staging).unwrap();
+
+    nowdocs::registry::uninstall(a).unwrap();
+    assert!(!a_staging.exists(), "A's staging dir must be removed");
+    assert!(
+        b_staging.exists(),
+        "uninstall must NOT touch other docsets' staging dirs"
+    );
+}
+
+// --- M10: share output must be a clean dir ---
+
+#[test]
+fn share_rejects_non_empty_output_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "test_share_ne";
+    write_test_manifest(dir.path(), docset);
+    populate_test_store(docset);
+
+    let out_dir = dir.path().join("share_out");
+    // First share populates <out_dir>/<docset>.
+    nowdocs::registry::share(docset, &out_dir).unwrap();
+    // Second share to the same (now non-empty) dir must be rejected.
+    let result = nowdocs::registry::share(docset, &out_dir);
+    assert!(
+        result.is_err(),
+        "share into a non-empty dir must be rejected"
+    );
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("non-empty"),
+        "error must explain non-empty output dir, got: {msg}"
+    );
+}
+
+#[test]
+fn share_creates_clean_output_in_empty_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "test_share_clean";
+    write_test_manifest(dir.path(), docset);
+    populate_test_store(docset);
+
+    let out_dir = dir.path().join("share_out_empty");
+    let share_path = nowdocs::registry::share(docset, &out_dir).unwrap();
+    assert!(share_path.join("manifest.json").is_file());
+    assert!(share_path.join("chunks.jsonl").is_file());
+}
+
+// --- N6: per-docset install lock ---
+
+#[test]
+fn concurrent_install_same_docset_second_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+    cache::ensure_layout().unwrap();
+
+    let docset = "test-docset";
+    // Fresh lock (current epoch) → not stale → busy.
+    let lock_path = cache::staging_root().join(format!("{docset}.lock"));
+    std::fs::write(&lock_path, format!("{}\n", epoch_secs())).unwrap();
+
+    let archive = make_default_release(docset);
+    let tar_path = dir.path().join("a.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    let url = format!("file://{}", tar_path.display());
+
+    let result = nowdocs::registry::install(docset, &url);
+    assert!(result.is_err(), "concurrent install must be rejected");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("currently being installed"),
+        "error must explain the busy lock, got: {msg}"
+    );
+}
+
+#[test]
+fn stale_lockfile_older_than_1hr_is_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+    cache::ensure_layout().unwrap();
+
+    let docset = "test-docset";
+    // Epoch 0 → far older than 1 hour → stale → replaced, install proceeds.
+    let lock_path = cache::staging_root().join(format!("{docset}.lock"));
+    std::fs::write(&lock_path, "0\n").unwrap();
+
+    // Manifest-only archive has no .lance → fails with ARCHIVE_MISSING_STORE,
+    // but crucially NOT with the busy-lock error.
+    let mut archive = Vec::new();
+    archive.extend_from_slice(&make_tar_entry(
+        "manifest.json",
+        test_manifest_json().as_bytes(),
+    ));
+    archive.extend_from_slice(&[0u8; 512]);
+    archive.extend_from_slice(&[0u8; 512]);
+    let tar_path = dir.path().join("mo.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    let url = format!("file://{}", tar_path.display());
+
+    let result = nowdocs::registry::install(docset, &url);
+    assert!(result.is_err());
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        !msg.contains("currently being installed"),
+        "stale lock must not trigger the busy error, got: {msg}"
+    );
+}
+
+#[test]
+fn lockfile_removed_after_install_success() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "test-docset";
+    let archive = make_default_release(docset);
+    let tar_path = dir.path().join("a.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    nowdocs::registry::install(docset, &format!("file://{}", tar_path.display())).unwrap();
+
+    let lock_path = cache::staging_root().join(format!("{docset}.lock"));
+    assert!(
+        !lock_path.exists(),
+        "lockfile must be removed after a successful install"
+    );
+}
+
+#[test]
+fn lockfile_removed_after_install_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let docset = "test-docset";
+    // Manifest-only archive → install fails (ARCHIVE_MISSING_STORE).
+    let mut archive = Vec::new();
+    archive.extend_from_slice(&make_tar_entry(
+        "manifest.json",
+        test_manifest_json().as_bytes(),
+    ));
+    archive.extend_from_slice(&[0u8; 512]);
+    archive.extend_from_slice(&[0u8; 512]);
+    let tar_path = dir.path().join("mo.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    let _ = nowdocs::registry::install(docset, &format!("file://{}", tar_path.display()));
+
+    let lock_path = cache::staging_root().join(format!("{docset}.lock"));
+    assert!(
+        !lock_path.exists(),
+        "lockfile must be removed after a failed install (Drop on the guard)"
+    );
+}
+
+// --- OQ6: URL gate hardening ---
+
+#[test]
+fn registry_nowdocs_dev_requires_path_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    // registry.nowdocs.dev WITHOUT the required /releases/ prefix → rejected
+    // at the URL gate (offline, before any network call).
+    let result = nowdocs::registry::install("mypkg", "https://registry.nowdocs.dev/mypkg.tar");
+    assert!(
+        result.is_err(),
+        "missing /releases/ prefix must be rejected"
+    );
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("not in allowed domains"),
+        "error must cite the allowlist, got: {msg}"
     );
 }

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use anyhow::Context;
 use clap::Parser;
 use nowdocs::cli::{CacheCommands, Cli, Commands, RegistryCommands};
 
@@ -19,8 +20,8 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
     match cmd {
         Commands::Serve => nowdocs::mcp::run_loop().map_err(anyhow::Error::from),
         Commands::Install { docset } => {
-            let url = registry_url_for(&docset);
-            nowdocs::registry::install(&docset, &url)?;
+            let (url, sha) = catalog_lookup_for(&docset)?;
+            nowdocs::registry::install_with_sha256(&docset, &url, &sha)?;
             print_install_success(&docset);
             Ok(())
         }
@@ -32,6 +33,7 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             attribution,
             source_url,
             entry_url,
+            source_url_base,
         } => {
             let meta = nowdocs::ingest::IngestMeta {
                 license: license.unwrap_or_else(|| "MIT".to_string()),
@@ -39,6 +41,7 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
                 attribution: attribution.unwrap_or_default(),
                 source_url: source_url.unwrap_or_default(),
                 entry_url: entry_url.unwrap_or_default(),
+                source_url_base,
             };
             let stats = nowdocs::ingest::ingest_dir(Path::new(&dir), &name, &meta)?;
             print_ingest_success(&name, stats.files, stats.chunks);
@@ -79,11 +82,13 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             Ok(())
         }
         Commands::Update { docset } => {
-            // (S3) `registry_url_for` always returns the canonical registry URL
-            // (never reads NOWDOCS_TEST_URL), so the binary's update cannot be
-            // redirected to a local file via env var.
-            let url = registry_url_for(&docset);
-            nowdocs::registry::install(&docset, &url)?;
+            // (S3) In production, the CLI `update` command fetches the catalog package index
+            // (which only allows certified/allowed domains) to resolve both the download URL and
+            // expected SHA-256 hash. The library's internal update() handler (which handles local test file://
+            // redirection via NOWDOCS_TEST_URL in test mode) is bypassed here to enforce domain rules and
+            // integrity symmetry.
+            let (url, sha) = catalog_lookup_for(&docset)?;
+            nowdocs::registry::install_with_sha256(&docset, &url, &sha)?;
             print_update_success(&docset);
             Ok(())
         }
@@ -304,10 +309,21 @@ fn print_ingest_success(docset: &str, files: u32, chunks: u32) {
     println!("next: nowdocs smoke {docset}");
 }
 
-fn registry_url_for(docset: &str) -> String {
-    // (S3) The binary always uses the canonical registry URL. `NOWDOCS_TEST_URL`
-    // is NOT read here - integration tests that need `file://` fixtures call
-    // the library API (`nowdocs::registry::install`) directly instead of
-    // spawning the binary.
-    format!("https://github.com/nowdocs-registry/{docset}/releases/latest/download/{docset}.tar")
+/// Look up a docset's download URL and expected sha256 from the registry catalog index (S2).
+///
+/// The catalog is the source of truth for integrity: `fetch_index` already
+/// validates every package's allowlisted download URL, license, and 64-hex
+/// sha256. We bind the install to that hash so a tampered or corrupt artifact
+/// is rejected before any active cache path is touched. An index fetch failure
+/// or an unknown docset is a hard error — registry installs never skip
+/// integrity verification.
+fn catalog_lookup_for(docset: &str) -> anyhow::Result<(String, String)> {
+    let idx = nowdocs::registry::fetch_index()
+        .context("fetch registry index to verify artifact integrity")?;
+    match idx.packages.iter().find(|p| p.docset == docset) {
+        Some(p) => Ok((p.download_url.clone(), p.sha256.clone())),
+        None => anyhow::bail!(
+            "docset {docset} not found in the registry index; run `nowdocs registry list` to see available docsets"
+        ),
+    }
 }

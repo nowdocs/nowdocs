@@ -54,6 +54,34 @@ fn requires_attribution_for_ccby() {
     assert!(validate(&m).is_err());
 }
 
+// A1.1 §3.8 spec-named aliases for the license/attribution invariants. M12
+// (`validate_manifest_for_docset`) deliberately does NOT re-check these — they
+// live in `manifest::validate` — so the spec names are asserted against
+// `validate` directly, which is where the allowlist / CC-BY rules are enforced.
+
+#[test]
+fn rejects_manifest_with_disallowed_license() {
+    let mut v: serde_json::Value = serde_json::from_str(VALID).unwrap();
+    v["legal"]["license"] = serde_json::json!("proprietary");
+    let m: nowdocs::manifest::Manifest = serde_json::from_value(v).unwrap();
+    assert!(
+        validate(&m).is_err(),
+        "a license outside the MIT/Apache-2.0/CC-BY-4.0 allowlist must be rejected"
+    );
+}
+
+#[test]
+fn rejects_ccby4_without_attribution() {
+    let mut v: serde_json::Value = serde_json::from_str(VALID).unwrap();
+    v["legal"]["license"] = serde_json::json!("CC-BY-4.0");
+    v["legal"]["attribution"] = serde_json::json!("");
+    let m: nowdocs::manifest::Manifest = serde_json::from_value(v).unwrap();
+    assert!(
+        validate(&m).is_err(),
+        "CC-BY-4.0 without attribution must be rejected"
+    );
+}
+
 #[test]
 fn rejects_wrong_embedder_model() {
     let mut v: serde_json::Value = serde_json::from_str(VALID).unwrap();
@@ -87,4 +115,62 @@ fn reports_schema_compatibility_without_bailing() {
             current: 1
         }
     );
+}
+
+// ---- M12: install-context business invariants (validate_manifest_for_docset) ----
+// These complement `validate` (self-contained schema/model/license) with checks
+// that only make sense relative to an install name. License / attribution are
+// intentionally NOT re-checked here — `validate` already covers them.
+
+use nowdocs::manifest::validate_manifest_for_docset;
+
+#[test]
+fn rejects_manifest_with_wrong_docset() {
+    let m = parse_manifest(VALID).unwrap();
+    assert!(
+        validate_manifest_for_docset(&m, "some-other-docset").is_err(),
+        "docset identity mismatch must be rejected"
+    );
+}
+
+#[test]
+fn rejects_manifest_with_zero_chunk_count() {
+    let mut v: serde_json::Value = serde_json::from_str(VALID).unwrap();
+    v["source"]["chunk_count"] = serde_json::json!(0);
+    let m: nowdocs::manifest::Manifest = serde_json::from_value(v).unwrap();
+    assert!(
+        validate_manifest_for_docset(&m, "nextjs").is_err(),
+        "chunk_count == 0 must be rejected"
+    );
+}
+
+#[test]
+fn rejects_manifest_with_no_source_urls() {
+    let mut v: serde_json::Value = serde_json::from_str(VALID).unwrap();
+    v["source"]["source_url"] = serde_json::json!("");
+    v["source"]["entry_url"] = serde_json::json!("");
+    let m: nowdocs::manifest::Manifest = serde_json::from_value(v).unwrap();
+    assert!(
+        validate_manifest_for_docset(&m, "nextjs").is_err(),
+        "both source_url and entry_url empty must be rejected"
+    );
+}
+
+#[test]
+fn accepts_valid_manifest_for_docset() {
+    let m = parse_manifest(VALID).unwrap();
+    assert!(
+        validate_manifest_for_docset(&m, "nextjs").is_ok(),
+        "valid manifest with matching docset must pass: {:?}",
+        validate_manifest_for_docset(&m, "nextjs").err()
+    );
+}
+
+#[test]
+fn accepts_manifest_with_only_entry_url() {
+    // source_url empty but entry_url present → still traceable, must pass.
+    let mut v: serde_json::Value = serde_json::from_str(VALID).unwrap();
+    v["source"]["source_url"] = serde_json::json!("");
+    let m: nowdocs::manifest::Manifest = serde_json::from_value(v).unwrap();
+    assert!(validate_manifest_for_docset(&m, "nextjs").is_ok());
 }

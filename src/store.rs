@@ -191,6 +191,21 @@ impl Store {
         parse_search_hits(&batches, 0.0)
     }
 
+    /// Number of rows in the docset's table. Used by install's promote step to
+    /// verify a freshly installed `.lance` table actually contains chunks
+    /// without loading every row into memory.
+    pub fn row_count(&self) -> Result<u64> {
+        let table = self
+            .runtime
+            .block_on(self.conn.open_table(&self.table_name).execute())
+            .context("failed to open table for row_count")?;
+        let n = self
+            .runtime
+            .block_on(table.count_rows(None))
+            .context("failed to count rows")?;
+        Ok(n as u64)
+    }
+
     /// Dump all chunks (text + metadata only, no vectors) from the store.
     pub fn dump_chunks(&self) -> Result<Vec<Chunk>> {
         let table = self

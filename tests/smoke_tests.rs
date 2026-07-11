@@ -41,10 +41,72 @@ fn test_manifest_json(docset: &str, version: &str) -> String {
     )
 }
 
-fn test_chunks_jsonl() -> &'static str {
-    r#"{"idx":0,"heading_path":"Intro","source_url":"https://example.com/0","api_version":null,"chunk_type":"Info","text":"hello"}
-{"idx":1,"heading_path":"API","source_url":"https://example.com/1","api_version":null,"chunk_type":"Info","text":"world"}
-"#
+fn smoke_two_chunks() -> Vec<nowdocs::chunker::Chunk> {
+    use nowdocs::chunker::{Chunk, ChunkType};
+    vec![
+        Chunk {
+            idx: 0,
+            heading_path: "Intro".into(),
+            source_url: "https://example.com/0".into(),
+            api_version: None,
+            chunk_type: ChunkType::Info,
+            text: "hello".into(),
+        },
+        Chunk {
+            idx: 1,
+            heading_path: "API".into(),
+            source_url: "https://example.com/1".into(),
+            api_version: None,
+            chunk_type: ChunkType::Info,
+            text: "world".into(),
+        },
+    ]
+}
+
+fn add_dir_to_tar(archive: &mut Vec<u8>, dir: &std::path::Path, prefix: &str) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        let name = format!("{}/{}", prefix, entry.file_name().to_string_lossy());
+        if path.is_dir() {
+            add_dir_to_tar(archive, &path, &name);
+        } else {
+            let data = std::fs::read(&path).unwrap();
+            archive.extend_from_slice(&make_tar_entry(&name, &data));
+        }
+    }
+}
+
+/// Build a registry-release tar (`manifest.json` + a real `<docset>.lance/`
+/// table with 2 rows matching chunk_count). The install path now consumes
+/// CI-prebuilt `.lance` tables (OQ1 Method A), so smoke fixtures must carry a
+/// real table, not `chunks.jsonl`. The table is materialized under a scratch
+/// cache and `XDG_CACHE_HOME` is restored afterwards.
+fn make_release_archive(docset: &str, version: &str) -> Vec<u8> {
+    let saved = std::env::var("XDG_CACHE_HOME").ok();
+    let src = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", src.path()) };
+    nowdocs::cache::ensure_layout().unwrap();
+    let chunks = smoke_two_chunks();
+    let vecs: Vec<Vec<f32>> = chunks.iter().map(|_| vec![0.0f32; 512]).collect();
+    {
+        let store = nowdocs::store::Store::open(docset).unwrap();
+        store.insert(&chunks, &vecs).unwrap();
+    }
+    let lance_dir = nowdocs::cache::db_path(docset);
+
+    let manifest_data = test_manifest_json(docset, version).into_bytes();
+    let mut archive = Vec::new();
+    archive.extend_from_slice(&make_tar_entry("manifest.json", &manifest_data));
+    add_dir_to_tar(&mut archive, &lance_dir, &format!("{docset}.lance"));
+    archive.extend_from_slice(&[0u8; 512]);
+    archive.extend_from_slice(&[0u8; 512]);
+
+    match saved {
+        Some(v) => unsafe { std::env::set_var("XDG_CACHE_HOME", v) },
+        None => unsafe { std::env::remove_var("XDG_CACHE_HOME") },
+    }
+    archive
 }
 
 fn make_tar_entry(name: &str, data: &[u8]) -> Vec<u8> {
@@ -81,24 +143,8 @@ fn make_tar_entry(name: &str, data: &[u8]) -> Vec<u8> {
     entry
 }
 
-fn make_tar_archive(docset: &str, version: &str) -> Vec<u8> {
-    let manifest_data = test_manifest_json(docset, version).into_bytes();
-    let chunks_data = test_chunks_jsonl().as_bytes();
-    let files: Vec<(&str, &[u8])> = vec![
-        ("manifest.json", &manifest_data),
-        ("chunks.jsonl", chunks_data),
-    ];
-    let mut archive = Vec::new();
-    for (name, data) in &files {
-        archive.extend_from_slice(&make_tar_entry(name, data));
-    }
-    archive.extend_from_slice(&[0u8; 512]);
-    archive.extend_from_slice(&[0u8; 512]);
-    archive
-}
-
 fn write_tarball(dir: &std::path::Path, docset: &str, version: &str) -> std::path::PathBuf {
-    let archive = make_tar_archive(docset, version);
+    let archive = make_release_archive(docset, version);
     let tar_path = dir.join(format!("archive_{version}.tar"));
     std::fs::write(&tar_path, &archive).unwrap();
     tar_path

@@ -33,12 +33,17 @@ pub struct IngestMeta {
     pub attribution: String,
     pub source_url: String,
     pub entry_url: String,
+    /// M25: optional upstream base URL for per-chunk `source_url`. When set,
+    /// each chunk's `source_url` is `{base}/{relative_path}` so canonical
+    /// registry docsets carry traceable upstream URLs. When `None` (local
+    /// private docs), the relative markdown path is kept verbatim.
+    pub source_url_base: Option<String>,
 }
 
 impl Default for IngestMeta {
     /// Defaults preserve the pre-flag behavior: MIT license, empty source
-    /// fields. CC-BY-4.0 callers must set `attribution` or `manifest::validate`
-    /// will reject the result.
+    /// fields, no per-chunk base URL. CC-BY-4.0 callers must set `attribution`
+    /// or `manifest::validate` will reject the result.
     fn default() -> Self {
         Self {
             license: "MIT".to_string(),
@@ -46,6 +51,7 @@ impl Default for IngestMeta {
             attribution: String::new(),
             source_url: String::new(),
             entry_url: String::new(),
+            source_url_base: None,
         }
     }
 }
@@ -69,7 +75,9 @@ pub fn ingest_dir(dir: &Path, docset: &str, meta: &IngestMeta) -> Result<IngestS
             .to_string_lossy()
             .to_string();
         for c in &mut file_chunks {
-            c.source_url = rel.clone();
+            // M25: canonical docsets get a traceable upstream URL; local private
+            // docs keep the relative markdown path.
+            c.source_url = source_url_for_chunk(meta.source_url_base.as_deref(), &rel);
         }
         chunks.extend(file_chunks);
     }
@@ -79,21 +87,69 @@ pub fn ingest_dir(dir: &Path, docset: &str, meta: &IngestMeta) -> Result<IngestS
         c.idx = i as u32;
     }
 
-    // Stash the source repo's LICENSE text (if present) so `nowdocs share` can
-    // carry the verbatim upstream license in the bundle. This is the ground
-    // truth — we copy what upstream ships, we do not regenerate text from the
-    // SPDX id. No LICENSE file → nothing stashed; share then emits NOTICE only.
-    if let Some(text) = find_license_text(dir) {
+    // Read the source repo's LICENSE text (if present) WITHOUT publishing it
+    // yet. It is only written to the cache after the store+manifest update
+    // succeeds, so an embedder/validation failure preserves the previous
+    // license sidecar too (S4 fail-safe). We copy what upstream ships, we do
+    // not regenerate text from the SPDX id; no LICENSE file → nothing stashed.
+    let license_text = find_license_text(dir);
+
+    // S4: compute the replacement vectors BEFORE wiping the active store, so an
+    // embedder/model failure cannot turn a recoverable ingest into data loss.
+    // This mirrors `rebuild_docset`, which carries an explicit comment warning
+    // against the old wipe-before-embed order. Empty dirs skip embedder load.
+    let vectors: Result<Vec<Vec<f32>>> = if chunks.is_empty() {
+        Ok(Vec::new())
+    } else {
+        embed_chunks(&chunks)
+    };
+
+    let stats = ingest_chunks(&docset, meta, chunks, files, vectors)?;
+
+    // S4: publish the license sidecar only after the store+manifest succeed,
+    // so a failed ingest cannot pair the previous store/manifest with a new
+    // (or absent) license that `nowdocs share` would then carry.
+    if let Some(text) = license_text {
         std::fs::write(cache::license_text_path(&docset), text)?;
     }
 
+    Ok(stats)
+}
+
+/// Load the embedder and embed every chunk. Isolated so `ingest_dir` can compute
+/// vectors before wiping the store (S4) and so tests can inject a failure.
+fn embed_chunks(chunks: &[Chunk]) -> Result<Vec<Vec<f32>>> {
+    let emb = embedder::Embedder::load()?;
+    chunks
+        .iter()
+        .map(|c| emb.embed(&c.text))
+        .collect::<Result<_>>()
+}
+
+/// Write a pre-chunked, pre-embedded docset to the store + manifest.
+///
+/// `vectors` is a `Result` so an embedder failure (computed by the caller) is
+/// observed AFTER manifest validation but BEFORE the store is wiped — the
+/// fail-safe ordering that preserves the previous store on embed errors (S4).
+/// The manifest write is atomic (tmp + rename, M5).
+fn ingest_chunks(
+    docset: &str,
+    meta: &IngestMeta,
+    chunks: Vec<Chunk>,
+    files: u32,
+    vectors: Result<Vec<Vec<f32>>>,
+) -> Result<IngestStats> {
     // Build + validate the manifest BEFORE touching the store. Invalid metadata
     // (e.g. CC-BY-4.0 without --attribution) must fail fast here, otherwise
     // Store::open + insert would leave an orphan `.lance` directory with no
     // manifest — list-installed would then report a broken docset and later
     // search/share would fail. chunk_count is already known at this point.
-    let manifest = build_manifest(&docset, chunks.len() as u32, meta);
+    let manifest = build_manifest(docset, chunks.len() as u32, meta);
     manifest::validate(&manifest)?;
+
+    // Surface an embedder failure now — after validation, before the wipe — so
+    // the previous store (if any) is preserved.
+    let vectors = vectors?;
 
     // Ingest is full-rebuild semantics: the manifest (below) and the stashed
     // license text (above) are overwritten on every run, so the lance table
@@ -101,26 +157,22 @@ pub fn ingest_dir(dir: &Path, docset: &str, meta: &IngestMeta) -> Result<IngestS
     // the existing table via `Store::insert` (`table.add`), doubling every
     // chunk_idx and polluting hybrid search with duplicate hits. Tests miss
     // this because every ingest test isolates with a fresh `tempdir()` cache.
-    wipe_store(&docset)?;
+    wipe_store(docset)?;
 
-    // Embed + insert. Empty dir skips embedder load but still opens (empty) store.
+    // Insert. Empty dir still opens (empty) store.
     if !chunks.is_empty() {
-        let emb = embedder::Embedder::load()?;
-        let vectors: Vec<Vec<f32>> = chunks
-            .iter()
-            .map(|c| emb.embed(&c.text))
-            .collect::<Result<_>>()?;
-        let store = Store::open(&docset)?;
+        let store = Store::open(docset)?;
         store.insert(&chunks, &vectors)?;
     } else {
-        let _ = Store::open(&docset)?;
+        let _ = Store::open(docset)?;
     }
 
-    // Store written successfully — persist the pre-validated manifest.
-    std::fs::write(
-        cache::manifest_path(&docset),
-        serde_json::to_string_pretty(&manifest)?,
-    )?;
+    // M5: atomic manifest write (write tmp, then rename into place) so a crash
+    // mid-write can never publish a half-written manifest.
+    let manifest_path = cache::manifest_path(docset);
+    let tmp = manifest_path.with_extension("tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(&manifest)?)?;
+    std::fs::rename(&tmp, &manifest_path)?;
 
     Ok(IngestStats {
         files,
@@ -193,6 +245,7 @@ pub fn rebuild_docset(docset: &str) -> Result<IngestStats> {
                 attribution: v["legal"]["attribution"].as_str().unwrap_or("").to_string(),
                 source_url: v["source"]["source_url"].as_str().unwrap_or("").to_string(),
                 entry_url: v["source"]["entry_url"].as_str().unwrap_or("").to_string(),
+                source_url_base: None,
             })
         })
         .or_else(|| {
@@ -202,6 +255,7 @@ pub fn rebuild_docset(docset: &str) -> Result<IngestStats> {
                 attribution: m.legal.attribution.clone(),
                 source_url: m.source.source_url.clone(),
                 entry_url: m.source.entry_url.clone(),
+                source_url_base: None,
             })
         })
         .unwrap_or_default();
@@ -259,6 +313,22 @@ fn walk_md(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+/// Compose a chunk's `source_url` from an optional upstream base and the
+/// relative markdown path (M25).
+///
+/// - `Some(base)` → `"{base_trimmed}/{rel}"`, with any trailing `/` on the base
+///   stripped so callers don't have to normalize it.
+/// - `None` → the relative path verbatim (local private docs).
+///
+/// Pure function so the URL-contract behavior is unit-testable offline without
+/// running the embedder or touching the store.
+fn source_url_for_chunk(base: Option<&str>, rel: &str) -> String {
+    match base {
+        Some(b) => format!("{}/{}", b.trim_end_matches('/'), rel),
+        None => rel.to_string(),
+    }
+}
+
 /// Locate the upstream license text in the ingest `dir` root. Returns the
 /// verbatim contents of the first match, or `None`.
 ///
@@ -305,7 +375,7 @@ fn build_manifest(docset: &str, chunk_count: u32, meta: &IngestMeta) -> Manifest
         },
         retrieval: RetrievalSpec {
             tokenizer: "default".to_string(),
-            chunk_size_tokens: 512,
+            chunk_size_tokens: chunker::default_config().target_tokens,
             window_tokens: 2048,
         },
         source: SourceSpec {
@@ -434,5 +504,119 @@ mod tests {
         let d = tempdir().unwrap();
         fs::write(d.path().join("README.md"), "readme\n").unwrap();
         assert_eq!(find_license_text(d.path()), None);
+    }
+
+    // S4: an embedder/vectors failure must NOT wipe the existing store, because
+    // the wipe happens after vector computation. We inject the failure through
+    // `ingest_chunks`' `vectors: Result<...>` seam (no real embedder needed).
+    #[test]
+    fn ingest_failed_embedder_load_preserves_store() {
+        use crate::chunker::{Chunk, ChunkType};
+        use crate::store::Store;
+
+        let d = tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", d.path()) };
+        crate::cache::ensure_layout().unwrap();
+
+        let docset = "embed_fail_preserve";
+
+        // Pre-populate an existing store with 2 rows (no embedder needed).
+        let store = Store::open(docset).unwrap();
+        let seed = vec![
+            Chunk {
+                idx: 0,
+                heading_path: "A".into(),
+                source_url: "a.md".into(),
+                api_version: None,
+                chunk_type: ChunkType::Info,
+                text: "alpha".into(),
+            },
+            Chunk {
+                idx: 1,
+                heading_path: "B".into(),
+                source_url: "b.md".into(),
+                api_version: None,
+                chunk_type: ChunkType::Info,
+                text: "beta".into(),
+            },
+        ];
+        let seed_vecs: Vec<Vec<f32>> = seed.iter().map(|_| vec![0.0f32; 512]).collect();
+        store.insert(&seed, &seed_vecs).unwrap();
+        drop(store);
+
+        // Attempt to ingest the same docset but force the vectors step to fail.
+        let incoming = vec![
+            Chunk {
+                idx: 0,
+                heading_path: "C".into(),
+                source_url: "c.md".into(),
+                api_version: None,
+                chunk_type: ChunkType::Info,
+                text: "gamma".into(),
+            },
+            Chunk {
+                idx: 1,
+                heading_path: "D".into(),
+                source_url: "d.md".into(),
+                api_version: None,
+                chunk_type: ChunkType::Info,
+                text: "delta".into(),
+            },
+        ];
+        let res = super::ingest_chunks(
+            docset,
+            &super::IngestMeta::default(),
+            incoming,
+            2,
+            Err(anyhow::anyhow!("simulated embedder failure")),
+        );
+        assert!(res.is_err(), "embedder failure must propagate");
+
+        // The previous store must be intact (wipe never ran).
+        let store = Store::open(docset).unwrap();
+        let rows = store.dump_chunks().unwrap();
+        assert_eq!(
+            rows.len(),
+            2,
+            "existing store must be preserved on embedder failure"
+        );
+        assert_eq!(rows[0].text, "alpha");
+        assert_eq!(rows[1].text, "beta");
+        // And no manifest was published for the failed ingest.
+        assert!(
+            !crate::cache::manifest_path(docset).is_file(),
+            "failed ingest must not publish a manifest"
+        );
+    }
+
+    // --- source_url_for_chunk (M25) ---
+    //
+    // Spec test names (`ingest_with_source_url_base_writes_full_url` /
+    // `ingest_without_source_url_base_writes_relative_path`) are asserted against
+    // the pure helper that `ingest_dir` calls, so the contract is covered offline
+    // without loading the embedder.
+
+    #[test]
+    fn ingest_with_source_url_base_writes_full_url() {
+        assert_eq!(
+            super::source_url_for_chunk(Some("https://example.com/docs"), "guide/start.md"),
+            "https://example.com/docs/guide/start.md"
+        );
+    }
+
+    #[test]
+    fn ingest_without_source_url_base_writes_relative_path() {
+        assert_eq!(
+            super::source_url_for_chunk(None, "guide/start.md"),
+            "guide/start.md"
+        );
+    }
+
+    #[test]
+    fn source_url_for_chunk_trims_trailing_slash_on_base() {
+        assert_eq!(
+            super::source_url_for_chunk(Some("https://example.com/docs/"), "guide/start.md"),
+            "https://example.com/docs/guide/start.md"
+        );
     }
 }
