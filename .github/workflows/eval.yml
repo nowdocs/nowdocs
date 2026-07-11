@@ -55,6 +55,8 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
           components: llvm-tools-preview
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --version 0.8.7 --locked
       - name: Measure baseline coverage
