@@ -409,6 +409,15 @@ pub fn validate_archive(entries: &[(String, Vec<u8>)]) -> Result<(), NowdocsErro
     validate_archive_with_mode(entries, ArchiveType::ShareBundle)
 }
 
+fn has_drive_prefix(name: &str) -> bool {
+    let mut chars = name.chars();
+    if let (Some(c1), Some(':')) = (chars.next(), chars.next()) {
+        c1.is_ascii_alphabetic()
+    } else {
+        false
+    }
+}
+
 /// Validate archive entries under the given artifact contract.
 fn validate_archive_with_mode(
     entries: &[(String, Vec<u8>)],
@@ -450,8 +459,13 @@ fn validate_archive_with_mode(
             ));
         }
 
-        // Path safety: reject absolute paths.
-        if name.starts_with('/') {
+        // Path safety: reject absolute and drive-prefixed paths (Windows safety).
+        let path = std::path::Path::new(name);
+        if path.is_absolute()
+            || name.starts_with('/')
+            || name.starts_with('\\')
+            || has_drive_prefix(name)
+        {
             return Err(archive_error(
                 "ARCHIVE_UNSAFE_PATH",
                 format!("archive contains absolute path: {}", name),
@@ -459,13 +473,20 @@ fn validate_archive_with_mode(
             ));
         }
 
-        // Path safety: reject .. components.
-        let path = std::path::Path::new(name);
+        // Path safety: reject .. and drive prefix components.
         for component in path.components() {
-            if matches!(component, std::path::Component::ParentDir) {
+            let s = component.as_os_str().to_string_lossy();
+            if matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::Prefix(_)
+            ) || has_drive_prefix(&s)
+            {
                 return Err(archive_error(
                     "ARCHIVE_UNSAFE_PATH",
-                    format!("archive contains path traversal (..): {}", name),
+                    format!(
+                        "archive contains unsafe path component (.. or drive prefix): {}",
+                        name
+                    ),
                     "report the broken registry release",
                 ));
             }

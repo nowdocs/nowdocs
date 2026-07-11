@@ -705,6 +705,61 @@ fn test_r1_absolute_path_rejected() {
     );
 }
 
+// --- R1: Windows absolute/drive-prefixed path rejected ---
+
+#[test]
+fn test_r1_windows_absolute_path_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let url = write_archive_to_tar(
+        dir.path(),
+        "win_absolute.tar",
+        &[
+            ("C:\\Windows\\System32\\cmd.exe", b"bad"),
+            ("manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_win_absolute", &url);
+    assert!(result.is_err(), "Windows absolute path should be rejected");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_UNSAFE_PATH"),
+        "error should contain ARCHIVE_UNSAFE_PATH, got: {}",
+        err_str
+    );
+}
+
+#[test]
+fn test_r1_windows_drive_prefix_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let url = write_archive_to_tar(
+        dir.path(),
+        "win_drive.tar",
+        &[
+            ("D:file.txt", b"bad"),
+            ("manifest.json", test_manifest_json().as_bytes()),
+            ("chunks.jsonl", test_chunks_jsonl().as_bytes()),
+        ],
+    );
+
+    let result = nowdocs::registry::install("r1_win_drive", &url);
+    assert!(
+        result.is_err(),
+        "Windows drive prefix path should be rejected"
+    );
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("ARCHIVE_UNSAFE_PATH"),
+        "error should contain ARCHIVE_UNSAFE_PATH, got: {}",
+        err_str
+    );
+}
+
 // --- R1: duplicate manifest rejected ---
 
 #[test]
