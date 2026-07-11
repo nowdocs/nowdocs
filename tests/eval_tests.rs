@@ -4,6 +4,10 @@ use std::path::PathBuf;
 
 use nowdocs::eval::{compute_metrics, evaluate, GoldenQuery};
 
+// Toy-fixture gates (OQ9): the 3-file golden fixture is an arithmetic
+// regression check ONLY — it is documented as non-generalizable. The release
+// bar for the real Next.js golden set lives in `eval::RELEASE_MRR_THRESHOLD` /
+// `eval::RELEASE_RECALL_THRESHOLD` and is enforced by the CI eval job.
 const RECALL_GATE: f32 = 0.8;
 const MRR_GATE: f32 = 0.6;
 
@@ -66,6 +70,88 @@ fn test_eval_report_math() {
         query: "auth".into(),
         expected_source_url: "auth.md".into(),
     };
+}
+
+/// OQ9: release thresholds are pinned to the spec values (MRR >= 0.85,
+/// Recall@5 >= 0.90) so CI and local eval read the same bar.
+#[test]
+fn eval_release_thresholds_pinned() {
+    assert_eq!(nowdocs::eval::RELEASE_MRR_THRESHOLD, 0.85);
+    assert_eq!(nowdocs::eval::RELEASE_RECALL_THRESHOLD, 0.90);
+}
+
+/// Pure: false-positive rate math over negative queries (M24). No embedder,
+/// no I/O — exercises the rate computation directly.
+#[test]
+fn eval_false_positive_rate_math() {
+    use nowdocs::eval::false_positive_rate;
+
+    assert_eq!(false_positive_rate(&[]), 0.0, "empty input must be 0");
+    assert_eq!(
+        false_positive_rate(&[false, false, false]),
+        0.0,
+        "all-empty answers must be 0"
+    );
+    assert!(
+        (false_positive_rate(&[true, false]) - 0.5).abs() < 1e-6,
+        "1 of 2 answered must be 0.5"
+    );
+    assert_eq!(
+        false_positive_rate(&[true, true]),
+        1.0,
+        "all answered must be 1.0"
+    );
+}
+
+/// M24: negative (out-of-scope) queries against the golden fixture corpus must
+/// return empty or low-confidence results — the pipeline's no-answer gate
+/// should reject them, keeping the false-positive rate below
+/// MAX_FALSE_POSITIVE_RATE. Ignored: loads the real embedder.
+#[test]
+#[ignore = "needs real embedder (~66MB download, ~30s)"]
+fn eval_negative_queries_return_empty_or_low_confidence() {
+    use nowdocs::eval::{evaluate_negatives, MAX_FALSE_POSITIVE_RATE};
+    use nowdocs::ingest::{ingest_dir, IngestMeta};
+
+    // Isolated cache so we don't clobber any real docset.
+    let cache_dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache_dir.path()) };
+
+    let fixture_dir: PathBuf = [env!("CARGO_MANIFEST_DIR"), "tests", "fixtures", "golden"]
+        .iter()
+        .collect();
+
+    let docset = "negative_e2e";
+    let stats =
+        ingest_dir(&fixture_dir, docset, &IngestMeta::default()).expect("ingest fixture corpus");
+    assert!(stats.chunks > 0, "fixture must produce chunks");
+
+    let raw = std::fs::read_to_string(fixture_dir.join("negative.json"))
+        .expect("read negative.json");
+    let entries: Vec<serde_json::Value> =
+        serde_json::from_str(&raw).expect("negative.json must be a JSON array");
+    let queries: Vec<String> = entries
+        .iter()
+        .map(|v| v["query"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        queries.len() >= 10,
+        "negative.json should have >= 10 queries, got {}",
+        queries.len()
+    );
+
+    let report = evaluate_negatives(docset, &queries).expect("negative eval");
+    eprintln!(
+        "negative-eval: n={} answered={} false_positive_rate={:.3} (gate < {})",
+        report.n, report.answered, report.false_positive_rate, MAX_FALSE_POSITIVE_RATE
+    );
+
+    assert!(
+        report.false_positive_rate < MAX_FALSE_POSITIVE_RATE,
+        "false-positive rate {} at/above gate {} — retrieval answers out-of-scope queries",
+        report.false_positive_rate,
+        MAX_FALSE_POSITIVE_RATE
+    );
 }
 
 /// End-to-end: ingest the golden fixture, run evaluate(), and assert the

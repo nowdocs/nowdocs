@@ -60,6 +60,19 @@ pub fn compute_metrics(ranks: &[Option<usize>]) -> (f32, f32) {
 /// counts as a miss, so `recall_at_5` measures true recall@5, not recall@N.
 const RECALL_K: usize = 5;
 
+/// Release-quality thresholds for the real Next.js golden set (OQ9): the
+/// concept-level query set (20-30 queries over ~7480 chunks) must clear
+/// `MRR >= 0.85` and `Recall@5 >= 0.90` before a release is cut.
+///
+/// These are enforced by the CI `eval` job (`.github/workflows/eval.yml`) on
+/// manual dispatch — the nightly run reports metrics against them so a
+/// regression is visible before release. They deliberately apply to the real
+/// docset only: the toy 3-file golden fixture keeps its own looser gates
+/// (`RECALL_GATE`/`MRR_GATE` in tests/eval_tests.rs) as an arithmetic
+/// regression check that is documented as non-generalizable.
+pub const RELEASE_MRR_THRESHOLD: f32 = 0.85;
+pub const RELEASE_RECALL_THRESHOLD: f32 = 0.90;
+
 /// Run the golden set against an already-ingested docset and report quality.
 pub fn evaluate(docset: &str, golden: &[GoldenQuery]) -> Result<EvalReport> {
     if golden.is_empty() {
@@ -88,5 +101,49 @@ pub fn evaluate(docset: &str, golden: &[GoldenQuery]) -> Result<EvalReport> {
         recall_at_5,
         mrr,
         n: golden.len(),
+    })
+}
+
+/// Maximum acceptable false-positive rate over the negative query set (M24).
+/// Starts at 10% and is tunable once real eval data accumulates.
+pub const MAX_FALSE_POSITIVE_RATE: f32 = 0.10;
+
+/// Negative-eval report (M24): how often out-of-scope queries still returned
+/// results above the no-answer relevance gate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NegativeReport {
+    /// Fraction of negative queries that returned at least one chunk.
+    pub false_positive_rate: f32,
+    /// Count of negative queries that returned at least one chunk.
+    pub answered: usize,
+    pub n: usize,
+}
+
+/// Pure: false-positive rate = (# answered) / n; empty input returns 0.0 to
+/// avoid division by zero.
+pub fn false_positive_rate(answered: &[bool]) -> f32 {
+    if answered.is_empty() {
+        return 0.0;
+    }
+    answered.iter().filter(|&&a| a).count() as f32 / answered.len() as f32
+}
+
+/// Run negative (out-of-scope) queries against a docset and report how often
+/// the pipeline returned results anyway (M24). A query counts as "answered"
+/// when `retrieve::search` returns at least one chunk — i.e. its top hit
+/// cleared the N4 no-answer relevance gate (`MIN_RELEVANCE_THRESHOLD`).
+/// Ideally every negative query returns empty, so `false_positive_rate` is 0.
+pub fn evaluate_negatives(docset: &str, queries: &[String]) -> Result<NegativeReport> {
+    let mut answered_flags = Vec::with_capacity(queries.len());
+    for q in queries {
+        let result = retrieve::search(docset, q, Some(4000), Some(RECALL_K as u32))
+            .with_context(|| format!("negative search failed for query {:?}", q))?;
+        answered_flags.push(!result.chunks.is_empty());
+    }
+    let answered = answered_flags.iter().filter(|&&a| a).count();
+    Ok(NegativeReport {
+        false_positive_rate: false_positive_rate(&answered_flags),
+        answered,
+        n: queries.len(),
     })
 }
