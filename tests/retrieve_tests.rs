@@ -380,3 +380,62 @@ fn answer_gate_combines_cosine_and_rrf() {
         "high-cosine but deep-rank hit must be blocked by the secondary RRF filter"
     );
 }
+
+// --- N2: downcastable sentinel error types ---
+
+#[test]
+fn retrieve_search_returns_docset_not_installed_sentinel() {
+    use nowdocs::retrieve::{search, DocsetNotInstalled};
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+    let err = search("no_such_docset", "some query", None, None)
+        .expect_err("missing docset must error");
+    assert!(
+        err.downcast_ref::<DocsetNotInstalled>().is_some(),
+        "missing manifest must surface as DocsetNotInstalled sentinel, got: {err:#}"
+    );
+}
+
+#[test]
+#[ignore = "needs real embedder + nextjs_real fixture (scripts/ci-prepare-nextjs-fixture.sh)"]
+fn retrieve_search_returns_store_error_sentinel() {
+    use nowdocs::cache::manifest_path;
+    use nowdocs::retrieve::{search, StoreError};
+
+    // Plant a valid manifest for a docset whose .lance store is CORRUPT (a
+    // plain file at the .lance path): manifest read/parse/validate + embedder
+    // load all succeed, then the store open/search must fail with the
+    // StoreError sentinel. (A merely MISSING store is not an error — lancedb
+    // creates an empty table and search returns empty.) Uses the DEFAULT cache
+    // (matches ensure_nextjs_real) so the cached model is reused.
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+    let real_manifest = manifest_path("nextjs_real");
+    assert!(
+        real_manifest.exists(),
+        "run scripts/ci-prepare-nextjs-fixture.sh first"
+    );
+    let manifest_json = std::fs::read_to_string(&real_manifest).unwrap();
+
+    let fake = "sentinel_nostore";
+    let fake_manifest = manifest_path(fake);
+    let fake_lance = fake_manifest.with_file_name(format!("{fake}.lance"));
+    // A missing store is not an error — lancedb creates an empty table dir and
+    // search legitimately returns empty. Plant a CORRUPT store instead: a
+    // regular file at the .lance path makes table open fail.
+    let _ = std::fs::remove_dir_all(&fake_lance);
+    std::fs::write(&fake_manifest, &manifest_json).unwrap();
+    std::fs::write(&fake_lance, b"not a lance table").unwrap();
+
+    let result = search(fake, "server components", Some(4000), Some(5));
+
+    // Clean up the planted manifest + corrupt store regardless of outcome.
+    let _ = std::fs::remove_file(&fake_manifest);
+    let _ = std::fs::remove_file(&fake_lance);
+    let _ = std::fs::remove_dir_all(&fake_lance);
+
+    let err = result.expect_err("docset without a store must error");
+    assert!(
+        err.downcast_ref::<StoreError>().is_some(),
+        "missing store must surface as StoreError sentinel, got: {err:#}"
+    );
+}

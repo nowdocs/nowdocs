@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::chunker::ChunkType;
 use crate::embedder::{self, EmbedderSpec};
@@ -55,6 +55,50 @@ pub struct SearchResult {
     pub truncated: bool,
 }
 
+/// N2: downcastable sentinel error types. `retrieve::search` maps each failure
+/// point to one of these so `tools::classify_error` can classify via
+/// `anyhow::Error::downcast_ref::<T>()` instead of fragile string matching on
+/// the error chain (see a1-mcp-error-contract §3.1). `Display` + `Error` are
+/// implemented manually — thiserror was removed from the dependency tree (M16)
+/// and must not be re-added.
+
+/// The docset's manifest is missing, unparseable, or fails validation.
+#[derive(Debug)]
+pub struct DocsetNotInstalled {
+    pub docset: String,
+    pub reason: String,
+}
+impl std::fmt::Display for DocsetNotInstalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "docset {} not installed: {}", self.docset, self.reason)
+    }
+}
+impl std::error::Error for DocsetNotInstalled {}
+
+/// The docset's store (lance table) is missing, corrupt, or unreadable.
+#[derive(Debug)]
+pub struct StoreError {
+    pub docset: String,
+    pub reason: String,
+}
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "store error for docset {}: {}", self.docset, self.reason)
+    }
+}
+impl std::error::Error for StoreError {}
+
+/// The embedder model could not be loaded (download failure, sha256 mismatch,
+/// config error, tokenizer error).
+#[derive(Debug)]
+pub struct EmbedderLoadError(pub String);
+impl std::fmt::Display for EmbedderLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "embedder load failed: {}", self.0)
+    }
+}
+impl std::error::Error for EmbedderLoadError {}
+
 #[derive(Debug, Clone)]
 pub struct ResultChunk {
     pub chunk_idx: u32,
@@ -77,12 +121,22 @@ pub fn search(
     let max_tokens = resolve_max_tokens(max_tokens);
     let top_k = resolve_top_k(top_k);
 
-    // Load and validate manifest.
+    // Load and validate manifest. N2: map each failure point to a downcastable
+    // sentinel so tools::classify_error needs no string matching.
     let manifest_path = crate::cache::manifest_path(&docset);
-    let manifest_json = std::fs::read_to_string(&manifest_path)
-        .with_context(|| format!("failed to read manifest for docset {docset:?}"))?;
-    let manifest: manifest::Manifest = manifest::parse_manifest(&manifest_json)?;
-    manifest::validate(&manifest)?;
+    let manifest_json = std::fs::read_to_string(&manifest_path).map_err(|e| DocsetNotInstalled {
+        docset: docset.clone(),
+        reason: format!("failed to read manifest: {e}"),
+    })?;
+    let manifest: manifest::Manifest =
+        manifest::parse_manifest(&manifest_json).map_err(|e| DocsetNotInstalled {
+            docset: docset.clone(),
+            reason: format!("manifest parse error: {e}"),
+        })?;
+    manifest::validate(&manifest).map_err(|e| DocsetNotInstalled {
+        docset: docset.clone(),
+        reason: format!("manifest validation: {e}"),
+    })?;
 
     // Build embedder spec from manifest (model-version lock).
     let embedder_spec = EmbedderSpec {
@@ -90,11 +144,15 @@ pub fn search(
         model_revision: manifest.embedder.model_revision.clone(),
         model_sha256: manifest.embedder.model_sha256.clone(),
     };
-    let embedder = embedder::Embedder::load_for(&embedder_spec)?;
+    let embedder = embedder::Embedder::load_for(&embedder_spec)
+        .map_err(|e| EmbedderLoadError(e.to_string()))?;
 
     // Embed query and run hybrid search.
     let query_vector = embedder.embed(&query)?;
-    let store = Store::open(&docset)?;
+    let store = Store::open(&docset).map_err(|e| StoreError {
+        docset: docset.clone(),
+        reason: e.to_string(),
+    })?;
     // Over-fetch (top_k*3, min 15) then diversity-rerank with Maximal Marginal
     // Relevance (N1/OQ4). MMR keeps multiple chunks from the same source_url
     // when their vectors differ (e.g. distinct APIs on one reference page),
@@ -103,9 +161,17 @@ pub fn search(
     // relevance off against redundancy before the window pass re-attaches
     // same-file neighbors as context.
     let raw_k = (top_k * 3).max(15) as usize;
-    let candidates = store.hybrid_search(&query_vector, &query, raw_k)?;
+    let candidates = store
+        .hybrid_search(&query_vector, &query, raw_k)
+        .map_err(|e| StoreError {
+            docset: docset.clone(),
+            reason: e.to_string(),
+        })?;
     let cand_ids: Vec<u32> = candidates.iter().map(|h| h.chunk_idx).collect();
-    let vectors = store.fetch_vectors(&cand_ids)?;
+    let vectors = store.fetch_vectors(&cand_ids).map_err(|e| StoreError {
+        docset: docset.clone(),
+        reason: e.to_string(),
+    })?;
     let hits = mmr_rerank(candidates, &vectors, top_k as usize, MMR_LAMBDA);
 
     // N4/OQ11 (redesigned): dual-signal answer gate. The old RRF-only gate was
@@ -139,7 +205,10 @@ pub fn search(
 
     // Fetch window chunks by chunk_idx (store returns them idx-ascending), then
     // restore the relevance-first window order.
-    let window_hits = store.fetch_by_idx(&window_ids)?;
+    let window_hits = store.fetch_by_idx(&window_ids).map_err(|e| StoreError {
+        docset: docset.clone(),
+        reason: e.to_string(),
+    })?;
     let window_chunks: Vec<ResultChunk> = window_hits
         .into_iter()
         .map(|h| ResultChunk {
