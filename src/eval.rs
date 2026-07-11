@@ -106,6 +106,15 @@ pub fn evaluate(docset: &str, golden: &[GoldenQuery]) -> Result<EvalReport> {
 
 /// Maximum acceptable false-positive rate over the negative query set (M24).
 /// Starts at 10% and is tunable once real eval data accumulates.
+///
+/// Status (2026-07): NOT yet enforceable. Measured FP rate is ~1.0 on every
+/// corpus (toy and the real Next.js ~7480-chunk store) because dense vector
+/// search always returns a rank-1 neighbor whose RRF score (1/60 ≈ 0.0167)
+/// clears the N4 no-answer gate (`MIN_RELEVANCE_THRESHOLD` = 0.015) — so every
+/// query is "answered" regardless of relevance. Until the no-answer gate is
+/// recalibrated (e.g. require dual-channel agreement, or threshold the raw
+/// vector cosine instead of the RRF score), this constant documents the
+/// intent only; the CI eval job reports the rate without gating on it.
 pub const MAX_FALSE_POSITIVE_RATE: f32 = 0.10;
 
 /// Negative-eval report (M24): how often out-of-scope queries still returned
@@ -117,6 +126,10 @@ pub struct NegativeReport {
     /// Count of negative queries that returned at least one chunk.
     pub answered: usize,
     pub n: usize,
+    /// Per-query top-chunk score (`None` when the query returned no chunks),
+    /// aligned with the input query order. Lets callers gate on confidence,
+    /// not just on non-emptiness.
+    pub top_scores: Vec<Option<f32>>,
 }
 
 /// Pure: false-positive rate = (# answered) / n; empty input returns 0.0 to
@@ -135,15 +148,24 @@ pub fn false_positive_rate(answered: &[bool]) -> f32 {
 /// Ideally every negative query returns empty, so `false_positive_rate` is 0.
 pub fn evaluate_negatives(docset: &str, queries: &[String]) -> Result<NegativeReport> {
     let mut answered_flags = Vec::with_capacity(queries.len());
+    let mut top_scores = Vec::with_capacity(queries.len());
     for q in queries {
         let result = retrieve::search(docset, q, Some(4000), Some(RECALL_K as u32))
             .with_context(|| format!("negative search failed for query {:?}", q))?;
         answered_flags.push(!result.chunks.is_empty());
+        top_scores.push(
+            result
+                .chunks
+                .iter()
+                .filter_map(|c| c.score)
+                .reduce(f32::max),
+        );
     }
     let answered = answered_flags.iter().filter(|&&a| a).count();
     Ok(NegativeReport {
         false_positive_rate: false_positive_rate(&answered_flags),
         answered,
         n: queries.len(),
+        top_scores,
     })
 }

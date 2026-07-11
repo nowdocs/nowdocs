@@ -10,9 +10,10 @@ set -euo pipefail
 # $NOWDOCS_FIXTURE_CACHE (default ~/.cache/nowdocs-ci-fixtures). Subsequent
 # runs restore the cache instead of re-ingesting (minutes saved per run).
 #
-# The corpus is rebuilt on EVERY run (cheap, python only, no model) because the
-# ignored eval tests ingest from it into isolated temp caches. The docset
-# itself is cached, since the full ingest takes minutes.
+# The corpus is rebuilt on EVERY run (cheap, python only, no model) — it is the
+# ingest source on a fixture-cache miss and for the tests' local fallback
+# path. The built docset is cached because the full ingest takes minutes; the
+# ignored eval tests consume the default-cache fixture directly (no re-ingest).
 #
 # Deliberately reconstructs from the vendored artifact rather than cloning
 # github.com/vercel/next.js: faster, offline-reproducible, and produces
@@ -65,11 +66,12 @@ if [ -d "$FIXTURE_CACHE/$DOCSET.lance" ] && [ -f "$FIXTURE_CACHE/$DOCSET.manifes
 fi
 
 # 3. Cache miss: ingest the full corpus (downloads the embedder on first run —
-#    warm it via `nowdocs doctor --model`). Uses the debug binary the CI job
-#    already built, avoiding a second (release) profile build.
+#    warm it via `nowdocs doctor --model`). Release profile: candle in debug
+#    is far too slow for ~7480 chunks (would not fit the CI job budget); the
+#    eval job builds --release, so this adds no second build.
 if [ ! -d "$LANCE_PATH" ] || [ ! -f "$MANIFEST_PATH" ]; then
     echo "Ingesting corpus into docset '$DOCSET' (this takes minutes)..."
-    cargo run --locked -- ingest "$REBUILT_DIR" "$DOCSET" \
+    cargo run --locked --release -- ingest "$REBUILT_DIR" "$DOCSET" \
         --license MIT \
         --copyright-holder "Vercel, Inc." \
         --source-url "https://github.com/vercel/next.js" \

@@ -204,15 +204,15 @@ git diff --check
 
 **Tasks:**
 
-- [ ] A1.3.1 S5: CI job for `--ignored` tests (nightly + manual).
-- [ ] A1.3.2 OQ8: `scripts/ci-prepare-nextjs-fixture.sh` + cache.
-- [ ] A1.3.3 OQ9: strict thresholds MRR >= 0.85, Recall@5 >= 0.90.
-- [ ] A1.3.4 N5/OQ5: model pre-warm hint in install + doctor output.
-- [ ] A1.3.5 OQ6: declare curl dependency in README + doctor check.
-- [ ] A1.3.6 M22: `InstalledDocsetState` enum unified across all entry points.
-- [ ] A1.3.7 M23: performance observability (smoke embed_ms/search_ms; doctor cache sizes).
-- [ ] A1.3.8 M24: negative queries in eval + false-positive rate.
-- [ ] A1.3.9 Backlog: deny.toml RUSTSEC ignore expiry, legal CI gate documentation.
+- [x] A1.3.1 S5: CI job for `--ignored` tests (nightly + manual).
+- [x] A1.3.2 OQ8: `scripts/ci-prepare-nextjs-fixture.sh` + cache.
+- [x] A1.3.3 OQ9: strict thresholds MRR >= 0.85, Recall@5 >= 0.90.
+- [x] A1.3.4 N5/OQ5: model pre-warm hint in install + doctor output.
+- [x] A1.3.5 OQ6: declare curl dependency in README + doctor check.
+- [x] A1.3.6 M22: `InstalledDocsetState` enum unified across all entry points.
+- [x] A1.3.7 M23: performance observability (smoke embed_ms/search_ms; doctor cache sizes).
+- [x] A1.3.8 M24: negative queries in eval + false-positive rate.
+- [x] A1.3.9 Backlog: deny.toml RUSTSEC ignore expiry, legal CI gate documentation.
 
 **Verification:**
 
