@@ -68,6 +68,29 @@ fn metadata_does_not_stripped_as_chunk() {
 }
 
 #[test]
+fn strips_chained_danger_flags() {
+    let out = sanitize_chunk("sudo rm -rf /");
+    assert!(!out.contains("sudo"));
+    assert!(!out.contains("rm -rf"));
+    assert_eq!(out, "/");
+}
+
+#[test]
+fn strips_chained_danger_flags_with_options() {
+    let out = sanitize_chunk("--force -y install");
+    assert!(!out.contains("--force"));
+    assert!(!out.contains("-y"));
+    assert_eq!(out, "install");
+}
+
+#[test]
+fn preserves_flags_with_dash_suffixes() {
+    let out = sanitize_chunk("--force-y install");
+    assert!(out.contains("--force-y"));
+    assert_eq!(out, "--force-y install");
+}
+
+#[test]
 fn sanitize_preserves_as_an_airline() {
     let out = sanitize_chunk("Working as an airline pilot or using an air-cooled system.");
     assert!(out.contains("as an airline pilot"));
