@@ -33,6 +33,9 @@ The community registry repository handles the ingestion, rebuild validation, and
      - Contributions to the registry must only contain raw chunked text and the manifest (`chunks.jsonl` + `manifest.json`). **No `.lance` binary tables containing contributor-computed vectors are accepted.**
      - The Registry CI automatically rebuilds the vector database from the raw text chunks using a standard, pinned HuggingFace model cache.
      - **Security Value:** This closes adversarial vector injection channels (preventing malicious embeddings that force target queries to hit specific poisoned chunks) and avoids model version drift.
+  3. **SPDX Allowlist + CC-BY Attribution (catalog CI):**
+     - The registry **catalog CI** re-runs the same SPDX license allowlist (`MIT` / `Apache-2.0` / `CC-BY-4.0`) and CC-BY-4.0 non-empty-attribution validation as `scripts/ci-check-manifest.sh` on every catalog submission.
+     - **This gate runs in the `nowdocs-registry` repository CI, not the main repo CI** — the main repo only validates manifests that changed in a given PR; the registry catalog CI is the standing enforcement point for published docsets.
 
 ---
 

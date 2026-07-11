@@ -98,6 +98,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
+      # Backlog (A1.3): surface the active RUSTSEC ignores on every run so an
+      # ignore can't silently outlive its Revisit-date comment in deny.toml.
+      - name: Report active RUSTSEC ignores (expiry audit)
+        run: |
+          echo "Active RUSTSEC ignores in deny.toml (each must carry a Revisit-date comment):"
+          grep -E 'RUSTSEC-[0-9-]+|Revisit-date' deny.toml || echo "no active ignores"
 
   # --- Project-specific compliance checks ---
   compliance:
