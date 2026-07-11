@@ -422,8 +422,22 @@ fn test_eval_nextjs_real() {
         mrr
     );
     assert!(
-        recall >= 0.5,
-        "recall@5 {recall} too low on real nextjs corpus"
+        recall >= 0.90,
+        "recall@5 {recall} below the release bar (0.90) on real nextjs corpus"
+    );
+    // MRR release bar is 0.85 (OQ9); measured ceiling on this corpus/model is
+    // ~0.725 after the quality lift (was 0.558). Root-cause analysis for the
+    // remaining gap is in the quality-lift commit message: for 4 of 10 golden
+    // queries the labeled page is genuinely not the corpus's closest chunk to
+    // the query — 2–6 legitimately relevant competing pages out-cosine it
+    // (catchError.md over error-handling.md, layouts-and-pages.md over
+    // linking-and-navigating.md, backend-for-frontend.md over
+    // route-handlers.md, mutating-data/updateTag/caching pages over
+    // revalidating.md) — and the golden set grants no partial credit. Assert
+    // 0.70 to lock in the lift while the bar stays an open question.
+    assert!(
+        mrr >= 0.70,
+        "mrr {mrr} below the enforced floor (0.70; release bar 0.85 is a documented gap) on real nextjs corpus"
     );
 
     // M24 telemetry: negative (out-of-scope) queries against the same real
@@ -526,6 +540,8 @@ fn test_eval_nextjs_diagnose() {
     // (absent from top-50) — and (b) the top-15 source_urls + unique count, so
     // repeated source_urls reveal whether per-source_url dedup would lift the
     // expected chunk into the top-5.
+    let mut lambda_ranks: std::collections::HashMap<u32, Vec<Option<usize>>> =
+        std::collections::HashMap::new();
     for q in &golden {
         let qv = embedder.embed(&q.query).expect("embed query");
         let hits = store
@@ -538,6 +554,54 @@ fn test_eval_nextjs_diagnose() {
         let miss = raw_rank.is_none_or(|r| r > 5);
         let tag = if miss { "MISS" } else { "ok  " };
         eprintln!("  [{}] q={:?} expected rank={:?}", tag, q.query, raw_rank);
+        // Replicate the retrieve::search rerank pipeline (raw_k=40 pool ->
+        // fetch_vectors -> MMR) for EVERY query across a lambda sweep, so one
+        // run shows the relevance/diversity trade-off's effect on the expected
+        // chunk's MMR rank. Per-lambda recall@5/MRR is printed after the loop
+        // (MMR top-5 rank equals the final window rank — hits lead the window).
+        {
+            let raw_k = 40usize;
+            let pool = store
+                .hybrid_search_k(&qv, &q.query, raw_k, 60.0)
+                .expect("hybrid search raw_k pool");
+            let ids: Vec<u32> = pool.iter().map(|h| h.chunk_idx).collect();
+            let vecs = store.fetch_vectors(&ids).expect("fetch vectors");
+            // Pool's top-8 by query-cosine with each chunk's fused rank — shows
+            // whether a miss is a relevance-signal gap (expected cosine rank
+            // 6+) or a selection/diversity issue (competitive cosine, unselected).
+            let mut by_cos: Vec<(usize, f32, &str)> = pool
+                .iter()
+                .enumerate()
+                .map(|(i, h)| {
+                    let c = vecs
+                        .get(&h.chunk_idx)
+                        .map(|v| cosine_sim(&qv, v))
+                        .unwrap_or(0.0);
+                    (i + 1, c, h.source_url.as_str())
+                })
+                .collect();
+            by_cos.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+            let top8: Vec<String> = by_cos
+                .iter()
+                .take(8)
+                .map(|(fr, c, u)| format!("{}(cos {:.3}, fused {})", u, c, fr))
+                .collect();
+            eprintln!("        pool top-8 by cosine: {}", top8.join(", "));
+            for &lambda in &[0.7_f32, 0.8, 0.9, 1.0] {
+                let mmr = nowdocs::retrieve::mmr_rerank(&qv, pool.clone(), &vecs, 5, lambda);
+                let rank = mmr
+                    .iter()
+                    .position(|h| h.source_url == q.expected_source_url)
+                    .map(|p| p + 1);
+                lambda_ranks
+                    .entry(lambda.to_bits())
+                    .or_insert_with(Vec::new)
+                    .push(rank);
+                if lambda == 0.7 {
+                    eprintln!("        lambda=0.7 expected MMR rank: {:?}", rank);
+                }
+            }
+        }
         if miss {
             // Pure-channel ranks isolate whether FTS or vector recall is weak.
             // hybrid = FTS ∪ vector + RRF; a miss absent from both pure top-50
@@ -589,5 +653,19 @@ fn test_eval_nextjs_diagnose() {
             let unique = urls.iter().filter(|u| seen.insert(**u)).count();
             eprintln!("        unique source_urls in top-15: {}/15", unique);
         }
+    }
+
+    // Lambda sweep summary: recall@5 / MRR the retrieve::search pipeline would
+    // score with each MMR lambda (raw_k=40 pool, cosine relevance). Guides the
+    // relevance/diversity trade-off without re-running the full eval per value.
+    let mut lambdas: Vec<f32> = lambda_ranks.keys().map(|b| f32::from_bits(*b)).collect();
+    lambdas.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    for lambda in lambdas {
+        let ranks = &lambda_ranks[&lambda.to_bits()];
+        let (recall, mrr) = nowdocs::eval::compute_metrics(ranks);
+        eprintln!(
+            "  lambda-sweep: lambda={:.2} recall@5={:.3} mrr={:.3} ranks={:?}",
+            lambda, recall, mrr, ranks
+        );
     }
 }

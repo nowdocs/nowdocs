@@ -15,6 +15,17 @@ use crate::token::count_tokens;
 /// `MMR = lambda * relevance - (1 - lambda) * max_cosine_sim`. (N1/OQ4)
 const MMR_LAMBDA: f32 = 0.7;
 
+/// MMR source_url penalty: subtracted per already-selected chunk that shares
+/// the candidate's `source_url`. Vector diversity alone cannot suppress hub
+/// files whose many chunks have mutually DISSIMILAR vectors — measured on the
+/// real Next.js corpus: backend-for-frontend.md held 6 of the top-8 cosine
+/// slots for the route-handlers query, and caching-without-cache-components.md
+/// held 2 of the 5 slots above the revalidating answer. The penalty restores
+/// cross-page diversity without reviving the old `dedup_by_source_url`
+/// collapse: multiple chunks from one page still survive when their relevance
+/// clears the penalty (N1/OQ4's distinct-APIs-per-page case).
+const MMR_URL_PENALTY: f32 = 0.05;
+
 /// Minimum raw vector cosine similarity between the query embedding and the
 /// top hit's embedding for the result to count as "answered" (N4 redesign).
 /// Below this floor the docset is treated as having no answer and `search`
@@ -28,25 +39,35 @@ const MMR_LAMBDA: f32 = 0.7;
 /// (e.g. Vue syntax against React docs) produces top-hit cosine well below a
 /// relevant query's, and the threshold sits between those bands.
 ///
+/// The gate's primary signal is cosine similarity; a secondary BYPASS admits
+/// dual-channel rank-1 agreement — see DUAL_RANK1_RRF.
+///
 /// Calibrated 2026-07-11 on the real Next.js corpus (~7480 chunks): golden
 /// positive queries cluster at top-hit cosine 0.831–0.901 (n=10), negative
 /// out-of-scope queries at 0.759–0.807 (n=12). 0.82 sits in the gap: all
 /// positives pass, all negatives are blocked (measured FP rate 0.0).
+///
+/// The gate is cosine-ONLY: the originally planned secondary RRF floor
+/// (`MIN_RELEVANCE_THRESHOLD` = 0.015) was dropped after measurement. Once MMR
+/// ranks by cosine, the top hit is often a vector-only chunk whose fused RRF
+/// rank is deep (measured: legitimate answers at fused rank 9–33, RRF score
+/// < 0.015), so the RRF floor false-blocked relevant queries (caching,
+/// authentication on the real Next.js corpus). Deep noise with "moderate"
+/// cosine is already handled by the cosine floor itself — the negative band
+/// tops out at 0.807.
 pub const MIN_ANSWER_COSINE: f32 = 0.82;
 
-/// Secondary deep-noise floor on the top hit's RRF score (N4/OQ11). A hit
-/// whose cosine clears `MIN_ANSWER_COSINE` but whose RRF score is below this
-/// floor (rank ≳ 20 single-channel) is still blocked — moderate vector
-/// similarity at that depth is noise, not an answer.
-///
-/// The default RRF fusion constant is `k=60`, i.e. `score = 1/(rank + 60)`. A
-/// hit that surfaces in only ONE channel (vector-only or FTS-only) tops out at
-/// about `1/60 ≈ 0.0167` for rank 1, while a hit in BOTH channels can reach
-/// `2/61 ≈ 0.0328`. The floor must therefore stay BELOW the single-channel
-/// rank-1 score (~0.0164) or it would discard every vector-only / FTS-only
-/// answer. 0.015 sits just under that floor so single-channel top matches pass
-/// while deep-noise hits (rank ≳ 20 single-channel, ~0.013) are still dropped.
-pub const MIN_RELEVANCE_THRESHOLD: f32 = 0.015;
+/// RRF score reachable ONLY by dual-channel rank-1 agreement: with lancedb's
+/// 0-based ranks, both channels at rank 0 gives `1/60 + 1/60 = 0.0333`, while
+/// the next best (rank 0 + rank 1) is `1/60 + 1/61 ≈ 0.03306`. A chunk ranked
+/// #1 independently by BOTH BM25 and vector search is a high-precision answer
+/// signal that bypasses the cosine floor: keyword-dense queries against small
+/// docsets systematically under-score on embedding cosine (toy golden fixture:
+/// "502 503 504 gateway timeout" -> cos 0.747 but dual rank-1), and exact
+/// keyword + semantic agreement is stronger evidence than either channel
+/// alone. Measured safe on the real Next.js corpus: no negative query reaches
+/// dual rank-1 (max negative RRF 0.0302), so the bypass adds zero FP there.
+pub const DUAL_RANK1_RRF: f32 = 0.0331;
 
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -153,14 +174,21 @@ pub fn search(
         docset: docset.clone(),
         reason: e.to_string(),
     })?;
-    // Over-fetch (top_k*3, min 15) then diversity-rerank with Maximal Marginal
-    // Relevance (N1/OQ4). MMR keeps multiple chunks from the same source_url
-    // when their vectors differ (e.g. distinct APIs on one reference page),
-    // fixing the old `dedup_by_source_url` heuristic that collapsed single-page
-    // API references. Over-fetching gives MMR a candidate pool to trade
-    // relevance off against redundancy before the window pass re-attaches
-    // same-file neighbors as context.
-    let raw_k = (top_k * 3).max(15) as usize;
+    // Over-fetch then diversity-rerank with Maximal Marginal Relevance
+    // (N1/OQ4). MMR keeps multiple chunks from the same source_url when their
+    // vectors differ (e.g. distinct APIs on one reference page), fixing the old
+    // `dedup_by_source_url` heuristic that collapsed single-page API
+    // references. Over-fetching gives MMR a candidate pool to trade relevance
+    // off against redundancy before the window pass re-attaches same-file
+    // neighbors as context.
+    //
+    // Pool size: diagnosed on the real Next.js corpus (2026-07-11) — queries
+    // whose expected page is recalled by the vector channel only (FTS misses
+    // it) see the fused RRF rank sink to ~33 because k=60 lets dual-channel
+    // hub chunks outrank vector-only hits. `top_k*3` (15) left those expected
+    // chunks outside the MMR pool entirely; 40 covers the measured worst case
+    // (fused rank 33) with headroom.
+    let raw_k = (top_k * 8).max(40) as usize;
     let candidates = store
         .hybrid_search(&query_vector, &query, raw_k)
         .map_err(|e| StoreError {
@@ -172,15 +200,16 @@ pub fn search(
         docset: docset.clone(),
         reason: e.to_string(),
     })?;
-    let hits = mmr_rerank(candidates, &vectors, top_k as usize, MMR_LAMBDA);
+    let hits = mmr_rerank(&query_vector, candidates, &vectors, top_k as usize, MMR_LAMBDA);
 
-    // N4/OQ11 (redesigned): dual-signal answer gate. The old RRF-only gate was
+    // N4/OQ11 (redesigned): answer gate. The old RRF-only gate was
     // structurally ~1.0 FP (RRF scores are rank-based, not similarity-based,
     // so every query cleared it). Gate on the query–top-hit cosine similarity
-    // (primary) plus the RRF floor (secondary deep-noise filter): if the best
-    // hit fails either signal the docset is treated as having no answer (e.g.
-    // Vue syntax queried against React docs) — return empty rather than the
-    // irrelevant top-K.
+    // plus a dual-channel rank-1 agreement bypass (exact-keyword + semantic
+    // agreement — covers keyword-dense queries that under-score on cosine):
+    // if the best hit clears neither signal the docset is treated as having
+    // no answer (e.g. Vue syntax queried against React docs) — return empty
+    // rather than the irrelevant top-K.
     let hits = apply_answer_gate(hits, &query_vector, &vectors);
     if hits.is_empty() {
         return Ok(SearchResult {
@@ -228,13 +257,30 @@ pub fn search(
 }
 
 /// Maximal Marginal Relevance rerank (N1/OQ4). Greedy: repeatedly pick the
-/// candidate maximizing `lambda * relevance - (1 - lambda) * max_sim`, where
-/// `max_sim` is the candidate's largest cosine similarity to any already-picked
-/// chunk. Replaces the old `dedup_by_source_url`: diversity comes from vector
-/// dissimilarity, so multiple chunks from one URL survive when they cover
-/// distinct APIs. Candidates without a fetched vector fall back to score order,
-/// appended after the MMR-selected hits (should not happen post-S1).
+/// candidate maximizing `lambda * relevance - (1 - lambda) * max_sim -
+/// MMR_URL_PENALTY * same_url_selected`, where `relevance` is the
+/// query–candidate cosine similarity, `max_sim` is the candidate's largest
+/// cosine similarity to any already-picked chunk, and `same_url_selected`
+/// counts already-picked chunks sharing the candidate's `source_url`.
+/// Replaces the old `dedup_by_source_url`: diversity comes from vector
+/// dissimilarity plus a mild per-URL penalty, so multiple chunks from one URL
+/// survive when they cover distinct APIs but hub files cannot monopolize the
+/// top-K with many mutually-diverse chunks. Candidates without a fetched
+/// vector fall back to score order, appended after the MMR-selected hits
+/// (should not happen post-S1).
+///
+/// Relevance is the raw query–chunk COSINE (textbook MMR, Carbonell &
+/// Goldstein 1998: Sim1 = query–doc similarity), not the RRF score: with the
+/// default fusion constant k=60 the RRF scores across the candidate pool are
+/// nearly flat (rank 1 ≈ 1/61 vs rank 15 ≈ 1/75), so a score-based relevance
+/// term carried almost no signal and MMR ranking collapsed into the diversity
+/// term alone — dual-channel hub chunks floated above vector-only specific
+/// answers. Cosine relevance restored recall on the real Next.js corpus
+/// (see the quality-lift commit message for measurements). Cosines are used
+/// RAW (absolute similarities, not min-max normalized within the pool) so the
+/// relevance weight stays stable as the over-fetch pool size changes.
 pub fn mmr_rerank(
+    query_vector: &[f32],
     hits: Vec<SearchHit>,
     vectors: &HashMap<u32, Vec<f32>>,
     top_k: usize,
@@ -253,29 +299,21 @@ pub fn mmr_rerank(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    // Codex review fix: RRF scores (~0.01-0.03) and cosine similarity (0-1)
-    // are on very different scales, so the raw diversity term would dominate
-    // after the first pick. Normalize the RRF relevance scores of the vector
-    // pool to [0, 1] within this candidate set so lambda=0.7 actually means
-    // "relevance-leaning" rather than "diversity-leaning".
-    let min_score = pool
+    // Query–candidate cosine for every pooled hit, computed once. Used RAW
+    // (not min-max normalized): cosines are already absolute similarities in
+    // ~[0, 1], and normalizing within the pool made relevance unstable w.r.t.
+    // pool size — a larger over-fetch pool stretches the [min, max] range with
+    // low-cosine tail chunks and silently dilutes the relevance weight of
+    // every real candidate (measured regression: recall@5 dropped 0.80 -> 0.60
+    // when the pool grew 15 -> 40 under normalization).
+    let query_cos: HashMap<u32, f32> = pool
         .iter()
-        .map(|h| h.score)
-        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap_or(0.0);
-    let max_score = pool
-        .iter()
-        .map(|h| h.score)
-        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap_or(0.0);
-    let score_range = max_score - min_score;
-    let normalize_score = |s: f32| {
-        if score_range > 0.0 {
-            (s - min_score) / score_range
-        } else {
-            1.0
-        }
-    };
+        .filter_map(|h| {
+            vectors
+                .get(&h.chunk_idx)
+                .map(|v| (h.chunk_idx, cosine(query_vector, v)))
+        })
+        .collect();
 
     let mut selected: Vec<SearchHit> = Vec::with_capacity(top_k);
 
@@ -284,8 +322,12 @@ pub fn mmr_rerank(
         let mut best_score = f32::MIN;
         for (i, cand) in pool.iter().enumerate() {
             let max_sim = max_cosine_to_selected(cand, &selected, vectors);
-            let rel = normalize_score(cand.score);
-            let mmr = lambda * rel - (1.0 - lambda) * max_sim;
+            let rel = query_cos.get(&cand.chunk_idx).copied().unwrap_or(0.0);
+            let same_url = selected
+                .iter()
+                .filter(|s| s.source_url == cand.source_url)
+                .count() as f32;
+            let mmr = lambda * rel - (1.0 - lambda) * max_sim - MMR_URL_PENALTY * same_url;
             if mmr > best_score {
                 best_score = mmr;
                 best_i = i;
@@ -333,13 +375,16 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-/// Apply the no-answer gate (N4/OQ11, dual-signal redesign): return `Vec::new()`
-/// when there are no hits, when the top hit's cosine similarity to the query
-/// is below `MIN_ANSWER_COSINE` (primary signal), or when its RRF score is
-/// below `MIN_RELEVANCE_THRESHOLD` (secondary deep-noise filter). A top hit
-/// without a fetched vector is treated as cosine 0 (blocked) — MMR selects
-/// from the vector pool first, so this is defensive. Exposed (`pub`) so the
-/// gate is unit-testable without a full docset.
+/// Apply the no-answer gate (N4/OQ11, cosine redesign): return `Vec::new()`
+/// when there are no hits, unless the top hit clears EITHER answer signal:
+/// (1) its cosine similarity to the query is at least `MIN_ANSWER_COSINE`
+/// (semantic match), or (2) its RRF score reaches `DUAL_RANK1_RRF` — rank-1
+/// agreement between the BM25 and vector channels (exact-keyword + semantic
+/// agreement, which covers keyword-dense queries whose embeddings under-score).
+/// A top hit without a fetched vector is treated as cosine 0 (blocked unless
+/// the dual-rank-1 bypass applies) — MMR selects from the vector pool first,
+/// so this is defensive. Exposed (`pub`) so the gate is unit-testable without
+/// a full docset.
 pub fn apply_answer_gate(
     hits: Vec<SearchHit>,
     query_vector: &[f32],
@@ -353,7 +398,7 @@ pub fn apply_answer_gate(
         .get(&top.chunk_idx)
         .map(|v| cosine(query_vector, v))
         .unwrap_or(0.0);
-    if cosine_sim < MIN_ANSWER_COSINE || top.score < MIN_RELEVANCE_THRESHOLD {
+    if cosine_sim < MIN_ANSWER_COSINE && top.score < DUAL_RANK1_RRF {
         Vec::new()
     } else {
         hits

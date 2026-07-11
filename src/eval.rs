@@ -144,7 +144,7 @@ pub fn false_positive_rate(answered: &[bool]) -> f32 {
 /// Run negative (out-of-scope) queries against a docset and report how often
 /// the pipeline returned results anyway (M24). A query counts as "answered"
 /// when `retrieve::search` returns at least one chunk — i.e. its top hit
-/// cleared the N4 no-answer relevance gate (`MIN_RELEVANCE_THRESHOLD`).
+/// cleared the N4 no-answer cosine gate (`MIN_ANSWER_COSINE`).
 /// Ideally every negative query returns empty, so `false_positive_rate` is 0.
 pub fn evaluate_negatives(docset: &str, queries: &[String]) -> Result<NegativeReport> {
     let mut answered_flags = Vec::with_capacity(queries.len());
