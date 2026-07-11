@@ -265,10 +265,13 @@ pub fn search(
 
 /// Maximal Marginal Relevance rerank (N1/OQ4). Greedy: repeatedly pick the
 /// candidate maximizing `lambda * relevance - (1 - lambda) * max_sim -
-/// MMR_URL_PENALTY * same_url_selected`, where `relevance` is the
-/// query–candidate cosine similarity, `max_sim` is the candidate's largest
-/// cosine similarity to any already-picked chunk, and `same_url_selected`
-/// counts already-picked chunks sharing the candidate's `source_url`.
+/// (1 - lambda) * MMR_URL_PENALTY * same_url_selected`, where `relevance`
+/// is the query–candidate cosine similarity, `max_sim` is the candidate's
+/// largest cosine similarity to any already-picked chunk, and
+/// `same_url_selected` counts already-picked chunks sharing the candidate's
+/// `source_url`. The URL penalty is scaled by `(1 - lambda)` so it vanishes
+/// in pure-relevance mode (`lambda = 1.0`), keeping that mode's ordering
+/// strictly by query–cosine.
 /// Replaces the old `dedup_by_source_url`: diversity comes from vector
 /// dissimilarity plus a mild per-URL penalty, so multiple chunks from one URL
 /// survive when they cover distinct APIs but hub files cannot monopolize the
@@ -334,7 +337,9 @@ pub fn mmr_rerank(
                 .iter()
                 .filter(|s| s.source_url == cand.source_url)
                 .count() as f32;
-            let mmr = lambda * rel - (1.0 - lambda) * max_sim - MMR_URL_PENALTY * same_url;
+            let mmr = lambda * rel
+                - (1.0 - lambda) * max_sim
+                - (1.0 - lambda) * MMR_URL_PENALTY * same_url;
             if mmr > best_score {
                 best_score = mmr;
                 best_i = i;

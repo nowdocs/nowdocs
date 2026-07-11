@@ -216,6 +216,37 @@ fn test_mmr_lambda_1_equals_pure_relevance_ordering() {
 }
 
 #[test]
+fn test_mmr_lambda_1_url_penalty_vanishes() {
+    // Regression for Codex review: when lambda=1.0 (pure-relevance mode), the
+    // URL penalty must be zero. Without the (1-lambda) scaling, a higher-cosine
+    // same-URL chunk (h1) would be demoted below a lower-cosine cross-URL chunk
+    // (h2) after h0 is picked, because the URL penalty fired even in pure-
+    // relevance mode, making the diagnostic sweep misleading.
+    //
+    // Setup: h0 and h1 share "u0"; h2 is at "u1".
+    //   query-cosine: h0=1.0, h1=0.9, h2=0.8
+    // After picking h0, with correct (1-lambda)*penalty the second pick must be
+    // h1 (cos 0.9 > 0.8), NOT h2.
+    let hits = vec![
+        hit_url(0, "u0", 0.9),
+        hit_url(1, "u0", 0.8), // same URL as h0 — must NOT be penalised at lambda=1
+        hit_url(2, "u1", 0.7), // different URL, lower cosine
+    ];
+    let v = vecs(&[
+        (0, vec![1.0, 0.0, 0.0]),
+        (1, vec![0.9, 0.436, 0.0]), // cos≈0.9 with query
+        (2, vec![0.8, 0.6, 0.0]),   // cos≈0.8 with query
+    ]);
+    let out = mmr_rerank(&[1.0, 0.0, 0.0], hits, &v, 3, 1.0);
+    let ids: Vec<u32> = out.iter().map(|h| h.chunk_idx).collect();
+    assert_eq!(
+        ids,
+        vec![0, 1, 2],
+        "lambda=1.0: URL penalty must vanish; order must be by query-cosine: {ids:?}"
+    );
+}
+
+#[test]
 fn test_mmr_prefers_diverse_urls_when_scores_similar() {
     // Equal query-cosine relevance: after the first pick, MMR must prefer the
     // diverse chunk over a near-duplicate of the first. All three vectors are
@@ -265,21 +296,23 @@ fn test_mmr_relevance_is_query_cosine_not_rrf_score() {
 
 #[test]
 fn test_mmr_url_penalty_suppresses_hub_chunks_with_diverse_vectors() {
-    // Two chunks from one hub page with mutually DIVERSE vectors (vector
-    // diversity alone cannot suppress the second) vs a slightly less relevant
-    // chunk from another page: after the first hub chunk is picked, the
-    // source_url penalty must let the other page's chunk overtake the second
-    // hub chunk. Without the penalty the order would be [0, 1, 2].
+    // hub1 and other2 have IDENTICAL query-cosine (0.70) and IDENTICAL
+    // max-similarity to hub0 (also 0.70): the URL penalty
+    // ((1-lambda)*0.05 = 0.3*0.05 = 0.015 at lambda=0.7) is the ONLY
+    // tie-breaker, so other2 must be picked second over hub1.
     let hits = vec![
         hit_url(0, "hub.md", 0.9),
         hit_url(1, "hub.md", 0.8),
         hit_url(2, "other.md", 0.7),
     ];
     let v = vecs(&[
-        (0, vec![1.0, 0.0, 0.0]),       // query-aligned, cos 1.0
-        (1, vec![0.9, 0.43589, 0.0]),   // cos 0.9 to query, sim 0.9 to hub0
-        (2, vec![0.85, -0.52678, 0.0]), // cos 0.85 to query, sim 0.85 to hub0
+        (0, vec![1.0, 0.0, 0.0]),      // cos to query = 1.0
+        (1, vec![0.7, 0.71414, 0.0]),  // cos to query = 0.7, sim to hub0 = 0.7
+        (2, vec![0.7, -0.71414, 0.0]), // cos to query = 0.7, sim to hub0 = 0.7, diff URL
     ]);
+    // After picking hub0 (cos=1.0):
+    //   hub1:   mmr = 0.7*0.7 - 0.3*0.7 - 0.015*1 = 0.265
+    //   other2: mmr = 0.7*0.7 - 0.3*0.7 - 0       = 0.280  → wins
     let out = mmr_rerank(&[1.0, 0.0, 0.0], hits, &v, 3, 0.7);
     let ids: Vec<u32> = out.iter().map(|h| h.chunk_idx).collect();
     assert_eq!(ids[0], 0, "top-cosine hub chunk leads");
