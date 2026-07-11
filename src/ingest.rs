@@ -87,13 +87,12 @@ pub fn ingest_dir(dir: &Path, docset: &str, meta: &IngestMeta) -> Result<IngestS
         c.idx = i as u32;
     }
 
-    // Stash the source repo's LICENSE text (if present) so `nowdocs share` can
-    // carry the verbatim upstream license in the bundle. This is the ground
-    // truth — we copy what upstream ships, we do not regenerate text from the
-    // SPDX id. No LICENSE file → nothing stashed; share then emits NOTICE only.
-    if let Some(text) = find_license_text(dir) {
-        std::fs::write(cache::license_text_path(&docset), text)?;
-    }
+    // Read the source repo's LICENSE text (if present) WITHOUT publishing it
+    // yet. It is only written to the cache after the store+manifest update
+    // succeeds, so an embedder/validation failure preserves the previous
+    // license sidecar too (S4 fail-safe). We copy what upstream ships, we do
+    // not regenerate text from the SPDX id; no LICENSE file → nothing stashed.
+    let license_text = find_license_text(dir);
 
     // S4: compute the replacement vectors BEFORE wiping the active store, so an
     // embedder/model failure cannot turn a recoverable ingest into data loss.
@@ -105,7 +104,16 @@ pub fn ingest_dir(dir: &Path, docset: &str, meta: &IngestMeta) -> Result<IngestS
         embed_chunks(&chunks)
     };
 
-    ingest_chunks(&docset, meta, chunks, files, vectors)
+    let stats = ingest_chunks(&docset, meta, chunks, files, vectors)?;
+
+    // S4: publish the license sidecar only after the store+manifest succeed,
+    // so a failed ingest cannot pair the previous store/manifest with a new
+    // (or absent) license that `nowdocs share` would then carry.
+    if let Some(text) = license_text {
+        std::fs::write(cache::license_text_path(&docset), text)?;
+    }
+
+    Ok(stats)
 }
 
 /// Load the embedder and embed every chunk. Isolated so `ingest_dir` can compute

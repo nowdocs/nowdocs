@@ -291,3 +291,61 @@ fn ingest_manifest_write_is_atomic() {
     let m = manifest::parse_manifest(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
     manifest::validate(&m).unwrap();
 }
+
+// ---- A1.1 review (P2): license sidecar is published only on ingest success ----
+
+#[test]
+fn ingest_publishes_license_only_on_success() {
+    // A source dir that carries a LICENSE but no markdown still ingests (empty)
+    // and must publish the license sidecar on the success path.
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let src = tempfile::tempdir().unwrap();
+    fs::write(
+        src.path().join("LICENSE"),
+        "MIT License\n\nCopyright (c) Holder\n",
+    )
+    .unwrap();
+
+    ingest_dir(src.path(), "lic_ok", &IngestMeta::default()).unwrap();
+
+    let stashed = fs::read_to_string(cache::license_text_path("lic_ok")).unwrap();
+    assert_eq!(
+        stashed, "MIT License\n\nCopyright (c) Holder\n",
+        "successful ingest must publish the source LICENSE"
+    );
+}
+
+#[test]
+fn ingest_failed_validation_preserves_old_license() {
+    // Pre-stash an OLD license for an existing docset, then run an ingest that
+    // fails manifest validation (CC-BY-4.0 without attribution) against a source
+    // dir that ships a NEW license. The previous license sidecar must be
+    // preserved — the fail-safe that protects the store/manifest (S4) must cover
+    // the license too.
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    // Establish the docset (empty MIT ingest) and stash an OLD license.
+    let empty = tempfile::tempdir().unwrap();
+    ingest_dir(empty.path(), "lic_fail", &IngestMeta::default()).unwrap();
+    fs::write(cache::license_text_path("lic_fail"), "OLD LICENSE\n").unwrap();
+
+    // New source ships a different LICENSE but no markdown (embedder skipped);
+    // CC-BY-4.0 without attribution fails manifest validation before publish.
+    let src = tempfile::tempdir().unwrap();
+    fs::write(src.path().join("LICENSE"), "NEW LICENSE\n").unwrap();
+    let meta = IngestMeta {
+        license: "CC-BY-4.0".to_string(),
+        ..IngestMeta::default()
+    };
+    let err = ingest_dir(src.path(), "lic_fail", &meta);
+    assert!(err.is_err(), "CC-BY-4.0 without attribution must fail");
+
+    let stashed = fs::read_to_string(cache::license_text_path("lic_fail")).unwrap();
+    assert_eq!(
+        stashed, "OLD LICENSE\n",
+        "failed ingest must preserve the previous license sidecar"
+    );
+}

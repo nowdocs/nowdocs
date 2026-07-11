@@ -70,6 +70,29 @@ fn is_allowed_registry_url(url: &str) -> bool {
     }
 }
 
+/// Stricter gate for PACKAGE download URLs (catalog `download_url` and the
+/// install boundary). Unlike `is_allowed_registry_url` — which is also used to
+/// fetch the catalog index itself from a `/raw/` repo path — package artifacts
+/// must resolve to a GitHub Releases download (or `registry.nowdocs.dev`
+/// release), so a catalog entry cannot point install at an arbitrary
+/// raw/branch file and bypass the registry-release artifact contract.
+fn is_allowed_package_url(url: &str) -> bool {
+    if is_test_file_url(url) {
+        return is_test_mode();
+    }
+    let host = url_host(url);
+    let after_scheme = url.split("://").nth(1).unwrap_or(url);
+    let path = after_scheme.strip_prefix(host).unwrap_or(after_scheme);
+    match host {
+        "github.com" => {
+            (path.starts_with("/nowdocs-registry/") || path == "/nowdocs-registry")
+                && path.contains("/releases/")
+        }
+        "registry.nowdocs.dev" => path.starts_with("/releases/") || path == "/releases",
+        _ => false,
+    }
+}
+
 /// Licenses permitted in the registry catalog index (per plan schema, §U3 line 283).
 const ALLOWED_LICENSES: &[&str] = &["MIT", "Apache-2.0", "CC-BY-4.0"];
 
@@ -174,6 +197,10 @@ fn sha256_file(path: &Path) -> Result<String> {
 /// caller-supplied `file://` fixture — and bail with `ARCHIVE_SHA256_MISMATCH`.
 fn verify_archive_integrity(path: &Path, expected: &str, is_temp: bool) -> Result<()> {
     let actual = sha256_file(path)?;
+    // Catalog validation accepts uppercase hex (`is_ascii_hexdigit`) while
+    // `sha256_file` always emits lowercase, so normalize before comparing —
+    // otherwise an otherwise-valid uppercase catalog hash fails every install.
+    let expected = expected.to_ascii_lowercase();
     if actual != expected {
         if is_temp {
             let _ = std::fs::remove_file(path);
@@ -749,6 +776,16 @@ fn install_to_staging(docset: &str, url: &str, expected_sha256: Option<&str>) ->
     let staging_path = cache::new_staging_path(docset);
     std::fs::create_dir_all(&staging_path)?;
 
+    // OQ6/P1: package downloads must resolve to a release-artifact URL, so a
+    // catalog entry (or direct caller) cannot point install at an arbitrary
+    // raw/branch repo path. file:// test fixtures bypass this; the index fetch
+    // uses the broader is_allowed_registry_url instead.
+    if !is_test_file_url(url) && !is_allowed_package_url(url) {
+        anyhow::bail!(
+            "registry URL not in allowed domains: {url} (package downloads must be a release artifact: github.com/nowdocs-registry/<repo>/releases, registry.nowdocs.dev/releases)"
+        );
+    }
+
     let (archive_path, is_temp) = if is_test_file_url(url) {
         let path = url.strip_prefix("file://").unwrap();
         (PathBuf::from(path), false)
@@ -1248,7 +1285,11 @@ pub fn fetch_index_from(url: &str) -> Result<RegistryIndex> {
     // surfaced to users (plan §U3): allowed download host, allowed license,
     // and a valid 64-hex sha256 integrity value.
     for p in &idx.packages {
-        if !is_allowed_registry_url(&p.download_url) {
+        // Package downloads must be a release-artifact shape (not an arbitrary
+        // raw/branch repo path) so a catalog entry cannot bypass the
+        // registry-release contract. The index itself is fetched under the
+        // broader is_allowed_registry_url (it legitimately lives at /raw/).
+        if !is_allowed_package_url(&p.download_url) {
             anyhow::bail!(
                 "registry package {} has disallowed download_url: {}",
                 p.docset,
@@ -1434,5 +1475,53 @@ mod tests {
             "temp name must include a numeric timestamp, got: {}",
             parts[4]
         );
+    }
+
+    // --- OQ6/P1: package downloads must be release-artifact URLs ---
+
+    #[test]
+    fn package_url_accepts_github_release_download() {
+        assert!(is_allowed_package_url(
+            "https://github.com/nowdocs-registry/nextjs/releases/download/nextjs-14.2.5/nextjs.tar"
+        ));
+    }
+
+    #[test]
+    fn package_url_rejects_github_raw_branch_path() {
+        // A /raw/ branch file passes the broad index gate but must NOT pass the
+        // package gate — a catalog entry cannot point install at arbitrary repo
+        // content and bypass the registry-release contract.
+        assert!(!is_allowed_package_url(
+            "https://github.com/nowdocs-registry/evil/raw/main/evil.tar"
+        ));
+    }
+
+    #[test]
+    fn package_url_rejects_github_repo_path_without_releases() {
+        assert!(!is_allowed_package_url(
+            "https://github.com/nowdocs-registry/evil/some/path.tar"
+        ));
+    }
+
+    #[test]
+    fn index_gate_still_allows_github_raw_index_path() {
+        // The catalog index itself legitimately lives at a /raw/ repo path; the
+        // broad gate must keep admitting it so `fetch_index` keeps working.
+        assert!(is_allowed_registry_url(
+            "https://github.com/nowdocs-registry/registry-index/raw/main/index.json"
+        ));
+    }
+
+    // --- S2: sha256 compare is case-insensitive ---
+
+    #[test]
+    fn sha256_verify_is_case_insensitive() {
+        let path = std::env::temp_dir().join(download_temp_name("sha256-case"));
+        std::fs::write(&path, b"registry artifact bytes").unwrap();
+        let lower = sha256_hex(&std::fs::read(&path).unwrap());
+        let upper = lower.to_ascii_uppercase();
+        // Uppercase expected (as catalog validation permits) must still match.
+        verify_archive_integrity(&path, &upper, false).expect("uppercase sha256 must match");
+        let _ = std::fs::remove_file(&path);
     }
 }
