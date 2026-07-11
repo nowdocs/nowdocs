@@ -85,15 +85,23 @@ fn is_allowed_package_url(url: &str) -> bool {
     let path = after_scheme.strip_prefix(host).unwrap_or(after_scheme);
     match host {
         "github.com" => {
-            // Require the real GitHub Releases download shape:
-            //   /<repo>/releases/download/<tag>/<asset>
-            //   /<repo>/releases/latest/download/<asset>
-            // A raw/blob path that merely contains "/releases/" — e.g.
-            // /nowdocs-registry/foo/raw/main/releases/foo.tar — is a mutable
-            // branch file, not a release artifact, and must NOT pass.
-            (path.starts_with("/nowdocs-registry/") || path == "/nowdocs-registry")
-                && (path.contains("/releases/download/")
-                    || path.contains("/releases/latest/download/"))
+            // Anchor the release asset at the canonical GitHub Releases position
+            // (exactly 6 path segments) so a raw/blob path with extra segments
+            // before "releases" — e.g.
+            // /nowdocs-registry/foo/raw/main/releases/download/foo.tar — cannot
+            // pass merely because it contains "/releases/download/".
+            //   /nowdocs-registry/<repo>/releases/download/<tag>/<asset>
+            //   /nowdocs-registry/<repo>/releases/latest/download/<asset>
+            let seg: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+            match seg.as_slice() {
+                ["nowdocs-registry", repo, "releases", "download", tag, asset] => {
+                    !repo.is_empty() && !tag.is_empty() && !asset.is_empty()
+                }
+                ["nowdocs-registry", repo, "releases", "latest", "download", asset] => {
+                    !repo.is_empty() && !asset.is_empty()
+                }
+                _ => false,
+            }
         }
         "registry.nowdocs.dev" => path.starts_with("/releases/") || path == "/releases",
         _ => false,
@@ -777,11 +785,25 @@ fn acquire_install_lock(docset: &str) -> Result<InstallLock> {
             Ok(InstallLock { path })
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            let stale = std::fs::read_to_string(&path)
+            let stale = match std::fs::read_to_string(&path)
                 .ok()
                 .and_then(|s| s.trim().parse::<u64>().ok())
-                .map(|t| now.saturating_sub(t) >= 3600)
-                .unwrap_or(false);
+            {
+                Some(t) => now.saturating_sub(t) >= 3600,
+                None => {
+                    // Unreadable or truncated lock (e.g. a crash between
+                    // create_new and the timestamp write): fall back to the
+                    // file mtime, and if even that is unavailable treat the
+                    // lock as stale so a corrupt lockfile can never pin the
+                    // docset busy until manual cleanup.
+                    std::fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|mt| mt.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| now.saturating_sub(d.as_secs()) >= 3600)
+                        .unwrap_or(true)
+                }
+            };
             if stale {
                 let _ = std::fs::remove_file(&path);
                 let mut f = std::fs::OpenOptions::new()
@@ -1614,5 +1636,69 @@ mod tests {
             "directory entry must be skipped, file entry preserved"
         );
         assert_eq!(files[0].1, b"vec");
+    }
+
+    // --- OQ6/P2 (wave-4): release URL must be anchored at the canonical
+    // segment position, not merely contain "/releases/download/" ---
+
+    #[test]
+    fn package_url_rejects_github_raw_path_with_releases_download_segment() {
+        // Extra "/raw/main/" segments before "/releases/download/" — still a
+        // mutable branch file, must not pass even though it contains the
+        // "/releases/download/" substring.
+        assert!(!is_allowed_package_url(
+            "https://github.com/nowdocs-registry/foo/raw/main/releases/download/foo.tar"
+        ));
+        // Trailing segments beyond the asset are rejected too.
+        assert!(!is_allowed_package_url(
+            "https://github.com/nowdocs-registry/foo/releases/download/v1/x.tar/extra"
+        ));
+    }
+
+    // --- P2 (wave-4): a corrupt/truncated install lock must not pin a docset
+    // busy forever; unreadable content falls back to mtime age ---
+
+    #[test]
+    fn acquire_lock_treats_fresh_corrupt_lock_as_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+        let docset = "lock-corrupt-fresh";
+        std::fs::create_dir_all(cache::staging_root()).unwrap();
+        let lp = cache::staging_root().join(format!("{docset}.lock"));
+        // Non-numeric content but a fresh mtime → treated as busy (not stale).
+        std::fs::write(&lp, b"not-a-timestamp").unwrap();
+        let err = match acquire_install_lock(docset) {
+            Err(e) => e,
+            Ok(_) => panic!("fresh-mtime corrupt lock must be busy"),
+        };
+        assert!(
+            format!("{err}").contains("currently being installed"),
+            "must surface the busy-lock error"
+        );
+        let _ = std::fs::remove_file(&lp);
+    }
+
+    #[test]
+    fn acquire_lock_replaces_stale_corrupt_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+        let docset = "lock-corrupt-stale";
+        std::fs::create_dir_all(cache::staging_root()).unwrap();
+        let lp = cache::staging_root().join(format!("{docset}.lock"));
+        std::fs::write(&lp, b"not-a-timestamp").unwrap();
+        // Backdate mtime beyond the 1h staleness threshold.
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        let ft = std::fs::FileTimes::new().set_modified(old);
+        std::fs::File::options()
+            .write(true)
+            .open(&lp)
+            .unwrap()
+            .set_times(ft)
+            .unwrap();
+        let res = acquire_install_lock(docset);
+        assert!(
+            res.is_ok(),
+            "stale corrupt lock must be replaced and acquired"
+        );
     }
 }
