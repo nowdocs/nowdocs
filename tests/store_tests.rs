@@ -207,7 +207,7 @@ fn test_fetch_vectors_returns_correct_vectors() {
     for (a, b) in v2.iter().zip(vectors[2].iter()) {
         assert!((a - b).abs() < 1e-3, "vector[2] mismatch: {a} vs {b}");
     }
-    assert!(fetched.get(&1).is_none(), "unrequested id must be absent");
+    assert!(!fetched.contains_key(&1), "unrequested id must be absent");
 }
 
 #[test]
