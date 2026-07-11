@@ -273,6 +273,32 @@ fn test_mmr_with_missing_vector_falls_back_to_score_order() {
     );
 }
 
+#[test]
+fn test_mmr_normalizes_scores_to_avoid_over_penalizing_near_duplicates() {
+    // Codex review case: a highly relevant near-duplicate should not be pushed
+    // below a much lower-ranked orthogonal chunk just because raw RRF scores
+    // are tiny compared to cosine values. Normalization puts relevance and
+    // diversity on the same scale.
+    let hits = vec![
+        hit_url(0, "u0", 0.030), // top hit
+        hit_url(1, "u1", 0.029), // almost as relevant, near-duplicate vector
+        hit_url(2, "u2", 0.016), // lower ranked, orthogonal vector
+    ];
+    let v = vecs(&[
+        (0, vec![1.0, 0.0, 0.0]),
+        (1, vec![0.99, 0.01, 0.0]), // near-duplicate of 0
+        (2, vec![0.0, 1.0, 0.0]),   // orthogonal
+    ]);
+    let out = mmr_rerank(hits, &v, 3, 0.7);
+    let ids: Vec<u32> = out.iter().map(|h| h.chunk_idx).collect();
+    assert_eq!(ids[0], 0, "top hit leads");
+    assert_eq!(
+        ids[1], 1,
+        "normalization must keep the relevant near-duplicate ahead of the low-ranked orthogonal chunk, got {ids:?}"
+    );
+    assert_eq!(ids[2], 2);
+}
+
 // --- A1.2 N4: no-answer relevance threshold ---
 
 use nowdocs::retrieve::{apply_relevance_gate, MIN_RELEVANCE_THRESHOLD};

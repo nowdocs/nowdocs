@@ -1,5 +1,5 @@
 use nowdocs::embedder::{Embedder, EmbedderSpec};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 // S0 provenance constants (pinned for reproducibility)
 const S0_MODEL_ID: &str = "jinaai/jina-embeddings-v2-small-en";
@@ -172,8 +172,8 @@ fn test_load_for_returns_cached_embedder_on_second_call() {
     let e1 = Embedder::load_for(&spec).expect("first load");
     let e2 = Embedder::load_for(&spec).expect("second load");
     assert!(
-        Arc::ptr_eq(&e1, &e2),
-        "second load_for must return the cached Arc (no model reload)"
+        e1.same_cache_instance(&e2),
+        "second load_for must return the cached instance (no model reload)"
     );
 }
 

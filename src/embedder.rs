@@ -35,19 +35,29 @@ pub struct EmbedderSpec {
     pub model_sha256: String,
 }
 
-pub struct Embedder {
+struct Inner {
     model: BertModel,
     tokenizer: Tokenizer,
 }
 
+/// Public embedder handle. Internally `Arc`-backed so the frozen
+/// `load() -> Result<Self>` signature can coexist with the process-level cache
+/// (N3): repeated loads for the same spec clone the same underlying model/tokenizer
+/// instead of reloading the ~66 MB weights. Clone is cheap.
+#[derive(Clone)]
+pub struct Embedder {
+    inner: Arc<Inner>,
+}
+
 /// Process-level embedder cache (N3): a model (~66 MB weights + tokenizer +
 /// tokio runtime) is loaded at most once per `EmbedderSpec` and then shared via
-/// `Arc`. The MCP `serve` loop warms the default entry at startup; CLI commands
-/// populate it lazily on the first search. Failed loads are never inserted, so a
-/// transient error (e.g. sha256 mismatch) does not poison the cache.
-static EMBEDDER_CACHE: OnceLock<Mutex<HashMap<EmbedderSpec, Arc<Embedder>>>> = OnceLock::new();
+/// cheap clones of the `Embedder` handle. The MCP `serve` loop warms the default
+/// entry at startup; CLI commands populate it lazily on the first search. Failed
+/// loads are never inserted, so a transient error (e.g. sha256 mismatch) does not
+/// poison the cache.
+static EMBEDDER_CACHE: OnceLock<Mutex<HashMap<EmbedderSpec, Embedder>>> = OnceLock::new();
 
-fn embedder_cache() -> &'static Mutex<HashMap<EmbedderSpec, Arc<Embedder>>> {
+fn embedder_cache() -> &'static Mutex<HashMap<EmbedderSpec, Embedder>> {
     EMBEDDER_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -69,9 +79,12 @@ pub(crate) fn cap_to_max_position(ids: &[u32]) -> &[u32] {
 }
 
 impl Embedder {
-    /// Load the default embedder with pinned revision + sha256, returning a
-    /// process-shared `Arc` (N3 cache).
-    pub fn load() -> Result<Arc<Embedder>> {
+    /// Load the default embedder with pinned revision + sha256.
+    ///
+    /// The returned `Embedder` is a cheap handle; if the same spec has already
+    /// been loaded in this process, the underlying model/tokenizer are shared
+    /// through the internal cache (N3).
+    pub fn load() -> Result<Self> {
         let spec = EmbedderSpec {
             model_id: DEFAULT_MODEL_ID.to_string(),
             model_revision: DEFAULT_REVISION.to_string(),
@@ -85,20 +98,22 @@ impl Embedder {
     /// sanitizes the config, builds the candle model, and inserts it into the
     /// cache. Failed loads are not cached, so a transient error (e.g. a sha256
     /// mismatch) does not poison subsequent loads.
-    pub fn load_for(spec: &EmbedderSpec) -> Result<Arc<Embedder>> {
+    pub fn load_for(spec: &EmbedderSpec) -> Result<Self> {
         if let Some(hit) = embedder_cache().lock().unwrap().get(spec).cloned() {
             return Ok(hit);
         }
         let loaded = Self::load_uncached(spec)?;
-        let arc = Arc::new(loaded);
+        let handle = Embedder {
+            inner: Arc::new(loaded),
+        };
         embedder_cache()
             .lock()
             .unwrap()
-            .insert(spec.clone(), Arc::clone(&arc));
-        Ok(arc)
+            .insert(spec.clone(), handle.clone());
+        Ok(handle)
     }
 
-    fn load_uncached(spec: &EmbedderSpec) -> Result<Embedder> {
+    fn load_uncached(spec: &EmbedderSpec) -> Result<Inner> {
         // Route the hf-hub cache under the nowdocs cache layout by passing the
         // cache dir straight to the builder (M13). This avoids mutating any
         // process-wide downloader env var (load runs inside a tokio runtime) and
@@ -178,11 +193,12 @@ impl Embedder {
         let tokenizer =
             Tokenizer::from_file(tok_path).map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
 
-        Ok(Self { model, tokenizer })
+        Ok(Inner { model, tokenizer })
     }
 
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let enc = self
+            .inner
             .tokenizer
             .encode(text, true)
             .map_err(|e| anyhow::anyhow!("encode: {e}"))?;
@@ -196,7 +212,7 @@ impl Embedder {
             .reshape((1, ids.len()))?
             .to_dtype(DType::I64)?;
 
-        let out = self.model.forward(&input).context("forward")?;
+        let out = self.inner.model.forward(&input).context("forward")?;
         let pooled = out.mean(1).context("mean pool")?;
         let v = pooled
             .squeeze(0)
@@ -204,6 +220,13 @@ impl Embedder {
             .to_vec1::<f32>()
             .context("to_vec1")?;
         Ok(v)
+    }
+
+    /// True when both handles point to the same cached model instance.
+    /// Exposed primarily so integration tests can verify the N3 cache without
+    /// reaching into private fields.
+    pub fn same_cache_instance(&self, other: &Embedder) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
 }
 

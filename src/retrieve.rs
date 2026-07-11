@@ -18,8 +18,14 @@ const MMR_LAMBDA: f32 = 0.7;
 /// Minimum top-hit relevance to return any results (N4/OQ11). If the best hit
 /// is below this floor the docset is treated as having no answer and `search`
 /// returns empty rather than the irrelevant top-K.
-// TODO(A1.3): calibrate threshold against real eval data (placeholder).
-pub const MIN_RELEVANCE_THRESHOLD: f32 = 0.01;
+///
+/// The default RRF fusion constant is `k=60`, i.e. `score = 1/(rank + 60)`. For
+/// any non-empty candidate set the top fused score is therefore at least
+/// `1/61 ≈ 0.0164`. A placeholder below that floor (e.g. 0.01) would pass every
+/// query, so this value is set just above the floor at 0.02. Calibrating it
+/// properly against real Next.js eval data is still deferred to A1.3.
+// TODO(A1.3): calibrate threshold against real eval data.
+pub const MIN_RELEVANCE_THRESHOLD: f32 = 0.02;
 
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -153,6 +159,30 @@ pub fn mmr_rerank(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    // Codex review fix: RRF scores (~0.01-0.03) and cosine similarity (0-1)
+    // are on very different scales, so the raw diversity term would dominate
+    // after the first pick. Normalize the RRF relevance scores of the vector
+    // pool to [0, 1] within this candidate set so lambda=0.7 actually means
+    // "relevance-leaning" rather than "diversity-leaning".
+    let min_score = pool
+        .iter()
+        .map(|h| h.score)
+        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap_or(0.0);
+    let max_score = pool
+        .iter()
+        .map(|h| h.score)
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap_or(0.0);
+    let score_range = max_score - min_score;
+    let normalize_score = |s: f32| {
+        if score_range > 0.0 {
+            (s - min_score) / score_range
+        } else {
+            1.0
+        }
+    };
+
     let mut selected: Vec<SearchHit> = Vec::with_capacity(top_k);
 
     while selected.len() < top_k && !pool.is_empty() {
@@ -160,7 +190,8 @@ pub fn mmr_rerank(
         let mut best_score = f32::MIN;
         for (i, cand) in pool.iter().enumerate() {
             let max_sim = max_cosine_to_selected(cand, &selected, vectors);
-            let mmr = lambda * cand.score - (1.0 - lambda) * max_sim;
+            let rel = normalize_score(cand.score);
+            let mmr = lambda * rel - (1.0 - lambda) * max_sim;
             if mmr > best_score {
                 best_score = mmr;
                 best_i = i;

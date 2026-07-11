@@ -281,7 +281,8 @@ fn is_code_boundary(line: &str) -> bool {
 }
 
 /// Break the inner code body into pieces at function boundaries if possible,
-/// otherwise into 100-line windows, guaranteeing each piece fits `budget`.
+/// otherwise by token-budget line packing. Every returned piece is guaranteed
+/// to fit `budget` (Codex review fix: no unbounded fixed-size windows).
 fn inner_pieces(inner: &[&str], budget: usize) -> Vec<String> {
     let boundaries: Vec<usize> = inner
         .iter()
@@ -311,19 +312,62 @@ fn inner_pieces(inner: &[&str], budget: usize) -> Vec<String> {
         if count_tokens(&joined) <= budget {
             pieces.push(joined);
         } else {
-            for win in seg.chunks(100) {
-                let w = win.join("\n");
-                if count_tokens(&w) <= budget {
-                    pieces.push(w);
-                } else {
-                    for win2 in win.chunks(20) {
-                        pieces.push(win2.join("\n"));
-                    }
-                }
-            }
+            // Fall back to token-budget line packing so every emitted piece
+            // is guaranteed to fit `budget` (Codex review fix).
+            pieces.extend(pack_lines_to_budget(seg, budget));
         }
     }
     pieces
+}
+
+/// Greedily pack lines into pieces each ≤ `budget` tokens. If a single line
+/// itself exceeds `budget`, it is hard-split by characters as a last resort
+/// (handles minified/generated code).
+fn pack_lines_to_budget(lines: &[&str], budget: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    for line in lines {
+        if count_tokens(line) > budget {
+            // Flush what we have, then split the oversized line itself.
+            if !buf.is_empty() {
+                out.push(std::mem::take(&mut buf));
+            }
+            out.extend(split_line_to_budget(line, budget));
+            continue;
+        }
+        let candidate = if buf.is_empty() {
+            line.to_string()
+        } else {
+            format!("{buf}\n{line}")
+        };
+        if !buf.is_empty() && count_tokens(&candidate) > budget {
+            out.push(std::mem::take(&mut buf));
+            buf = line.to_string();
+        } else {
+            buf = candidate;
+        }
+    }
+    if !buf.is_empty() {
+        out.push(buf);
+    }
+    out
+}
+
+/// Hard-split a single over-long line by characters so each piece is ≤ `budget`
+/// tokens. Last resort for minified/generated code.
+fn split_line_to_budget(line: &str, budget: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for c in line.chars() {
+        cur.push(c);
+        if count_tokens(&cur) >= budget {
+            out.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
 }
 
 /// Greedily pack consecutive pieces into the largest sub-chunks that still fit

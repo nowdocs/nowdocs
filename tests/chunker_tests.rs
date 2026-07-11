@@ -233,3 +233,67 @@ fn heading_stack_skips_levels_without_panic() {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn chunker_splits_oversized_code_without_function_boundaries() {
+    // Codex review case: oversized code with NO function boundaries must still
+    // be split so every sub-chunk is ≤ max_tokens (fixed-size windows were not
+    // enough for minified/long-line content).
+    let cfg = default_config();
+    let mut code = String::from("```\n");
+    // 500 identical short lines — no fn/def/class boundaries.
+    for _ in 0..500 {
+        code.push_str("let x = 42; // a line\n");
+    }
+    code.push_str("```\n");
+    let md = format!("# Plain\n\n{code}\n");
+
+    let chunks = chunk_markdown(&md, &cfg);
+    let code_chunks: Vec<_> = chunks
+        .iter()
+        .filter(|c| c.chunk_type == ChunkType::Code)
+        .collect();
+    assert!(
+        code_chunks.len() > 1,
+        "oversized plain code must be split, got {}",
+        code_chunks.len()
+    );
+    for c in &code_chunks {
+        let n = count_tokens(&c.text);
+        assert!(
+            n <= cfg.max_tokens as usize,
+            "plain-code sub-chunk {} exceeds max_tokens ({} > {})",
+            c.idx,
+            n,
+            cfg.max_tokens
+        );
+    }
+}
+
+#[test]
+fn chunker_hard_splits_single_oversized_line() {
+    // Pathological case: one extremely long line inside a code block.
+    let cfg = default_config();
+    let mut code = String::from("```\n");
+    // A single line with many tokens, well over max.
+    code.push_str(&"x ".repeat(2000));
+    code.push_str("\n```\n");
+    let md = format!("# Long\n\n{code}\n");
+
+    let chunks = chunk_markdown(&md, &cfg);
+    let code_chunks: Vec<_> = chunks
+        .iter()
+        .filter(|c| c.chunk_type == ChunkType::Code)
+        .collect();
+    assert!(
+        !code_chunks.is_empty(),
+        "long-line code must still produce chunks"
+    );
+    for c in &code_chunks {
+        assert!(
+            count_tokens(&c.text) <= cfg.max_tokens as usize,
+            "long-line sub-chunk {} exceeds max_tokens",
+            c.idx
+        );
+    }
+}
