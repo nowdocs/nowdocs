@@ -148,6 +148,9 @@ pub fn run_default_checks() -> DoctorOutput {
     // Check for stale staging directories
     checks.push(check_stale_staging());
 
+    // Check curl is available for registry downloads (OQ6)
+    checks.push(check_curl());
+
     // Check model cache status (M15)
     checks.extend(run_model_check().checks);
 
@@ -419,6 +422,13 @@ pub fn run_mcp_check() -> DoctorOutput {
     }
 }
 
+/// Pre-warm hint appended to install/update output and shown by the
+/// missing-model check (N5 / A1.3). Pre-downloading the ~66 MB embedder keeps
+/// the first `nowdocs_search` from stalling long enough to hit MCP client
+/// timeouts. Single source of truth shared by the CLI and doctor.
+pub const MODEL_PREWARM_HINT: &str =
+    "tip: run 'nowdocs doctor --model' to pre-download the embedding model";
+
 /// Run model cache check.
 pub fn run_model_check() -> DoctorOutput {
     let mut checks = Vec::new();
@@ -438,7 +448,7 @@ pub fn run_model_check() -> DoctorOutput {
             id: "model-cache-exists".to_string(),
             severity: Severity::Warn,
             message: "Model cache not found".to_string(),
-            remediation: Some("Model will be downloaded on first use".to_string()),
+            remediation: Some(MODEL_PREWARM_HINT.to_string()),
         });
     }
 
@@ -446,6 +456,40 @@ pub fn run_model_check() -> DoctorOutput {
         status: aggregate_status(&checks),
         checks,
         metrics: DoctorMetrics::default(),
+    }
+}
+
+/// Pre-download the embedder model (`nowdocs doctor --model`).
+///
+/// Unlike [`run_model_check`] (read-only status), this intentionally performs
+/// the ~66 MB download: it is the pre-warm path that install/update output and
+/// the missing-model hint point users at (N5), so the first `nowdocs_search`
+/// doesn't stall. On success the model is downloaded, sha256-verified, and
+/// loaded; on failure the check is `Fail` with the error chain as remediation.
+pub fn run_model_prewarm() -> DoctorOutput {
+    let model_id = "jinaai/jina-embeddings-v2-small-en";
+    let checks = match crate::embedder::Embedder::load() {
+        Ok(_) => vec![Check {
+            id: "model-prewarm".to_string(),
+            severity: Severity::Ok,
+            message: format!(
+                "Embedding model {model_id} is cached and loadable at {}",
+                cache::model_path(model_id).display()
+            ),
+            remediation: None,
+        }],
+        Err(e) => vec![Check {
+            id: "model-prewarm".to_string(),
+            severity: Severity::Fail,
+            message: format!("Failed to pre-download embedding model {model_id}"),
+            remediation: Some(format!("{e:#}")),
+        }],
+    };
+
+    DoctorOutput {
+        status: aggregate_status(&checks),
+        checks,
+        metrics: DoctorMetrics::collect(),
     }
 }
 
@@ -685,5 +729,62 @@ fn check_stale_staging() -> Check {
             message: format!("Cannot check staging directories: {}", e),
             remediation: None,
         },
+    }
+}
+
+/// OQ6: registry downloads go through `curl`, so doctor verifies it is on PATH.
+fn check_curl() -> Check {
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    if is_curl_available_in_path(&path_var) {
+        Check {
+            id: "curl-available".to_string(),
+            severity: Severity::Ok,
+            message: "curl is available on PATH".to_string(),
+            remediation: None,
+        }
+    } else {
+        Check {
+            id: "curl-available".to_string(),
+            severity: Severity::Warn,
+            message: "curl not found on PATH".to_string(),
+            remediation: Some("install curl for registry downloads".to_string()),
+        }
+    }
+}
+
+/// OQ6: whether `curl` resolves as an executable on the given PATH string
+/// (`:`-separated). Split out from [`check_curl`] so tests can mock PATH.
+pub fn is_curl_available_in_path(path_var: &str) -> bool {
+    if path_var.is_empty() {
+        return false;
+    }
+    for dir in path_var.split(':') {
+        if dir.is_empty() {
+            continue;
+        }
+        let candidate = std::path::Path::new(dir).join("curl");
+        if is_executable_file(&candidate) {
+            return true;
+        }
+        #[cfg(windows)]
+        if is_executable_file(&candidate.with_extension("exe")) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_executable_file(path: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match path.metadata() {
+            Ok(m) => m.is_file() && (m.permissions().mode() & 0o111) != 0,
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
     }
 }

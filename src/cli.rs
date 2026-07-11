@@ -86,7 +86,7 @@ pub enum Commands {
         /// Run MCP smoke test (in-process, no network)
         #[arg(long)]
         mcp: bool,
-        /// Check model cache state
+        /// Check model cache state, pre-downloading the embedder if missing (N5)
         #[arg(long)]
         model: bool,
         /// Repair mode: remove stale staging dirs (safe, non-destructive)

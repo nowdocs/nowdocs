@@ -308,3 +308,79 @@ fn test_doctor_metrics_report_docset_row_counts() {
     );
     assert_eq!(ds.state, "ok", "healthy docset must report state 'ok'");
 }
+
+// N5: when the model is missing, doctor must point at the pre-warm command.
+#[test]
+fn doctor_suggests_model_download_when_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let output = doctor::run_model_check();
+    let model_check = output
+        .checks
+        .iter()
+        .find(|c| c.id == "model-cache-exists")
+        .expect("model-cache-exists check present");
+    let remediation = model_check
+        .remediation
+        .as_deref()
+        .expect("missing model must carry a remediation hint");
+    assert!(
+        remediation.contains("doctor --model"),
+        "remediation must suggest `nowdocs doctor --model`, got: {remediation}"
+    );
+}
+
+// N5: install success output prints the shared pre-warm hint; it must tell the
+// user to pre-download the model via `nowdocs doctor --model`.
+#[test]
+fn install_output_contains_model_prewarm_hint() {
+    let hint = doctor::MODEL_PREWARM_HINT;
+    assert!(
+        hint.contains("doctor --model"),
+        "hint must mention doctor --model, got: {hint}"
+    );
+    assert!(
+        hint.contains("pre-download"),
+        "hint must say pre-download, got: {hint}"
+    );
+}
+
+// OQ6: curl availability is detected from a (mocked) PATH.
+#[test]
+fn doctor_warns_when_curl_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_str().unwrap();
+
+    // PATH with no curl in it -> unavailable (doctor would Warn).
+    assert!(
+        !doctor::is_curl_available_in_path(path),
+        "PATH without curl must report unavailable"
+    );
+
+    // Plant an executable `curl` -> resolves.
+    let curl = dir.path().join("curl");
+    std::fs::write(&curl, "#!/bin/sh\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    assert!(
+        doctor::is_curl_available_in_path(path),
+        "PATH with an executable curl must report available"
+    );
+}
+
+// OQ6: default checks include the curl availability check.
+#[test]
+fn doctor_default_includes_curl_check() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+
+    let output = doctor::run_default_checks();
+    assert!(
+        output.checks.iter().any(|c| c.id == "curl-available"),
+        "default checks must include curl-available check"
+    );
+}
