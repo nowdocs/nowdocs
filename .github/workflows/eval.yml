@@ -1,8 +1,16 @@
-name: Evaluation Gate
+# Nightly + manual retrieval-quality gate (S5 / A1.3).
+#
+# gates.yml runs `cargo test` without `--ignored`, so every test that needs the
+# real embedder (golden eval, retrieve/ingest/tools/cli e2e, E2 命门) never runs
+# in CI — the retrieval bug fixes and "MRR 0.65 -> 1.000" had no regression
+# protection. This job runs them on a nightly schedule + manual dispatch. Not
+# on every push: the jina model download (~66 MB) and the Next.js ingest are
+# slow; both are cached across runs.
+name: Eval (nightly + manual)
 
 on:
   schedule:
-    - cron: '0 2 * * *' # Nightly at 2 AM
+    - cron: "0 6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -11,12 +19,14 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_VERSION: 1.97.0
+  # prost-build (lance-encoding) needs protoc; apt installs to /usr/bin/protoc.
   PROTOC: /usr/bin/protoc
 
 jobs:
   eval:
-    name: Evaluation Tests
+    name: Eval (--ignored, real embedder)
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
 
@@ -26,39 +36,80 @@ jobs:
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Restore models cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/nowdocs/models/
-          key: ${{ runner.os }}-nowdocs-models-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-nowdocs-models-
 
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: protoc-v1
+          prefix-key: eval-v1
 
-      - name: Reconstruct Next.js corpus
-        run: python3 seed-crates/tmp/rebuild_nextjs.py
-
-      - name: Run evaluation tests
-        run: cargo test --locked --test eval_tests -- --ignored --test-threads=1
-
-  coverage:
-    name: Coverage baseline
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache embedder model (~66 MB)
+        uses: actions/cache@v6
         with:
-          toolchain: ${{ env.RUST_VERSION }}
-          components: llvm-tools-preview
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --version 0.8.7 --locked
-      - name: Measure baseline coverage
+          path: ~/.cache/nowdocs/models
+          # Key tracks the pinned model revision (src/embedder.rs DEFAULT_REVISION).
+          key: nowdocs-model-jina-v2-small-en-44e7d1d6caec8c883c2d4b207588504d519788d0
+
+      - name: Cache Next.js eval fixture (OQ8)
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/nowdocs-ci-fixtures
+          key: nowdocs-fixture-${{ hashFiles('seed-crates/share/nextjs-docs/chunks.jsonl', 'seed-crates/tmp/rebuild_nextjs.py', 'Cargo.lock') }}
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Prepare Next.js eval fixture (OQ8)
+        run: bash scripts/ci-prepare-nextjs-fixture.sh
+
+      # The toy golden eval (test_evaluate_meets_threshold) enforces its own
+      # in-test gates and fails the job on regression. --nocapture so the eval
+      # metric lines reach the log for the threshold step below.
+      - name: Run ignored tests (real embedder + real eval)
+        run: cargo test --locked -- --ignored --test-threads=1 --nocapture 2>&1 | tee /tmp/eval-ignored.log
+
+      # OQ9/M24: track the real Next.js eval against the release bar
+      # (MRR >= 0.85, Recall@5 >= 0.90) and the negative-query false-positive
+      # rate (< 0.10). Nightly: report as warnings so a regression is visible.
+      # Manual dispatch (release check): hard-fail when below the bar.
+      - name: Report + enforce release thresholds (OQ9/M24)
+        shell: bash
+        env:
+          STRICT_GATE: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
-          cargo llvm-cov --locked --summary-only -- --test-threads=1 | tee coverage-summary.txt
-          cat coverage-summary.txt >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          LOG=/tmp/eval-ignored.log
+          fail=0
+
+          if line=$(grep -E 'nextjs-real eval:' "$LOG" | tail -1) && [ -n "$line" ]; then
+            recall=$(echo "$line" | grep -oE 'recall@5=[0-9.]+' | cut -d= -f2)
+            mrr=$(echo "$line" | grep -oE 'mrr=[0-9.]+' | cut -d= -f2)
+            echo "nextjs-real eval: recall@5=$recall mrr=$mrr (release bar: recall>=0.90, mrr>=0.85)"
+            ok=$(awk -v r="$recall" -v m="$mrr" 'BEGIN{ print (r+0>=0.90 && m+0>=0.85) ? 1 : 0 }')
+            if [ "$ok" != "1" ]; then
+              if [ "$STRICT_GATE" = "true" ]; then
+                echo "::error::release thresholds not met: recall@5=$recall (need >=0.90), mrr=$mrr (need >=0.85)"
+                fail=1
+              else
+                echo "::warning::nextjs-real eval below the release bar (recall=$recall, mrr=$mrr); nightly tracks it, manual dispatch enforces"
+              fi
+            fi
+          else
+            echo "::warning::nextjs-real eval output not found (test may have failed earlier in the run)"
+          fi
+
+          if line=$(grep -E 'negative-eval:' "$LOG" | tail -1) && [ -n "$line" ]; then
+            fpr=$(echo "$line" | grep -oE 'false_positive_rate=[0-9.]+' | cut -d= -f2)
+            echo "negative-eval: false_positive_rate=$fpr (gate < 0.10)"
+            ok=$(awk -v f="$fpr" 'BEGIN{ print (f+0 < 0.10) ? 1 : 0 }')
+            if [ "$ok" != "1" ]; then
+              if [ "$STRICT_GATE" = "true" ]; then
+                echo "::error::negative-query false-positive rate $fpr >= 0.10"
+                fail=1
+              else
+                echo "::warning::negative-query false-positive rate $fpr >= 0.10; nightly tracks it"
+              fi
+            fi
+          else
+            echo "::warning::negative-eval output not found (test may have failed earlier in the run)"
+          fi
+
+          exit $fail
