@@ -34,14 +34,9 @@ fn chunks_are_sequentially_indexed_from_zero() {
 }
 
 #[test]
-fn fenced_code_block_stays_in_one_chunk_even_when_over_target() {
-    let cfg = default_config(); // target 384, max 512
-                                // Build a code block well over target_tokens (384) but each line short.
-    let mut code = String::from("```rust\n");
-    for _ in 0..500 {
-        code.push_str("let x = 42; // a line\n");
-    }
-    code.push_str("```\n");
+fn chunker_splits_oversized_code_block() {
+    let cfg = default_config(); // max 512
+    let code = big_rust_block(); // well over max_tokens
     let md = format!("# Code Section\n\n{code}\n");
 
     let chunks = chunk_markdown(&md, &cfg);
@@ -50,21 +45,91 @@ fn fenced_code_block_stays_in_one_chunk_even_when_over_target() {
         .filter(|c| c.chunk_type == ChunkType::Code)
         .collect();
 
-    assert_eq!(
-        code_chunks.len(),
-        1,
-        "fenced code block must stay in ONE chunk, got {}: {:?}",
-        code_chunks.len(),
-        code_chunks.iter().map(|c| c.idx).collect::<Vec<_>>()
-    );
-    // And it legitimately exceeds target_tokens (proving it wasn't split to fit).
-    let code_text_tokens = count_tokens(&code_chunks[0].text);
     assert!(
-        code_text_tokens > cfg.target_tokens as usize,
-        "code chunk should exceed target ({}), got {}",
-        cfg.target_tokens,
-        code_text_tokens
+        code_chunks.len() > 1,
+        "oversized code block must be split into multiple chunks, got {}",
+        code_chunks.len()
     );
+    for c in &code_chunks {
+        let n = count_tokens(&c.text);
+        assert!(
+            n <= cfg.max_tokens as usize,
+            "code sub-chunk {} exceeds max_tokens ({} > {})",
+            c.idx,
+            n,
+            cfg.max_tokens
+        );
+    }
+}
+
+#[test]
+fn chunker_preserves_fence_markers_on_split() {
+    let cfg = default_config();
+    let code = big_rust_block();
+    let md = format!("# Code Section\n\n{code}\n");
+
+    let chunks = chunk_markdown(&md, &cfg);
+    let code_chunks: Vec<_> = chunks
+        .iter()
+        .filter(|c| c.chunk_type == ChunkType::Code)
+        .collect();
+
+    assert!(
+        code_chunks.len() > 1,
+        "expected split to test fence preservation, got {}",
+        code_chunks.len()
+    );
+    for c in &code_chunks {
+        let prefix = format!("## {}\n\n", c.heading_path);
+        let body = c.text.strip_prefix(&prefix).unwrap_or(&c.text);
+        assert!(
+            body.trim_start().starts_with("```"),
+            "sub-chunk {} must start with opening fence, got: {:?}",
+            c.idx,
+            &body[..body.len().min(40)]
+        );
+        assert!(
+            body.contains("\n```"),
+            "sub-chunk {} must contain a closing fence",
+            c.idx
+        );
+    }
+}
+
+#[test]
+fn chunker_appends_part_suffix_on_split() {
+    let cfg = default_config();
+    let code = big_rust_block();
+    let md = format!("# Code Section\n\n{code}\n");
+
+    let chunks = chunk_markdown(&md, &cfg);
+    let code_chunks: Vec<_> = chunks
+        .iter()
+        .filter(|c| c.chunk_type == ChunkType::Code)
+        .collect();
+
+    assert!(code_chunks.len() > 1, "expected split to test part suffix");
+    for (i, c) in code_chunks.iter().enumerate() {
+        let expected = format!("Code Section (part {})", i + 1);
+        assert_eq!(
+            c.heading_path, expected,
+            "sub-chunk heading must carry part suffix"
+        );
+    }
+}
+
+fn big_rust_block() -> String {
+    // Many small functions so the chunker can split on `fn ` boundaries.
+    let mut code = String::from("```rust\n");
+    for f in 0..60 {
+        code.push_str(&format!("fn func_{f}() {{\n"));
+        for _ in 0..12 {
+            code.push_str("    let value = 42; // compute something here\n");
+        }
+        code.push_str("}\n\n");
+    }
+    code.push_str("```\n");
+    code
 }
 
 #[test]
