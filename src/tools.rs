@@ -65,18 +65,12 @@ impl ToolError {
 /// `DocsetNotInstalled` downcast here is defense-in-depth for the race between
 /// that check and `retrieve::search`'s manifest read.
 fn classify_error(err: &anyhow::Error, docset: &str) -> ToolError {
-    if err
-        .downcast_ref::<retrieve::DocsetNotInstalled>()
-        .is_some()
-    {
+    if err.downcast_ref::<retrieve::DocsetNotInstalled>().is_some() {
         return ToolError::NotInstalled {
             docset: docset.to_string(),
         };
     }
-    if err
-        .downcast_ref::<retrieve::EmbedderLoadError>()
-        .is_some()
-    {
+    if err.downcast_ref::<retrieve::EmbedderLoadError>().is_some() {
         return ToolError::ModelUnavailable {
             detail: err.to_string(),
         };
@@ -249,10 +243,8 @@ mod tests {
     fn tools_call_search_returns_isError_when_model_unavailable() {
         // N2: sentinel downcast — an EmbedderLoadError (anywhere in the
         // context chain) classifies as ModelUnavailable, no string matching.
-        let err = anyhow::Error::new(retrieve::EmbedderLoadError(
-            "hf-hub download failed".into(),
-        ))
-        .context("embedder init");
+        let err = anyhow::Error::new(retrieve::EmbedderLoadError("hf-hub download failed".into()))
+            .context("embedder init");
         let te = classify_error(&err, "nextjs");
         assert!(
             matches!(te, ToolError::ModelUnavailable { .. }),

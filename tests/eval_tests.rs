@@ -627,10 +627,7 @@ fn test_eval_nextjs_diagnose() {
                     .iter()
                     .position(|h| h.source_url == q.expected_source_url)
                     .map(|p| p + 1);
-                lambda_ranks
-                    .entry(lambda.to_bits())
-                    .or_insert_with(Vec::new)
-                    .push(rank);
+                lambda_ranks.entry(lambda.to_bits()).or_default().push(rank);
                 if lambda == 0.7 {
                     eprintln!("        lambda=0.7 expected MMR rank: {:?}", rank);
                 }

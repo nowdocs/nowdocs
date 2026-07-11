@@ -206,7 +206,7 @@ fn test_mmr_lambda_1_equals_pure_relevance_ordering() {
         (1, vec![1.0, 0.0, 0.0]), // identical to 0 — would be penalized if lambda<1
         (2, vec![1.0, 0.0, 0.0]),
     ]);
-    let out = mmr_rerank(&vec![1.0, 0.0, 0.0], hits, &v, 3, 1.0);
+    let out = mmr_rerank(&[1.0, 0.0, 0.0], hits, &v, 3, 1.0);
     let ids: Vec<u32> = out.iter().map(|h| h.chunk_idx).collect();
     assert_eq!(
         ids,
@@ -233,7 +233,7 @@ fn test_mmr_prefers_diverse_urls_when_scores_similar() {
         (1, vec![0.8, 0.6 * eps.cos(), 0.6 * eps.sin()]), // ~identical to 0 (sim ≈ 0.998)
         (2, vec![0.8, -0.6, 0.0]), // same query-cosine, sim to h0 only 0.28 -> diverse
     ]);
-    let out = mmr_rerank(&vec![1.0, 0.0, 0.0], hits, &v, 3, 0.7);
+    let out = mmr_rerank(&[1.0, 0.0, 0.0], hits, &v, 3, 0.7);
     let ids: Vec<u32> = out.iter().map(|h| h.chunk_idx).collect();
     assert_eq!(ids[0], 0, "first pick is the top-scored input (h0)");
     assert_eq!(
@@ -254,7 +254,7 @@ fn test_mmr_relevance_is_query_cosine_not_rrf_score() {
         hit_url(1, "u1", 0.1), // low RRF score, but query-aligned
     ];
     let v = vecs(&[(0, vec![0.0, 1.0, 0.0]), (1, vec![1.0, 0.0, 0.0])]);
-    let out = mmr_rerank(&vec![1.0, 0.0, 0.0], hits, &v, 2, 1.0);
+    let out = mmr_rerank(&[1.0, 0.0, 0.0], hits, &v, 2, 1.0);
     let ids: Vec<u32> = out.iter().map(|h| h.chunk_idx).collect();
     assert_eq!(
         ids,
@@ -276,11 +276,11 @@ fn test_mmr_url_penalty_suppresses_hub_chunks_with_diverse_vectors() {
         hit_url(2, "other.md", 0.7),
     ];
     let v = vecs(&[
-        (0, vec![1.0, 0.0, 0.0]),              // query-aligned, cos 1.0
-        (1, vec![0.9, 0.43589, 0.0]),          // cos 0.9 to query, sim 0.9 to hub0
-        (2, vec![0.85, -0.52678, 0.0]),        // cos 0.85 to query, sim 0.85 to hub0
+        (0, vec![1.0, 0.0, 0.0]),       // query-aligned, cos 1.0
+        (1, vec![0.9, 0.43589, 0.0]),   // cos 0.9 to query, sim 0.9 to hub0
+        (2, vec![0.85, -0.52678, 0.0]), // cos 0.85 to query, sim 0.85 to hub0
     ]);
-    let out = mmr_rerank(&vec![1.0, 0.0, 0.0], hits, &v, 3, 0.7);
+    let out = mmr_rerank(&[1.0, 0.0, 0.0], hits, &v, 3, 0.7);
     let ids: Vec<u32> = out.iter().map(|h| h.chunk_idx).collect();
     assert_eq!(ids[0], 0, "top-cosine hub chunk leads");
     assert_eq!(
@@ -297,7 +297,7 @@ fn test_mmr_keeps_multiple_chunks_from_same_url_when_relevant() {
     // fix vs the old dedup_by_source_url, which collapsed same-URL API chunks.
     let hits = vec![hit_url(0, "same.md", 0.5), hit_url(1, "same.md", 0.49)];
     let v = vecs(&[(0, vec![1.0, 0.0, 0.0]), (1, vec![0.0, 1.0, 0.0])]);
-    let out = mmr_rerank(&vec![1.0, 0.0, 0.0], hits, &v, 2, 0.7);
+    let out = mmr_rerank(&[1.0, 0.0, 0.0], hits, &v, 2, 0.7);
     let ids: Vec<u32> = out.iter().map(|h| h.chunk_idx).collect();
     assert_eq!(out.len(), 2, "both same-URL chunks must be retained");
     assert!(ids.contains(&0) && ids.contains(&1));
@@ -314,7 +314,7 @@ fn test_mmr_with_missing_vector_falls_back_to_score_order() {
         hit_url(3, "u3", 0.8), // no vector
     ];
     let v = vecs(&[(0, vec![1.0, 0.0, 0.0]), (2, vec![0.0, 1.0, 0.0])]);
-    let out = mmr_rerank(&vec![1.0, 0.0, 0.0], hits, &v, 4, 0.7);
+    let out = mmr_rerank(&[1.0, 0.0, 0.0], hits, &v, 4, 0.7);
     let ids: Vec<u32> = out.iter().map(|h| h.chunk_idx).collect();
     // Vectored hits (0, 2) lead; vector-less fallbacks (1, 3) follow in
     // score-descending order (0.9 before 0.8).
@@ -341,7 +341,7 @@ fn test_mmr_normalizes_scores_to_avoid_over_penalizing_near_duplicates() {
         (1, vec![0.99, 0.01, 0.0]), // near-duplicate of 0
         (2, vec![0.0, 1.0, 0.0]),   // orthogonal
     ]);
-    let out = mmr_rerank(&vec![1.0, 0.0, 0.0], hits, &v, 3, 0.7);
+    let out = mmr_rerank(&[1.0, 0.0, 0.0], hits, &v, 3, 0.7);
     let ids: Vec<u32> = out.iter().map(|h| h.chunk_idx).collect();
     assert_eq!(ids[0], 0, "top hit leads");
     assert_eq!(
@@ -480,8 +480,8 @@ fn retrieve_search_returns_docset_not_installed_sentinel() {
     use nowdocs::retrieve::{search, DocsetNotInstalled};
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
-    let err = search("no_such_docset", "some query", None, None)
-        .expect_err("missing docset must error");
+    let err =
+        search("no_such_docset", "some query", None, None).expect_err("missing docset must error");
     assert!(
         err.downcast_ref::<DocsetNotInstalled>().is_some(),
         "missing manifest must surface as DocsetNotInstalled sentinel, got: {err:#}"

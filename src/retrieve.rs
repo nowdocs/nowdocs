@@ -76,12 +76,12 @@ pub struct SearchResult {
     pub truncated: bool,
 }
 
-/// N2: downcastable sentinel error types. `retrieve::search` maps each failure
-/// point to one of these so `tools::classify_error` can classify via
-/// `anyhow::Error::downcast_ref::<T>()` instead of fragile string matching on
-/// the error chain (see a1-mcp-error-contract §3.1). `Display` + `Error` are
-/// implemented manually — thiserror was removed from the dependency tree (M16)
-/// and must not be re-added.
+// N2: downcastable sentinel error types. `retrieve::search` maps each failure
+// point to one of these so `tools::classify_error` can classify via
+// `anyhow::Error::downcast_ref::<T>()` instead of fragile string matching on
+// the error chain (see a1-mcp-error-contract §3.1). `Display` + `Error` are
+// implemented manually — thiserror was removed from the dependency tree (M16)
+// and must not be re-added.
 
 /// The docset's manifest is missing, unparseable, or fails validation.
 #[derive(Debug)]
@@ -145,10 +145,11 @@ pub fn search(
     // Load and validate manifest. N2: map each failure point to a downcastable
     // sentinel so tools::classify_error needs no string matching.
     let manifest_path = crate::cache::manifest_path(&docset);
-    let manifest_json = std::fs::read_to_string(&manifest_path).map_err(|e| DocsetNotInstalled {
-        docset: docset.clone(),
-        reason: format!("failed to read manifest: {e}"),
-    })?;
+    let manifest_json =
+        std::fs::read_to_string(&manifest_path).map_err(|e| DocsetNotInstalled {
+            docset: docset.clone(),
+            reason: format!("failed to read manifest: {e}"),
+        })?;
     let manifest: manifest::Manifest =
         manifest::parse_manifest(&manifest_json).map_err(|e| DocsetNotInstalled {
             docset: docset.clone(),
@@ -200,7 +201,13 @@ pub fn search(
         docset: docset.clone(),
         reason: e.to_string(),
     })?;
-    let hits = mmr_rerank(&query_vector, candidates, &vectors, top_k as usize, MMR_LAMBDA);
+    let hits = mmr_rerank(
+        &query_vector,
+        candidates,
+        &vectors,
+        top_k as usize,
+        MMR_LAMBDA,
+    );
 
     // N4/OQ11 (redesigned): answer gate. The old RRF-only gate was
     // structurally ~1.0 FP (RRF scores are rank-based, not similarity-based,
