@@ -66,8 +66,13 @@ jobs:
       # in-test gates and fails the job on regression. --nocapture so the eval
       # metric lines reach the log for the threshold step below. Release
       # profile keeps the real-corpus eval within the job budget.
+      # `set -o pipefail` is REQUIRED: with an unspecified shell GitHub runs
+      # `bash -e` (no pipefail), so a failing `cargo test` piped to `tee` would
+      # otherwise exit 0 and let the step (and a release dispatch) pass green.
       - name: Run ignored tests (real embedder + real eval)
-        run: cargo test --locked --release -- --ignored --test-threads=1 --nocapture 2>&1 | tee /tmp/eval-ignored.log
+        run: |
+          set -o pipefail
+          cargo test --locked --release -- --ignored --test-threads=1 --nocapture 2>&1 | tee /tmp/eval-ignored.log
 
       # OQ9/M24: track the real Next.js eval against the release bar
       # (MRR >= 0.85, Recall@5 >= 0.90). Nightly: report as warnings so a

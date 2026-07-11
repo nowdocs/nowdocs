@@ -290,6 +290,26 @@ fn check_docset_state_returns_row_count_mismatch() {
     );
 }
 
+/// Review fix: a manifest that parses but fails `manifest::validate` (here a
+/// non-allowlisted license) must NOT read as Healthy — `retrieve::search`
+/// rejects it, so the state model reports StoreOnly (no usable manifest).
+#[test]
+fn check_docset_state_returns_store_only_for_invalid_manifest() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+    ensure_layout().unwrap();
+    m22_build_store("m22-bad", 2); // 2 rows live, matching chunk_count below
+    let bad = m22_manifest_json("m22-bad", 1, 2)
+        .replace("\"license\": \"MIT\"", "\"license\": \"Proprietary\"");
+    let p = nowdocs::cache::manifest_path("m22-bad");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(p, bad).unwrap();
+    assert_eq!(
+        nowdocs::cache::check_docset_state("m22-bad"),
+        nowdocs::cache::InstalledDocsetState::StoreOnly
+    );
+}
+
 #[test]
 fn check_docset_state_returns_schema_mismatch() {
     let tmp = tempfile::tempdir().unwrap();

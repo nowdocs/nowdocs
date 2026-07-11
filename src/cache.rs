@@ -361,10 +361,11 @@ impl InstalledDocsetState {
 /// Classify a docset's install state purely from the on-disk cache (M22).
 ///
 /// Classification order is deliberate so the most specific diagnosis wins:
-/// presence of manifest/store first, then schema compatibility, then row-count
-/// agreement. A manifest that fails to parse is treated as "no usable manifest"
-/// (so a present store with a corrupt manifest reads as `StoreOnly`); callers
-/// that want to surface a corrupt manifest explicitly — `list-installed`'s
+/// presence of manifest/store first, then schema compatibility, then manifest
+/// invariant validation, then row-count agreement. A manifest that fails to
+/// parse OR fails `manifest::validate` is treated as "no usable manifest" (so a
+/// present store with a corrupt or invalid manifest reads as `StoreOnly`, never
+/// `Healthy`); callers that want to surface the specific reason — `list-installed`'s
 /// legacy "broken" label, doctor's detailed parse check — inspect the manifest
 /// themselves.
 pub fn check_docset_state(docset: &str) -> InstalledDocsetState {
@@ -386,11 +387,26 @@ pub fn check_docset_state(docset: &str) -> InstalledDocsetState {
         (Some(_), false) => InstalledDocsetState::ManifestOnly,
         (Some(m), true) => {
             use crate::manifest::{schema_compatibility, SchemaCompatibility};
+            // Schema compat is its own actionable state (rebuild) — check first,
+            // before `validate` (which also rejects non-current schema) so the
+            // distinct diagnosis isn't collapsed into StoreOnly.
             if !matches!(
                 schema_compatibility(m.nowdocs_schema_version),
                 SchemaCompatibility::Current
             ) {
                 return InstalledDocsetState::SchemaMismatch;
+            }
+            // A manifest that parses but fails the remaining v1 invariants
+            // (embedder model/dim/engine/dtype, tokenizer, license allowlist) is
+            // unusable: `retrieve::search` rejects it via `manifest::validate`,
+            // so report it as StoreOnly (no usable manifest) rather than Healthy.
+            // Deliberately uses `validate` only — matching retrieve's acceptance
+            // exactly — NOT `validate_manifest_for_docset`, whose docset-name
+            // binding + required-upstream-URL checks are stricter than retrieve
+            // and would wrongly flag local private docsets (empty source/entry
+            // URL) as broken.
+            if crate::manifest::validate(&m).is_err() {
+                return InstalledDocsetState::StoreOnly;
             }
             // Row-count agreement: compare the live store against the manifest's
             // declared chunk_count. If the store can't be opened/counted, treat

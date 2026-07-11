@@ -267,6 +267,36 @@ fn test_smoke_default_query() {
     );
 }
 
+/// Review fix: smoke must refuse a partial install (store row count below the
+/// manifest's chunk_count) instead of blessing it as `smoke ok`. The state
+/// check runs before the embedder loads, so no model is needed here.
+#[test]
+fn test_smoke_bails_on_row_count_mismatch() {
+    let cache = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    nowdocs::cache::ensure_layout().unwrap();
+
+    let docset = "smoke-rc";
+    // test_manifest_json declares chunk_count=2; the store holds only 1 row.
+    let p = nowdocs::cache::manifest_path(docset);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, test_manifest_json(docset, "1.0.0")).unwrap();
+    let one = vec![smoke_two_chunks().into_iter().next().unwrap()];
+    let vecs: Vec<Vec<f32>> = one.iter().map(|_| vec![0.0f32; 512]).collect();
+    {
+        let store = nowdocs::store::Store::open(docset).unwrap();
+        store.insert(&one, &vecs).unwrap();
+    }
+
+    let err = nowdocs::smoke::smoke(docset, None, None)
+        .expect_err("row-count-mismatched docset must not smoke ok");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("row count") || msg.contains("partial"),
+        "smoke must surface the partial-install error, got: {msg}"
+    );
+}
+
 // Test: smoke --top-k flag is accepted
 #[test]
 fn test_smoke_top_k_flag_accepted() {

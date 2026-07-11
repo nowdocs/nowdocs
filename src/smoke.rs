@@ -47,8 +47,9 @@ pub fn smoke(docset: &str, query: Option<&str>, top_k: Option<u32>) -> Result<Sm
     let top_k = top_k.unwrap_or(DEFAULT_TOP_K);
 
     // M22: verify the docset is usable via the unified state model. Smoke needs
-    // both a manifest (embedder spec) and a store (to search), so any partial
-    // state bails early with a targeted hint instead of a cryptic retrieve error.
+    // a consistent manifest (embedder spec) AND store (to search), so only a
+    // Healthy install may proceed — every partial/mismatched state bails early
+    // with a targeted hint instead of blessing a broken install as `smoke ok`.
     match crate::cache::check_docset_state(docset) {
         crate::cache::InstalledDocsetState::NotInstalled => {
             bail!(
@@ -62,10 +63,20 @@ pub fn smoke(docset: &str, query: Option<&str>, top_k: Option<u32>) -> Result<Sm
         }
         crate::cache::InstalledDocsetState::StoreOnly => {
             bail!(
-                "docset {docset:?} has a store but no manifest — run `nowdocs install {docset}` to reinstall"
+                "docset {docset:?} has a store but no usable manifest — run `nowdocs install {docset}` to reinstall"
             );
         }
-        _ => {}
+        crate::cache::InstalledDocsetState::SchemaMismatch => {
+            bail!(
+                "docset {docset:?} schema is incompatible with this binary — run `nowdocs rebuild {docset}`"
+            );
+        }
+        crate::cache::InstalledDocsetState::RowCountMismatch => {
+            bail!(
+                "docset {docset:?} store row count differs from its manifest (partial/interrupted install) — run `nowdocs rebuild {docset}` or reinstall"
+            );
+        }
+        crate::cache::InstalledDocsetState::Healthy => {}
     }
 
     // M23: time a standalone query embed first (warms the model and measures
