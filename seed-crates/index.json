@@ -8,7 +8,7 @@
       "license": "MIT",
       "chunk_count": 7480,
       "freshness": "2026-07-01",
-      "download_url": "https://github.com/nowdocs-registry/nextjs/releases/download/nextjs-14.2.5/nextjs-14.2.5.lance.tar.zst",
+      "download_url": "https://github.com/nowdocs-registry/nextjs/releases/download/nextjs-14.2.5/nextjs-14.2.5.lance.tar",
       "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
       "description": "React framework for production (MIT)."
     },
@@ -18,7 +18,7 @@
       "license": "CC-BY-4.0",
       "chunk_count": 5200,
       "freshness": "2026-06-28",
-      "download_url": "https://github.com/nowdocs-registry/react/releases/download/react-18.3.1/react-18.3.1.lance.tar.zst",
+      "download_url": "https://github.com/nowdocs-registry/react/releases/download/react-18.3.1/react-18.3.1.lance.tar",
       "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
       "description": "Library for building user interfaces (CC-BY-4.0)."
     },
@@ -28,7 +28,7 @@
       "license": "CC-BY-4.0",
       "chunk_count": 3100,
       "freshness": "2026-06-25",
-      "download_url": "https://github.com/nowdocs-registry/vue/releases/download/vue-3.4.0/vue-3.4.0.lance.tar.zst",
+      "download_url": "https://github.com/nowdocs-registry/vue/releases/download/vue-3.4.0/vue-3.4.0.lance.tar",
       "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
       "description": "Progressive JavaScript framework (CC-BY-4.0)."
     }

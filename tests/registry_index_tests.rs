@@ -84,7 +84,7 @@ fn rejects_index_with_disallowed_license() {
           "license": "Proprietary",
           "chunk_count": 1,
           "freshness": "2026-07-07",
-          "download_url": "https://github.com/nowdocs-registry/proprietary/releases/download/proprietary-1.0.0/proprietary-1.0.0.lance.tar.zst",
+          "download_url": "https://github.com/nowdocs-registry/proprietary/releases/download/proprietary-1.0.0/proprietary-1.0.0.lance.tar",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "description": "must be rejected"
         }
@@ -113,7 +113,7 @@ fn rejects_index_with_bad_sha256() {
           "license": "MIT",
           "chunk_count": 1,
           "freshness": "2026-07-07",
-          "download_url": "https://github.com/nowdocs-registry/badhash/releases/download/badhash-1.0.0/badhash-1.0.0.lance.tar.zst",
+          "download_url": "https://github.com/nowdocs-registry/badhash/releases/download/badhash-1.0.0/badhash-1.0.0.lance.tar",
           "sha256": "00",
           "description": "must be rejected"
         }
@@ -182,7 +182,7 @@ fn accepts_index_with_github_release_download_url() {
           "license": "MIT",
           "chunk_count": 100,
           "freshness": "2026-07-07",
-          "download_url": "https://github.com/nowdocs-registry/nextjs/releases/download/nextjs-14.2.5/nextjs-14.2.5.lance.tar.zst",
+          "download_url": "https://github.com/nowdocs-registry/nextjs/releases/download/nextjs-14.2.5/nextjs-14.2.5.lance.tar",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "description": "release artifact"
         }
