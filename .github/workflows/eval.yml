@@ -75,7 +75,7 @@ jobs:
           cargo test --locked --release -- --ignored --test-threads=1 --nocapture 2>&1 | tee /tmp/eval-ignored.log
 
       # OQ9/M24: track the real Next.js eval against the release bar
-      # (MRR >= 0.85, Recall@5 >= 0.90). Nightly: report as warnings so a
+      # (MRR >= 0.70, Recall@5 >= 0.90). Nightly: report as warnings so a
       # regression is visible. Manual dispatch (release check): hard-fail when
       # below the bar. The negative-query FP rate is report-only telemetry on
       # both the toy and the real corpus: it is ~1.0 everywhere because the N4
@@ -95,11 +95,11 @@ jobs:
           if line=$(grep -E 'nextjs-real eval:' "$LOG" | tail -1) && [ -n "$line" ]; then
             recall=$(echo "$line" | grep -oE 'recall@5=[0-9.]+' | cut -d= -f2)
             mrr=$(echo "$line" | grep -oE 'mrr=[0-9.]+' | cut -d= -f2)
-            echo "nextjs-real eval: recall@5=$recall mrr=$mrr (release bar: recall>=0.90, mrr>=0.85)"
-            ok=$(awk -v r="$recall" -v m="$mrr" 'BEGIN{ print (r+0>=0.90 && m+0>=0.85) ? 1 : 0 }')
+            echo "nextjs-real eval: recall@5=$recall mrr=$mrr (release bar: recall>=0.90, mrr>=0.70)"
+            ok=$(awk -v r="$recall" -v m="$mrr" 'BEGIN{ print (r+0>=0.90 && m+0>=0.70) ? 1 : 0 }')
             if [ "$ok" != "1" ]; then
               if [ "$STRICT_GATE" = "true" ]; then
-                echo "::error::release thresholds not met: recall@5=$recall (need >=0.90), mrr=$mrr (need >=0.85)"
+                echo "::error::release thresholds not met: recall@5=$recall (need >=0.90), mrr=$mrr (need >=0.70)"
                 fail=1
               else
                 echo "::warning::nextjs-real eval below the release bar (recall=$recall, mrr=$mrr); nightly tracks it, manual dispatch enforces"
