@@ -10,6 +10,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.97.0
+  UDEPS_RUST_VERSION: nightly-2026-07-10
 
 jobs:
   audit:
@@ -27,8 +29,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.UDEPS_RUST_VERSION }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: udeps-${{ env.UDEPS_RUST_VERSION }}
       - name: Install cargo-udeps
-        run: cargo install cargo-udeps
+        run: cargo +${{ env.UDEPS_RUST_VERSION }} install cargo-udeps --version 0.1.61 --locked
       - name: Find dead code
-        run: cargo udeps --all-targets 2>&1 || echo "::warning::cargo-udeps found unused dependencies"
+        run: cargo +${{ env.UDEPS_RUST_VERSION }} udeps --locked --all-targets

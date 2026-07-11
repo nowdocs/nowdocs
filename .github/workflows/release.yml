@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  RUST_VERSION: 1.97.0
+
 jobs:
   build:
     name: Build (${{ matrix.target }})
@@ -44,6 +47,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           targets: ${{ matrix.target }}
 
       - name: Install protoc
@@ -82,9 +86,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
-            cross build --release --target ${{ matrix.target }}
+            cross build --locked --release --target ${{ matrix.target }}
           else
-            cargo build --release --target ${{ matrix.target }}
+            cargo build --locked --release --target ${{ matrix.target }}
           fi
 
       - name: Verify static linking (Linux musl only)
@@ -119,8 +123,17 @@ jobs:
           tar -czf "${STAGE}${{ matrix.archive_suffix }}" "$STAGE"
           ls -la "${STAGE}${{ matrix.archive_suffix }}"
 
+      - name: Create SHA-256 checksum
+        shell: bash
+        run: |
+          ARCHIVE="nowdocs-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.archive_suffix }}"
+          shasum -a 256 "$ARCHIVE" > "${ARCHIVE}.sha256"
+          cat "${ARCHIVE}.sha256"
+
       - name: Upload release asset
         uses: softprops/action-gh-release@v3
         with:
-          files: nowdocs-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.archive_suffix }}
+          files: |
+            nowdocs-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.archive_suffix }}
+            nowdocs-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.archive_suffix }}.sha256
           fail_on_unmatched_files: true

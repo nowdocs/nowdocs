@@ -10,6 +10,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.97.0
   PROTOC: /usr/bin/protoc
   HF_ENDPOINT: https://hf-mirror.com
 
@@ -21,6 +22,8 @@ jobs:
       - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -41,4 +44,20 @@ jobs:
         run: python3 seed-crates/tmp/rebuild_nextjs.py
 
       - name: Run evaluation tests
-        run: cargo test --test eval_tests -- --ignored --test-threads=1
+        run: cargo test --locked --test eval_tests -- --ignored --test-threads=1
+
+  coverage:
+    name: Coverage baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --version 0.8.7 --locked
+      - name: Measure baseline coverage
+        run: |
+          cargo llvm-cov --locked --summary-only -- --test-threads=1 | tee coverage-summary.txt
+          cat coverage-summary.txt >> "$GITHUB_STEP_SUMMARY"
