@@ -220,6 +220,40 @@ fn test_cli_list_installed_empty() {
     );
 }
 
+// --- Test: list-installed shows a STATUS column with the unified state label (M22) ---
+
+#[test]
+fn test_cli_list_installed_shows_state_column() {
+    let cache = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let tar = write_tarball(cache.path(), "state-col-22", "1.0.0");
+    let url = format!("file://{}", tar.display());
+
+    // install via the library (production binary rejects file://); write_tarball
+    // ships a 2-row store + manifest chunk_count=2, so the unified state model
+    // classifies it as Healthy -> label "ok".
+    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    nowdocs::registry::install("state-col-22", &url).expect("install should succeed");
+
+    let out = run_nowdocs(cwd.path(), cache.path(), &["list-installed"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("STATUS"),
+        "list-installed must show a STATUS column header, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("state-col-22"),
+        "list-installed must list the docset, got: {stdout}"
+    );
+    // Healthy install must surface the unified "ok" state label from
+    // InstalledDocsetState::label().
+    assert!(
+        stdout.contains(" ok") || stdout.contains("\tok") || stdout.ends_with("ok"),
+        "healthy docset must show state label 'ok', got: {stdout}"
+    );
+}
+
 // --- Test 2: install → list → uninstall → list ---
 
 #[test]

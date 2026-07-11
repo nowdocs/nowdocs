@@ -35,12 +35,26 @@ pub fn smoke(docset: &str, query: Option<&str>, top_k: Option<u32>) -> Result<Sm
     let query = query.unwrap_or(DEFAULT_QUERY);
     let top_k = top_k.unwrap_or(DEFAULT_TOP_K);
 
-    // Verify docset is installed (manifest exists).
-    let manifest_path = crate::cache::manifest_path(docset);
-    if !manifest_path.is_file() {
-        bail!(
-            "docset {docset:?} not found — run `nowdocs install {docset}` or `nowdocs ingest` first"
-        );
+    // M22: verify the docset is usable via the unified state model. Smoke needs
+    // both a manifest (embedder spec) and a store (to search), so any partial
+    // state bails early with a targeted hint instead of a cryptic retrieve error.
+    match crate::cache::check_docset_state(docset) {
+        crate::cache::InstalledDocsetState::NotInstalled => {
+            bail!(
+                "docset {docset:?} not found — run `nowdocs install {docset}` or `nowdocs ingest` first"
+            );
+        }
+        crate::cache::InstalledDocsetState::ManifestOnly => {
+            bail!(
+                "docset {docset:?} has a manifest but no store — run `nowdocs rebuild {docset}` or `nowdocs install {docset}`"
+            );
+        }
+        crate::cache::InstalledDocsetState::StoreOnly => {
+            bail!(
+                "docset {docset:?} has a store but no manifest — run `nowdocs install {docset}` to reinstall"
+            );
+        }
+        _ => {}
     }
 
     let start = Instant::now();

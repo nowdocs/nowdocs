@@ -178,3 +178,138 @@ fn cli_cache_status_json_parses() {
     assert!(json.get("installed_docsets").is_some());
     assert!(json.get("staging_count").is_some());
 }
+
+// ---- M22: check_docset_state unified install-state model ----
+
+fn m22_manifest_json(docset: &str, schema_version: u32, chunk_count: u32) -> String {
+    format!(
+        r#"{{
+            "docset": "{docset}",
+            "doc_version": "1.0.0",
+            "nowdocs_schema_version": {schema_version},
+            "embedder": {{
+                "model_id": "jinaai/jina-embeddings-v2-small-en",
+                "model_version": "0.1.0",
+                "model_revision": "abc123",
+                "model_sha256": "deadbeef",
+                "vector_dim": 512,
+                "engine": "candle",
+                "dtype": "f16"
+            }},
+            "retrieval": {{ "tokenizer": "default", "chunk_size_tokens": 512, "window_tokens": 64 }},
+            "source": {{ "entry_url": "https://example.com/docs", "source_url": "https://example.com", "scraped_at": "2026-01-01T00:00:00Z", "chunk_count": {chunk_count} }},
+            "legal": {{ "license": "MIT", "copyright_holder": "Example", "attribution": "" }},
+            "refresh_strategy": {{ "tier": "stable", "auto_days": 30 }}
+        }}"#
+    )
+}
+
+fn m22_write_manifest(docset: &str, schema_version: u32, chunk_count: u32) {
+    let p = nowdocs::cache::manifest_path(docset);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(p, m22_manifest_json(docset, schema_version, chunk_count)).unwrap();
+}
+
+/// Build a real lance table with `n` rows (dummy 512-dim vectors) for `docset`.
+fn m22_build_store(docset: &str, n: usize) {
+    use nowdocs::chunker::{Chunk, ChunkType};
+    let chunks: Vec<Chunk> = (0..n)
+        .map(|i| Chunk {
+            idx: i as u32,
+            heading_path: format!("H{i}"),
+            source_url: format!("https://example.com/{i}"),
+            api_version: None,
+            chunk_type: ChunkType::Info,
+            text: format!("chunk {i}"),
+        })
+        .collect();
+    let vecs: Vec<Vec<f32>> = chunks.iter().map(|_| vec![0.0f32; 512]).collect();
+    let store = nowdocs::store::Store::open(docset).unwrap();
+    store.insert(&chunks, &vecs).unwrap();
+}
+
+#[test]
+fn check_docset_state_returns_not_installed_for_empty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+    ensure_layout().unwrap();
+    assert_eq!(
+        nowdocs::cache::check_docset_state("ghost"),
+        nowdocs::cache::InstalledDocsetState::NotInstalled
+    );
+}
+
+#[test]
+fn check_docset_state_returns_manifest_only_when_store_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+    ensure_layout().unwrap();
+    m22_write_manifest("m22-mo", 1, 2);
+    assert_eq!(
+        nowdocs::cache::check_docset_state("m22-mo"),
+        nowdocs::cache::InstalledDocsetState::ManifestOnly
+    );
+}
+
+#[test]
+fn check_docset_state_returns_store_only_when_manifest_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+    ensure_layout().unwrap();
+    // Empty `.lance` dir present, no manifest -> store-only.
+    std::fs::create_dir_all(db_path("m22-so")).unwrap();
+    assert_eq!(
+        nowdocs::cache::check_docset_state("m22-so"),
+        nowdocs::cache::InstalledDocsetState::StoreOnly
+    );
+}
+
+#[test]
+fn check_docset_state_returns_healthy_for_valid_install() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+    ensure_layout().unwrap();
+    m22_build_store("m22-ok", 2);
+    m22_write_manifest("m22-ok", 1, 2);
+    assert_eq!(
+        nowdocs::cache::check_docset_state("m22-ok"),
+        nowdocs::cache::InstalledDocsetState::Healthy
+    );
+}
+
+#[test]
+fn check_docset_state_returns_row_count_mismatch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+    ensure_layout().unwrap();
+    m22_build_store("m22-rc", 2); // 2 rows live
+    m22_write_manifest("m22-rc", 1, 5); // manifest claims 5
+    assert_eq!(
+        nowdocs::cache::check_docset_state("m22-rc"),
+        nowdocs::cache::InstalledDocsetState::RowCountMismatch
+    );
+}
+
+#[test]
+fn check_docset_state_returns_schema_mismatch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+    ensure_layout().unwrap();
+    m22_build_store("m22-sm", 2);
+    m22_write_manifest("m22-sm", 99, 2); // future schema
+    assert_eq!(
+        nowdocs::cache::check_docset_state("m22-sm"),
+        nowdocs::cache::InstalledDocsetState::SchemaMismatch
+    );
+}
+
+#[test]
+fn check_docset_state_label_is_stable() {
+    use nowdocs::cache::InstalledDocsetState as S;
+    assert_eq!(S::Healthy.label(), "ok");
+    assert_eq!(S::ManifestOnly.label(), "no-store");
+    assert_eq!(S::StoreOnly.label(), "no-manifest");
+    assert_eq!(S::SchemaMismatch.label(), "schema-mismatch");
+    assert_eq!(S::RowCountMismatch.label(), "count-mismatch");
+    assert_eq!(S::NotInstalled.label(), "not-installed");
+}

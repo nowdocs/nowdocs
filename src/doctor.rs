@@ -103,6 +103,47 @@ pub fn run_docset_checks(docset: &str) -> DoctorOutput {
         }
     }
 
+    // M22: unified install-state summary for this docset, sourced from the same
+    // `check_docset_state` used by list-installed / smoke / nowdocs_list.
+    {
+        let state = cache::check_docset_state(docset);
+        let (severity, message) = match state {
+            cache::InstalledDocsetState::Healthy => (
+                Severity::Ok,
+                format!("Docset state: {} (manifest + store consistent)", state.label()),
+            ),
+            cache::InstalledDocsetState::ManifestOnly => (
+                Severity::Warn,
+                format!("Docset state: {} (manifest present, store missing)", state.label()),
+            ),
+            cache::InstalledDocsetState::StoreOnly => (
+                Severity::Fail,
+                format!("Docset state: {} (store present, manifest missing)", state.label()),
+            ),
+            cache::InstalledDocsetState::SchemaMismatch => (
+                Severity::Fail,
+                format!("Docset state: {} (schema incompatible)", state.label()),
+            ),
+            cache::InstalledDocsetState::RowCountMismatch => (
+                Severity::Warn,
+                format!(
+                    "Docset state: {} (store row count != manifest chunk_count)",
+                    state.label()
+                ),
+            ),
+            cache::InstalledDocsetState::NotInstalled => (
+                Severity::Fail,
+                format!("Docset state: {} (neither manifest nor store)", state.label()),
+            ),
+        };
+        checks.push(Check {
+            id: "docset-state".to_string(),
+            severity,
+            message,
+            remediation: None,
+        });
+    }
+
     // Check manifest exists
     let manifest_path = cache::manifest_path(docset);
     if manifest_path.is_file() {
@@ -462,31 +503,51 @@ fn check_installed_docsets() -> Vec<Check> {
     }
 
     for docset in &docsets {
-        let manifest_path = cache::manifest_path(docset);
-        let db_path = cache::db_path(docset);
-
-        if manifest_path.is_file() && db_path.exists() {
-            checks.push(Check {
-                id: format!("docset-{}", docset),
-                severity: Severity::Ok,
-                message: format!("Docset '{}' is healthy", docset),
-                remediation: None,
-            });
-        } else if manifest_path.is_file() && !db_path.exists() {
-            checks.push(Check {
-                id: format!("docset-{}", docset),
-                severity: Severity::Warn,
-                message: format!("Docset '{}' has manifest but no store", docset),
-                remediation: Some("Reinstall the docset to rebuild the store".to_string()),
-            });
-        } else if !manifest_path.is_file() && db_path.exists() {
-            checks.push(Check {
-                id: format!("docset-{}", docset),
-                severity: Severity::Fail,
-                message: format!("Docset '{}' has store but no manifest", docset),
-                remediation: Some("Reinstall the docset".to_string()),
-            });
-        }
+        // M22: route through the unified state model so doctor agrees with
+        // list-installed / smoke / nowdocs_list on partial installs.
+        let state = cache::check_docset_state(docset);
+        let (severity, message, remediation) = match state {
+            cache::InstalledDocsetState::Healthy => (
+                Severity::Ok,
+                format!("Docset '{docset}' is healthy"),
+                None,
+            ),
+            cache::InstalledDocsetState::ManifestOnly => (
+                Severity::Warn,
+                format!("Docset '{docset}' has manifest but no store"),
+                Some("Reinstall the docset to rebuild the store".to_string()),
+            ),
+            cache::InstalledDocsetState::StoreOnly => (
+                Severity::Fail,
+                format!("Docset '{docset}' has store but no manifest"),
+                Some("Reinstall the docset".to_string()),
+            ),
+            cache::InstalledDocsetState::SchemaMismatch => (
+                Severity::Fail,
+                format!("Docset '{docset}' schema version is incompatible with this binary"),
+                Some(format!(
+                    "Run `nowdocs rebuild {docset}` to migrate the local cache"
+                )),
+            ),
+            cache::InstalledDocsetState::RowCountMismatch => (
+                Severity::Warn,
+                format!("Docset '{docset}' store row count disagrees with its manifest"),
+                Some("Reinstall or rebuild the docset to repair the store".to_string()),
+            ),
+            cache::InstalledDocsetState::NotInstalled => (
+                Severity::Fail,
+                format!("Docset '{docset}' is not installed"),
+                Some(format!(
+                    "Install the docset with `nowdocs install {docset}`"
+                )),
+            ),
+        };
+        checks.push(Check {
+            id: format!("docset-{docset}"),
+            severity,
+            message,
+            remediation,
+        });
     }
 
     checks

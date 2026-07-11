@@ -318,6 +318,97 @@ pub struct InstalledDocset {
     pub status: String,
 }
 
+/// Unified install-state classification for a docset (M22 / A1.3).
+///
+/// Every status entry point (`list-installed`, `doctor --docset`, `smoke`, and
+/// the MCP `nowdocs_list` tool) routes through [`check_docset_state`] so a
+/// partial or inconsistent install is reported the same way everywhere instead
+/// of each caller inferring "installed" on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstalledDocsetState {
+    /// Manifest + store both present, schema current, store row count == chunk_count.
+    Healthy,
+    /// Manifest present (parseable) but store directory missing.
+    ManifestOnly,
+    /// Store directory present but no usable manifest.
+    StoreOnly,
+    /// Both present but the manifest's `nowdocs_schema_version` is incompatible
+    /// with this binary (older or newer than `CURRENT_SCHEMA_VERSION`).
+    SchemaMismatch,
+    /// Both present and schema current, but the store's row count differs from
+    /// the manifest's `source.chunk_count` (partial ingest / interrupted install).
+    RowCountMismatch,
+    /// Neither manifest nor store present.
+    NotInstalled,
+}
+
+impl InstalledDocsetState {
+    /// Short machine-readable label used in human output (e.g. the
+    /// `list-installed` STATUS column) and stable for tests to assert on.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Healthy => "ok",
+            Self::ManifestOnly => "no-store",
+            Self::StoreOnly => "no-manifest",
+            Self::SchemaMismatch => "schema-mismatch",
+            Self::RowCountMismatch => "count-mismatch",
+            Self::NotInstalled => "not-installed",
+        }
+    }
+}
+
+/// Classify a docset's install state purely from the on-disk cache (M22).
+///
+/// Classification order is deliberate so the most specific diagnosis wins:
+/// presence of manifest/store first, then schema compatibility, then row-count
+/// agreement. A manifest that fails to parse is treated as "no usable manifest"
+/// (so a present store with a corrupt manifest reads as `StoreOnly`); callers
+/// that want to surface a corrupt manifest explicitly — `list-installed`'s
+/// legacy "broken" label, doctor's detailed parse check — inspect the manifest
+/// themselves.
+pub fn check_docset_state(docset: &str) -> InstalledDocsetState {
+    let mpath = manifest_path(docset);
+    let manifest_exists = mpath.is_file();
+    let store_exists = db_path(docset).exists();
+
+    let parsed = if manifest_exists {
+        std::fs::read_to_string(&mpath)
+            .ok()
+            .and_then(|raw| crate::manifest::parse_manifest(&raw).ok())
+    } else {
+        None
+    };
+
+    match (parsed, store_exists) {
+        (None, false) => InstalledDocsetState::NotInstalled,
+        (None, true) => InstalledDocsetState::StoreOnly,
+        (Some(_), false) => InstalledDocsetState::ManifestOnly,
+        (Some(m), true) => {
+            use crate::manifest::{schema_compatibility, SchemaCompatibility};
+            if !matches!(
+                schema_compatibility(m.nowdocs_schema_version),
+                SchemaCompatibility::Current
+            ) {
+                return InstalledDocsetState::SchemaMismatch;
+            }
+            // Row-count agreement: compare the live store against the manifest's
+            // declared chunk_count. If the store can't be opened/counted, treat
+            // it as a mismatch rather than Healthy (don't silently OK a store we
+            // can't verify).
+            let count_matches = crate::store::Store::open(docset)
+                .and_then(|s| s.row_count())
+                .map(|n| n == m.source.chunk_count as u64)
+                .unwrap_or(false);
+            if count_matches {
+                InstalledDocsetState::Healthy
+            } else {
+                InstalledDocsetState::RowCountMismatch
+            }
+        }
+    }
+}
+
 /// Read manifest metadata for a docset, returning (version, chunk_count, license).
 pub fn read_docset_meta(docset: &str) -> (String, String, String) {
     let manifest_path = manifest_path(docset);
@@ -355,19 +446,21 @@ pub fn list_installed() -> std::io::Result<Vec<InstalledDocset>> {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if let Some(stem) = name.strip_suffix(".lance") {
                         let (version, chunks, license) = read_docset_meta(stem);
-                        let status = if is_docset_healthy(stem) {
-                            "ok"
-                        } else if manifest_path(stem).is_file() {
-                            "broken"
+                        // M22: status comes from the unified state model. A
+                        // manifest that exists but fails to parse keeps the
+                        // legacy "broken" label so existing output contracts
+                        // (and tests) are preserved.
+                        let status = if is_manifest_corrupt(stem) {
+                            "broken".to_string()
                         } else {
-                            "no-manifest"
+                            check_docset_state(stem).label().to_string()
                         };
                         docsets.push(InstalledDocset {
                             name: stem.to_string(),
                             version,
                             chunks,
                             license,
-                            status: status.to_string(),
+                            status,
                         });
                     }
                 }
@@ -376,4 +469,20 @@ pub fn list_installed() -> std::io::Result<Vec<InstalledDocset>> {
     }
     docsets.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(docsets)
+}
+
+/// True when a manifest file exists for `docset` but cannot be parsed.
+///
+/// Distinguishes "corrupt manifest" (file present, unparseable) from "no
+/// manifest" so `list-installed` can keep its legacy "broken" label while the
+/// rest of the status model routes through [`check_docset_state`].
+fn is_manifest_corrupt(docset: &str) -> bool {
+    let path = manifest_path(docset);
+    if !path.is_file() {
+        return false;
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(raw) => crate::manifest::parse_manifest(&raw).is_err(),
+        Err(_) => true,
+    }
 }
