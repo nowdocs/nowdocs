@@ -14,23 +14,23 @@ use crate::manifest::{self, Manifest};
 use crate::sanitize;
 use crate::store::Store;
 
-fn detect_test_mode() -> bool {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
-            if name.contains("_tests") {
-                if let Some(parent) = exe.parent() {
-                    if parent.file_name().and_then(|p| p.to_str()) == Some("deps") {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    false
+/// Whether test-only code paths (file:// URL acceptance, NOWDOCS_TEST_URL
+/// env var reads) are enabled.
+///
+/// This is a **compile-time** gate, not a spoofable runtime check. The
+/// `test-fixture` Cargo feature is activated only during `cargo test` (via
+/// the self dev-dependency in Cargo.toml). Production builds (`cargo build`,
+/// `cargo build --release`) do not enable the feature, so `file://` URLs and
+/// `NOWDOCS_TEST_URL` are rejected at compile time -- they do not exist in
+/// the binary at all.
+#[cfg(any(test, feature = "test-fixture"))]
+fn is_test_mode() -> bool {
+    true
 }
 
+#[cfg(not(any(test, feature = "test-fixture")))]
 fn is_test_mode() -> bool {
-    cfg!(test) || detect_test_mode()
+    false
 }
 
 /// Returns true if `url` is a `file://` URL.
@@ -71,15 +71,15 @@ fn is_allowed_registry_url(url: &str) -> bool {
 }
 
 /// Stricter gate for PACKAGE download URLs (catalog `download_url` and the
-/// install boundary). Unlike `is_allowed_registry_url` — which is also used to
-/// fetch the catalog index itself from a `/raw/` repo path — package artifacts
+/// install boundary). Unlike `is_allowed_registry_url` - which is also used to
+/// fetch the catalog index itself from a `/raw/` repo path - package artifacts
 /// must resolve to a GitHub Releases download (or `registry.nowdocs.dev`
 /// release), so a catalog entry cannot point install at an arbitrary
 /// raw/branch file and bypass the registry-release artifact contract.
+///
+/// `file://` URLs are NOT handled here; they are gated by `is_test_mode()`
+/// directly in `install_to_staging` (S3) before this function is reached.
 fn is_allowed_package_url(url: &str) -> bool {
-    if is_test_file_url(url) {
-        return is_test_mode();
-    }
     let host = url_host(url);
     let after_scheme = url.split("://").nth(1).unwrap_or(url);
     let path = after_scheme.strip_prefix(host).unwrap_or(after_scheme);
@@ -828,11 +828,21 @@ fn install_to_staging(docset: &str, url: &str, expected_sha256: Option<&str>) ->
 
     // OQ6/P1: package downloads must resolve to a release-artifact URL, so a
     // catalog entry (or direct caller) cannot point install at an arbitrary
-    // raw/branch repo path. file:// test fixtures bypass this; the index fetch
-    // uses the broader is_allowed_registry_url instead.
-    if !is_test_file_url(url) && !is_allowed_package_url(url) {
+    // raw/branch repo path. file:// test fixtures are accepted ONLY in test
+    // mode (S3); in production, file:// URLs are rejected so the library API
+    // cannot be used to install arbitrary local files.
+    if is_test_file_url(url) {
+        if !is_test_mode() {
+            anyhow::bail!(
+                "file:// URLs are not allowed in production builds; \
+                 registry downloads must use github.com/nowdocs-registry/ or registry.nowdocs.dev"
+            );
+        }
+    } else if !is_allowed_package_url(url) {
         anyhow::bail!(
-            "registry URL not in allowed domains: {url} (package downloads must be a release artifact: github.com/nowdocs-registry/<repo>/releases, registry.nowdocs.dev/releases)"
+            "registry URL not in allowed domains: {url} (package downloads must be \
+             a release artifact: github.com/nowdocs-registry/<repo>/releases, \
+             registry.nowdocs.dev/releases)"
         );
     }
 

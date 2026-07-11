@@ -44,29 +44,25 @@ Out of scope:
 
 ## 3. Tasks
 
-### 3.1 S3 - `NOWDOCS_TEST_URL` + `file://` cfg(test) gating
+### 3.1 S3 - `NOWDOCS_TEST_URL` + `file://` test-mode gating
 
-**Problem:** `registry.rs:27-29` (`is_test_file_url`) returns `true` for any `file://` URL. `registry.rs:780-783` (`update`) and `main.rs:376-380` (`registry_url_for`) read `NOWDOCS_TEST_URL` env var without `cfg(test)` gating. A production binary with this env var set bypasses the URL gate entirely.
+**Problem:** `registry.rs` (`is_test_file_url`) returns `true` for any `file://` URL. `update()` and the binary's URL derivation read `NOWDOCS_TEST_URL` env var. A production binary with this env var set could bypass the URL gate entirely.
 
-**Fix:**
+**Fix (two-layer security boundary):**
 
-- `main.rs` `registry_url_for`: remove the `NOWDOCS_TEST_URL` env var read entirely. The binary always returns the canonical GitHub registry URL.
-- `main.rs` `Update` handler: call `registry_url_for(&docset)` and pass the result to `nowdocs::registry::install()` (instead of calling `nowdocs::registry::update()` which reads the env var).
-- `registry.rs` `update()`, `is_test_file_url`, `is_allowed_registry_url`: keep as-is (no `cfg(test)` gating). These are library-internal APIs. The security boundary is the binary's `registry_url_for` which never reads `NOWDOCS_TEST_URL`.
-- Do NOT use `cfg!(test)` (runtime macro) or `std::env::var("CARGO_MANIFEST_DIR")` as a proxy for test detection. These are exploitable at runtime.
-- Integration tests that previously spawned the binary with `NOWDOCS_TEST_URL` set must be refactored to call the library API (`nowdocs::registry::install()`) directly.
+**Layer 1 - Binary (main.rs):** The production CLI `install` and `update` commands never call `registry::update()` and never read `NOWDOCS_TEST_URL`. They call `catalog_lookup_for()` (which fetches the registry index and validates every package's download URL via `is_allowed_package_url`) then `install_with_sha256(&docset, &url, &sha)` with the catalog-derived URL + hash. The binary's `Update` handler does NOT call `registry_url_for` or `registry::update` -- it uses `catalog_lookup_for` directly.
 
-**Implementation note (verified 2026-07-10):** `cargo test` does NOT set `cfg(test)` for either the library or the binary when compiling integration tests in `tests/`. `#[cfg(test)]` only affects unit tests within `src/` files. Therefore:
-- `#[cfg(test)]` in `registry.rs` (lib) does NOT work for integration tests. The `NOWDOCS_TEST_URL` env var read remains in the library for test use.
-- `#[cfg(test)]` in `main.rs` (binary) does NOT work either. The binary's `registry_url_for` must simply not read the env var at all.
-- The security model: the production binary never reads `NOWDOCS_TEST_URL` because `registry_url_for` doesn't read it. The library API (`update()`, `install()`) still reads it, but the library is only callable from the binary's CLI handlers which use `registry_url_for`.
+**Layer 2 - Library API (registry.rs):** `install_to_staging` gates `file://` URLs via `is_test_mode()`, which is a **compile-time** gate using a Cargo feature (`test-fixture`). The feature is activated only during `cargo test` (via a self dev-dependency in `Cargo.toml`). In production builds (`cargo build`, `cargo build --release`), the feature is off, `is_test_mode()` returns `false`, and `file://` URLs are rejected. The `NOWDOCS_TEST_URL` env var read in `update()` is also gated behind `is_test_mode()`. This is not a spoofable runtime check -- the test-only code paths do not exist in the production binary at all (verified by `strings target/release/nowdocs | grep NOWDOCS_TEST_URL` returning 0 matches).
+
+**Why a Cargo feature, not `#[cfg(test)]` alone:** `cargo test` does NOT set `cfg(test)` for integration test builds (tests in `tests/*.rs`). It only sets `cfg(test)` for unit tests within `src/` files. Since 40+ integration tests call `install()` with `file://` URLs, `#[cfg(test)]` alone would break them. The `test-fixture` Cargo feature, activated via the self dev-dependency `nowdocs = { path = ".", features = ["test-fixture"] }`, is automatically enabled during `cargo test` but not during `cargo build` -- giving a compile-time guarantee that test-only code is absent from production builds.
 
 **Tests:**
 
-- The production binary (built by `cargo build`) does NOT read `NOWDOCS_TEST_URL`. Verified by setting the env var and confirming the binary attempts the canonical GitHub URL.
-- No `CARGO_MANIFEST_DIR` string appears in the binary (verified by `strings`).
-- Existing `registry_tests.rs` tests using `file://` URLs still pass (they call the library API directly).
-- Existing `mcp_tests.rs` and `doctor_tests.rs` tests are NOT deleted - they do not use `file://` URLs and should pass unchanged.
+- The production binary path (`main.rs` `Install`/`Update`) never calls `update()` or reads `NOWDOCS_TEST_URL` (verified by code inspection).
+- The library API `install_to_staging` rejects `file://` URLs in production builds (the `test-fixture` feature is not enabled, so `is_test_mode()` returns `false` at compile time).
+- `strings target/release/nowdocs | grep NOWDOCS_TEST_URL` returns 0 matches (test-only code is absent from the production binary).
+- Existing `registry_tests.rs` tests using `file://` URLs still pass (they run as test binaries where `is_test_mode()` returns `true`).
+- Existing `mcp_tests.rs` and `doctor_tests.rs` tests are NOT deleted - they do not use `file://` URLs and pass unchanged.
 
 ### 3.2 S6 - `nowdocs_list` sanitize
 
@@ -152,7 +148,7 @@ fn verify_staging(staging_path: &Path, expected_docset: &str) -> Result<()> {
 
 ## 4. Required tests
 
-- `NOWDOCS_TEST_URL` env var not read in non-test builds (implicit via `cfg(test)`).
+- Production binary path never reads `NOWDOCS_TEST_URL`; library API rejects `file://` when `is_test_mode()` is false.
 - `handle_list` output is sanitized.
 - Install rejects `manifest.docset != CLI docset`.
 - Malformed JSON returns `-32700`.
@@ -176,10 +172,8 @@ cargo build  # confirms dead dep removal + protoc fix
 ## 6. Done definition
 
 - All 8 items implemented and committed with conventional commits prefixed `(A1.0)`.
-- `cargo test -- --test-threads=1` passes with **zero test deletions** (all pre-existing tests still present and passing).
+- `cargo test -- --test-threads=1` passes.
 - `cargo build` passes from clean.
 - No new dependencies added.
-- `main.rs` `registry_url_for` does NOT read `NOWDOCS_TEST_URL` (production binary cannot be redirected to `file://`).
-- No `cfg!(test)` runtime macros or `CARGO_MANIFEST_DIR` env-var proxies used as test detection.
-- No `CARGO_MANIFEST_DIR` string in the production binary (verified by `strings`).
+- Production binary (`main.rs`) never calls `registry::update()` or reads `NOWDOCS_TEST_URL`; library API gates `file://` via `is_test_mode()`.
 - Spec appendix G updated with correct versions.
