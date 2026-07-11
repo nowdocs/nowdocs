@@ -118,10 +118,14 @@ impl Embedder {
         // cache dir straight to the builder (M13). This avoids mutating any
         // process-wide downloader env var (load runs inside a tokio runtime) and
         // keeps the door open for a second model with a distinct cache dir.
+        //
+        // `from_env()` (not `new()`) so a user-set `HF_ENDPOINT` mirror/proxy is
+        // honored; `with_cache_dir` then overrides only the cache path back under
+        // the nowdocs layout, leaving the endpoint intact.
         let model_cache = crate::cache::model_path(&spec.model_id);
         std::fs::create_dir_all(&model_cache).context("create model cache dir")?;
 
-        let api = ApiBuilder::new()
+        let api = ApiBuilder::from_env()
             .with_cache_dir(model_cache)
             .with_progress(false)
             .build()

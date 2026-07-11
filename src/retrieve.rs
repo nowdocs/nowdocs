@@ -19,13 +19,16 @@ const MMR_LAMBDA: f32 = 0.7;
 /// is below this floor the docset is treated as having no answer and `search`
 /// returns empty rather than the irrelevant top-K.
 ///
-/// The default RRF fusion constant is `k=60`, i.e. `score = 1/(rank + 60)`. For
-/// any non-empty candidate set the top fused score is therefore at least
-/// `1/61 ≈ 0.0164`. A placeholder below that floor (e.g. 0.01) would pass every
-/// query, so this value is set just above the floor at 0.02. Calibrating it
-/// properly against real Next.js eval data is still deferred to A1.3.
+/// The default RRF fusion constant is `k=60`, i.e. `score = 1/(rank + 60)`. A
+/// hit that surfaces in only ONE channel (vector-only or FTS-only) tops out at
+/// about `1/60 ≈ 0.0167` for rank 1, while a hit in BOTH channels can reach
+/// `2/61 ≈ 0.0328`. The gate must therefore stay BELOW the single-channel
+/// rank-1 floor (~0.0164) or it would discard every vector-only / FTS-only
+/// answer. 0.015 sits just under that floor so single-channel top matches pass
+/// while deep-noise hits (rank ≳ 10 single-channel, ~0.014) are still dropped.
+/// Proper calibration against real Next.js eval data is deferred to A1.3.
 // TODO(A1.3): calibrate threshold against real eval data.
-pub const MIN_RELEVANCE_THRESHOLD: f32 = 0.02;
+pub const MIN_RELEVANCE_THRESHOLD: f32 = 0.015;
 
 #[derive(Debug, Clone)]
 pub struct SearchResult {
