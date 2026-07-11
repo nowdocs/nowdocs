@@ -51,5 +51,16 @@ pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ targe
 bin-dir = "{ name }-v{ version }-{ target }"
 pkg-fmt = "tgz"
 
+[features]
+# Enables `file://` URL acceptance and `NOWDOCS_TEST_URL` env var reads for
+# test fixtures. This is a compile-time gate (not a spoofable runtime check):
+# `cargo build` / `cargo build --release` do NOT enable it, so `file://` URLs
+# and `NOWDOCS_TEST_URL` are rejected in production builds. `cargo test`
+# activates it automatically via the self dev-dependency below.
+test-fixture = []
+
 [dev-dependencies]
+# Self-dependency: activates `test-fixture` during `cargo test` so integration
+# tests (tests/*.rs) get `file://` URL support without runtime detection.
+nowdocs = { path = ".", features = ["test-fixture"] }
 tempfile = "3.10"
