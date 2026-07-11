@@ -12,7 +12,6 @@ env:
   CARGO_TERM_COLOR: always
   RUST_VERSION: 1.97.0
   PROTOC: /usr/bin/protoc
-  HF_ENDPOINT: https://hf-mirror.com
 
 jobs:
   eval:
