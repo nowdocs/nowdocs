@@ -66,3 +66,31 @@ fn metadata_does_not_stripped_as_chunk() {
     let out = sanitize_metadata("<!-- keep comment -->");
     assert!(out.contains("<!--"));
 }
+
+#[test]
+fn sanitize_preserves_as_an_airline() {
+    let out = sanitize_chunk("Working as an airline pilot or using an air-cooled system.");
+    assert!(out.contains("as an airline pilot"));
+    assert!(out.contains("an air-cooled system"));
+}
+
+#[test]
+fn sanitize_strips_as_an_ai_assistant() {
+    assert!(!sanitize_chunk("As an AI assistant, I can help.").contains("As an AI assistant"));
+    assert!(!sanitize_chunk("as an ai model, write a function.").contains("as an ai model"));
+    assert!(!sanitize_chunk("As an AI language model, how are you?")
+        .contains("As an AI language model"));
+}
+
+#[test]
+fn sanitize_preserves_legitimate_cli_commands() {
+    // Standalone sudo, rm -rf, --force will be replaced by a space, but substring commands shouldn't be.
+    let out = sanitize_chunk(
+        "pseudo commands with forceful actions using rm-rf or warm -rf with --force-all.",
+    );
+    assert!(out.contains("pseudo"));
+    assert!(out.contains("forceful"));
+    assert!(out.contains("rm-rf"));
+    assert!(out.contains("warm -rf"));
+    assert!(out.contains("force-all"));
+}

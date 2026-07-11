@@ -61,7 +61,7 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             Ok(())
         }
         Commands::ListInstalled => {
-            let docsets = list_installed()?;
+            let docsets = nowdocs::cache::list_installed()?;
             if docsets.is_empty() {
                 println!("no docsets installed");
             } else {
@@ -283,93 +283,25 @@ fn print_doctor_output(output: &nowdocs::doctor::DoctorOutput) {
     }
 }
 
-/// Read manifest metadata for a docset, returning (version, chunk_count, license).
-fn read_docset_meta(docset: &str) -> (String, String, String) {
-    let manifest_path = nowdocs::cache::manifest_path(docset);
-    if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
-        if let Ok(m) = nowdocs::manifest::parse_manifest(&raw) {
-            return (
-                m.doc_version,
-                m.source.chunk_count.to_string(),
-                m.legal.license,
-            );
-        }
-    }
-    ("?".into(), "?".into(), "?".into())
-}
-
-/// Check if a docset manifest parses and validates successfully.
-fn is_docset_healthy(docset: &str) -> bool {
-    let manifest_path = nowdocs::cache::manifest_path(docset);
-    if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
-        if let Ok(m) = nowdocs::manifest::parse_manifest(&raw) {
-            return nowdocs::manifest::validate(&m).is_ok();
-        }
-    }
-    false
-}
-
 /// Print enriched success output after install.
 fn print_install_success(docset: &str) {
-    let (version, chunks, license) = read_docset_meta(docset);
+    let (version, chunks, license) = nowdocs::cache::read_docset_meta(docset);
     println!("installed {docset} v{version} ({chunks} chunks, {license})");
     println!("next: nowdocs smoke {docset}");
 }
 
 /// Print enriched success output after update.
 fn print_update_success(docset: &str) {
-    let (version, chunks, license) = read_docset_meta(docset);
+    let (version, chunks, license) = nowdocs::cache::read_docset_meta(docset);
     println!("updated {docset} v{version} ({chunks} chunks, {license})");
     println!("next: nowdocs smoke {docset}");
 }
 
 /// Print enriched success output after ingest.
 fn print_ingest_success(docset: &str, files: u32, chunks: u32) {
-    let (_, _, license) = read_docset_meta(docset);
+    let (_, _, license) = nowdocs::cache::read_docset_meta(docset);
     println!("ingested {docset}: {files} files, {chunks} chunks ({license})");
     println!("next: nowdocs smoke {docset}");
-}
-
-/// List installed docsets with metadata.
-struct InstalledDocset {
-    name: String,
-    version: String,
-    chunks: String,
-    license: String,
-    status: String,
-}
-
-fn list_installed() -> std::io::Result<Vec<InstalledDocset>> {
-    let db_dir = nowdocs::cache::cache_root().join("db");
-    let mut docsets: Vec<InstalledDocset> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&db_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if let Some(stem) = name.strip_suffix(".lance") {
-                        let (version, chunks, license) = read_docset_meta(stem);
-                        let status = if is_docset_healthy(stem) {
-                            "ok"
-                        } else if nowdocs::cache::manifest_path(stem).is_file() {
-                            "broken"
-                        } else {
-                            "no-manifest"
-                        };
-                        docsets.push(InstalledDocset {
-                            name: stem.to_string(),
-                            version,
-                            chunks,
-                            license,
-                            status: status.to_string(),
-                        });
-                    }
-                }
-            }
-        }
-    }
-    docsets.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(docsets)
 }
 
 fn registry_url_for(docset: &str) -> String {

@@ -59,6 +59,12 @@ pub fn run_default_checks() -> DoctorOutput {
     // Check for stale staging directories
     checks.push(check_stale_staging());
 
+    // Check model cache status (M15)
+    checks.extend(run_model_check().checks);
+
+    // Check MCP handler status (M15)
+    checks.extend(run_mcp_check().checks);
+
     // Determine overall status
     let status = if checks.iter().any(|c| c.severity == Severity::Fail) {
         Severity::Fail

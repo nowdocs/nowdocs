@@ -37,7 +37,7 @@ fn re_display_none() -> &'static Regex {
 fn re_override() -> &'static Regex {
     RE_OVERRIDE.get_or_init(|| {
         Regex::new(
-            r"(?i)ignore (?:previous|prior) instructions|note for the assistant|you (?:may|can) (?:run|execute)|as an ai|system prompt",
+            r"(?i)ignore (?:previous|prior) instructions|note for the assistant|you (?:may|can) (?:run|execute)|as an ai\b|system prompt",
         )
         .unwrap()
     })
@@ -46,7 +46,8 @@ fn re_override() -> &'static Regex {
 fn re_danger() -> &'static Regex {
     // Danger flags only as standalone tokens (preceded by start/space), so a
     // flag substring inside a version string like "forceful" is not touched.
-    RE_DANGER.get_or_init(|| Regex::new(r"(^|\s)(?:-y|--yes|--force|sudo|rm\s+-rf)\b").unwrap())
+    RE_DANGER
+        .get_or_init(|| Regex::new(r"(^|\s)(?:-y|--yes|--force|sudo|rm\s+-rf)\b($|[^-])").unwrap())
 }
 
 fn strip_zero_width(s: &str) -> String {
@@ -66,7 +67,7 @@ pub fn sanitize_chunk(text: &str) -> String {
     let s = strip_zero_width(&s);
     let s = re_override().replace_all(&s, "").into_owned();
     // Collapse any whitespace left behind by removed flags/phrases.
-    let s = re_danger().replace_all(&s, " ").into_owned();
+    let s = re_danger().replace_all(&s, "$1$2").into_owned();
     collapse_whitespace(&s)
 }
 

@@ -3,31 +3,17 @@
 use std::fmt;
 
 /// Error categories matching the spec.
+///
+/// Additional categories deferred to v2 when error taxonomy is wired end-to-end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCategory {
-    Input,
-    Network,
     Archive,
-    Manifest,
-    Cache,
-    Model,
-    Retrieval,
-    Mcp,
-    Internal,
 }
 
 impl fmt::Display for ErrorCategory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Input => write!(f, "input"),
-            Self::Network => write!(f, "network"),
             Self::Archive => write!(f, "archive"),
-            Self::Manifest => write!(f, "manifest"),
-            Self::Cache => write!(f, "cache"),
-            Self::Model => write!(f, "model"),
-            Self::Retrieval => write!(f, "retrieval"),
-            Self::Mcp => write!(f, "mcp"),
-            Self::Internal => write!(f, "internal"),
         }
     }
 }

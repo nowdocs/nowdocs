@@ -1,9 +1,13 @@
-//! Store wraps async LanceDB with a synchronous facade.
+//! # Store sync facade
 //!
-//! Suitable for CLI tools and stdio-based MCP servers where synchronous blocking is acceptable.
-//! Note: It cannot be used inside an existing tokio runtime context due to potential nested runtime panics
-//! ("Cannot start a runtime from within a runtime").
-//! True AsyncStore implementation is deferred to v2.
+//! `Store` wraps LanceDB's async API behind a synchronous interface using
+//! `tokio::runtime::Builder::new_current_thread().enable_all()`. This is
+//! suitable for CLI and stdio MCP server consumers.
+//!
+//! **Limitation:** `Store` cannot be used inside an existing tokio runtime
+//! (detected via `catch_unwind(block_on)` probe; `spawn_blocking` callers
+//! are supported). Future async MCP transport or library embedding should
+//! introduce an `AsyncStore` variant (deferred to v2).
 
 use std::sync::Arc;
 
@@ -514,6 +518,7 @@ async fn ensure_table_schema(table: &lancedb::Table) -> Result<()> {
 /// source_url, api_version, chunk_type, chunk_idx, text.
 fn table_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
+        // dead field, do not rely on
         Field::new("id", DataType::UInt32, false),
         Field::new(
             "vector",
@@ -536,6 +541,7 @@ fn table_schema() -> Arc<Schema> {
 fn chunks_to_batch(chunks: &[Chunk], vectors: &[Vec<f32>]) -> Result<RecordBatch> {
     let n = chunks.len();
 
+    // dead field, do not rely on
     let ids: UInt32Array = (0..n as u32).collect();
     let heading_paths = StringArray::from(
         chunks
