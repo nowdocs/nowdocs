@@ -867,14 +867,40 @@ fn promote_staging(docset: &str, staging_path: &Path) -> Result<()> {
     let rollback = if had_active {
         let rb = cache::rollback_path(docset);
         std::fs::create_dir_all(&rb)?;
-        if active_db.exists() {
-            std::fs::rename(&active_db, rb.join("db.lance"))?;
-        }
-        if active_manifest.is_file() {
-            std::fs::rename(&active_manifest, rb.join("manifest.json"))?;
-        }
-        if active_license.is_file() {
-            std::fs::rename(&active_license, rb.join("license.txt"))?;
+
+        let mut db_moved = false;
+        let mut manifest_moved = false;
+        let mut license_moved = false;
+
+        let backup_res = (|| -> Result<()> {
+            if active_db.exists() {
+                std::fs::rename(&active_db, rb.join("db.lance"))?;
+                db_moved = true;
+            }
+            if active_manifest.is_file() {
+                std::fs::rename(&active_manifest, rb.join("manifest.json"))?;
+                manifest_moved = true;
+            }
+            if active_license.is_file() {
+                std::fs::rename(&active_license, rb.join("license.txt"))?;
+                license_moved = true;
+            }
+            Ok(())
+        })();
+
+        if let Err(e) = backup_res {
+            // Transactional rollback: restore any partially moved active files before returning the error
+            if db_moved {
+                let _ = std::fs::rename(rb.join("db.lance"), &active_db);
+            }
+            if manifest_moved {
+                let _ = std::fs::rename(rb.join("manifest.json"), &active_manifest);
+            }
+            if license_moved {
+                let _ = std::fs::rename(rb.join("license.txt"), &active_license);
+            }
+            let _ = std::fs::remove_dir_all(&rb);
+            return Err(e);
         }
         Some(rb)
     } else {
@@ -1098,8 +1124,8 @@ struct ChunkRow<'a> {
 ///
 /// (S3) The library `update()` reads `NOWDOCS_TEST_URL` for test fixtures.
 /// The production binary never calls this function with a test URL because
-/// `main.rs` `Update` handler calls `registry_url_for` (which does NOT read
-/// `NOWDOCS_TEST_URL`) and passes the canonical URL to `install()` directly.
+/// `main.rs` `Update` handler calls `catalog_lookup_for` (which does NOT read
+/// `NOWDOCS_TEST_URL`) and passes the canonical/catalog-paired URL to `install()` directly.
 pub fn update(docset: &str) -> Result<()> {
     let docset = input::validate_docset(docset)?;
     if is_test_mode() && is_test_file_url(&std::env::var("NOWDOCS_TEST_URL").unwrap_or_default()) {
@@ -1136,10 +1162,9 @@ pub fn uninstall(docset: &str) -> Result<()> {
     Ok(())
 }
 
-/// Best-effort removal of `<root>/<docset>-*` directories (staging/rollback
+/// Best-effort removal of `<root>/<docset>-<pid>-<timestamp>` directories (staging/rollback
 /// leftovers for one docset). Other docsets' dirs are left untouched.
 fn remove_docset_dirs(root: PathBuf, docset: &str) {
-    let prefix = format!("{docset}-");
     let entries = match std::fs::read_dir(&root) {
         Ok(it) => it,
         Err(_) => return,
@@ -1147,12 +1172,25 @@ fn remove_docset_dirs(root: PathBuf, docset: &str) {
     for entry in entries.flatten() {
         let path = entry.path();
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        let name_match = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with(&prefix));
-        if is_dir && name_match {
-            let _ = std::fs::remove_dir_all(&path);
+        if is_dir {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                // Safely match <docset>-<pid>-<timestamp> without prefix-matching other
+                // docsets (e.g. "foo" matching leftovers of "foo-bar").
+                let mut parts = name.rsplitn(3, '-');
+                let timestamp = parts.next();
+                let pid = parts.next();
+                let d = parts.next();
+                let name_match = matches!(
+                    (d, pid, timestamp),
+                    (Some(expected), Some(p), Some(t))
+                        if expected == docset
+                            && p.chars().all(|c| c.is_ascii_digit())
+                            && t.chars().all(|c| c.is_ascii_digit())
+                );
+                if name_match {
+                    let _ = std::fs::remove_dir_all(&path);
+                }
+            }
         }
     }
 }
