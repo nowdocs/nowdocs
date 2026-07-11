@@ -103,21 +103,54 @@ fn eval_false_positive_rate_math() {
     );
 }
 
+/// M24 FP gate: `assert_negative_quality` passes at/below
+/// MAX_FALSE_POSITIVE_RATE and panics above it. Pure, no embedder.
+#[test]
+fn eval_assert_negative_quality_passes_below_gate() {
+    use nowdocs::eval::{assert_negative_quality, NegativeReport};
+    let report = NegativeReport {
+        false_positive_rate: 0.0,
+        answered: 0,
+        n: 12,
+        top_scores: vec![None; 12],
+    };
+    assert_negative_quality(&report);
+    let at_gate = NegativeReport {
+        false_positive_rate: nowdocs::eval::MAX_FALSE_POSITIVE_RATE,
+        answered: 1,
+        n: 10,
+        top_scores: vec![None; 10],
+    };
+    assert_negative_quality(&at_gate);
+}
+
+#[test]
+#[should_panic(expected = "false-positive rate")]
+fn eval_assert_negative_quality_panics_above_gate() {
+    use nowdocs::eval::{assert_negative_quality, NegativeReport};
+    let report = NegativeReport {
+        false_positive_rate: 0.5,
+        answered: 1,
+        n: 2,
+        top_scores: vec![Some(0.03), None],
+    };
+    assert_negative_quality(&report);
+}
+
 /// M24: end-to-end smoke of `evaluate_negatives` over the golden fixture
 /// corpus. Ignored: loads the real embedder.
 ///
 /// This test is STRUCTURAL + telemetry only — it asserts the API executes
 /// every query and stays internally consistent, and prints the metric lines
-/// the CI eval job tracks. It deliberately asserts NOTHING about the FP rate
-/// or top scores, because on the 3-file toy corpus those numbers are
-/// meaningless by construction: dense vector search always returns a rank-1
-/// neighbor, and a single-channel rank-1 RRF score (1/60 ≈ 0.0167) always
-/// clears the N4 no-answer gate (`MIN_RELEVANCE_THRESHOLD` = 0.015), so the
-/// FP rate is ~1.0 and 2/12 queries even get dual-channel rank-1 agreement
-/// (2/60 ≈ 0.0333, the maximum possible score). The no-answer gate's
-/// calibration is tracked as an open question; the FP-rate trend is watched
-/// by the CI eval job (`negative-eval:` / `negative-eval-nextjs:` lines)
-/// rather than hard-gated here.
+/// the CI eval job tracks. It deliberately does NOT hard-gate the FP rate:
+/// on the 3-file toy corpus the measured FP rate is 0.167 because two
+/// negative queries achieve dual-channel rank-1 agreement (RRF 0.0333), which
+/// is cheap on a tiny search space — any vaguely related chunk can top both
+/// channels against 3 files. This is a fixture-size pathology, not a gate
+/// failure: the same queries against the real Next.js corpus measure FP 0.000,
+/// and `test_eval_nextjs_real` enforces the hard gate there
+/// (`assert_negative_quality`). The FP-rate trend on the toy corpus is watched
+/// by the CI eval job (`negative-eval:` lines) as a smoke signal.
 #[test]
 #[ignore = "needs real embedder (~66MB download, ~30s)"]
 fn eval_negative_queries_return_empty_or_low_confidence() {
@@ -365,6 +398,23 @@ fn test_eval_nextjs_real() {
     let _cache_guard = ensure_nextjs_real();
     let golden = golden_nextjs();
 
+    // Calibration instrumentation (gate fix): load embedder + store directly so
+    // each query's top-hit COSINE can be printed alongside its rank. The N4
+    // gate redesign thresholds on cosine, so the positive-query distribution
+    // here (vs the negative-query distribution below) is what calibrates
+    // `MIN_ANSWER_COSINE`.
+    let manifest_json =
+        std::fs::read_to_string(nowdocs::cache::manifest_path("nextjs_real")).unwrap();
+    let manifest = nowdocs::manifest::parse_manifest(&manifest_json).unwrap();
+    nowdocs::manifest::validate(&manifest).unwrap();
+    let spec = nowdocs::embedder::EmbedderSpec {
+        model_id: manifest.embedder.model_id.clone(),
+        model_revision: manifest.embedder.model_revision.clone(),
+        model_sha256: manifest.embedder.model_sha256.clone(),
+    };
+    let embedder = nowdocs::embedder::Embedder::load_for(&spec).expect("load embedder");
+    let store = nowdocs::store::Store::open("nextjs_real").expect("open store");
+
     let mut ranks: Vec<Option<usize>> = Vec::with_capacity(golden.len());
     for q in &golden {
         let result = retrieve::search("nextjs_real", &q.query, Some(4000), Some(5))
@@ -375,11 +425,19 @@ fn test_eval_nextjs_real() {
             .take(5)
             .position(|c| c.source_url == q.expected_source_url)
             .map(|p| p + 1);
+        // Top-hit cosine for gate calibration (query vector vs the returned
+        // top chunk's stored vector; None when the gate returned empty).
+        let top_cosine = result.chunks.first().and_then(|c| {
+            let qv = embedder.embed(&q.query).ok()?;
+            let vecs = store.fetch_vectors(&[c.chunk_idx]).ok()?;
+            vecs.get(&c.chunk_idx).map(|hv| cosine_sim(&qv, hv))
+        });
         eprintln!(
-            "  q={:?} expected={:?} rank={:?} hits={}",
+            "  q={:?} expected={:?} rank={:?} top_cosine={:?} hits={}",
             q.query,
             q.expected_source_url,
             rank,
+            top_cosine,
             result
                 .chunks
                 .iter()
@@ -397,15 +455,28 @@ fn test_eval_nextjs_real() {
         mrr
     );
     assert!(
-        recall >= 0.5,
-        "recall@5 {recall} too low on real nextjs corpus"
+        recall >= 0.90,
+        "recall@5 {recall} below the release bar (0.90) on real nextjs corpus"
+    );
+    // MRR release bar is 0.85 (OQ9); measured ceiling on this corpus/model is
+    // ~0.725 after the quality lift (was 0.558). Root-cause analysis for the
+    // remaining gap is in the quality-lift commit message: for 4 of 10 golden
+    // queries the labeled page is genuinely not the corpus's closest chunk to
+    // the query — 2–6 legitimately relevant competing pages out-cosine it
+    // (catchError.md over error-handling.md, layouts-and-pages.md over
+    // linking-and-navigating.md, backend-for-frontend.md over
+    // route-handlers.md, mutating-data/updateTag/caching pages over
+    // revalidating.md) — and the golden set grants no partial credit. Assert
+    // 0.70 to lock in the lift while the bar stays an open question.
+    assert!(
+        mrr >= 0.70,
+        "mrr {mrr} below the enforced floor (0.70; release bar 0.85 is a documented gap) on real nextjs corpus"
     );
 
-    // M24 telemetry: negative (out-of-scope) queries against the same real
-    // corpus — report-only, no hard gate. Measured FP rate is ~1.0 because
-    // dense vector search always returns a rank-1 neighbor whose RRF score
-    // (1/60 ≈ 0.0167) clears the N4 no-answer gate (0.015); the gate's
-    // calibration is an open question. The CI eval job tracks this line.
+    // M24 FP gate (enforced since the N4 gate redesign): negative
+    // (out-of-scope) queries against the same real corpus must stay below
+    // MAX_FALSE_POSITIVE_RATE. Measured 0.000 with the cosine gate (was ~1.0
+    // under the structural RRF-only gate). The CI eval job tracks this line.
     let neg_path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "tests", "fixtures", "golden"]
         .iter()
         .collect::<PathBuf>()
@@ -424,7 +495,39 @@ fn test_eval_nextjs_real() {
         neg_report.n, neg_report.answered, neg_report.false_positive_rate
     );
     for (q, top) in neg_queries.iter().zip(neg_report.top_scores.iter()) {
-        eprintln!("negative-eval-nextjs: q={:?} top_score={:?}", q, top);
+        // Calibration: raw top-hit cosine even when the gate blocked the query
+        // (top_score is None then) — the negative-band distribution is what
+        // sets the upper edge of MIN_ANSWER_COSINE.
+        let qv = embedder.embed(q).expect("embed negative query");
+        let raw = store
+            .hybrid_search(&qv, q, 1)
+            .expect("hybrid search negative query");
+        let top_cosine = raw.first().and_then(|h| {
+            store
+                .fetch_vectors(&[h.chunk_idx])
+                .ok()
+                .and_then(|v| v.get(&h.chunk_idx).map(|hv| cosine_sim(&qv, hv)))
+        });
+        eprintln!(
+            "negative-eval-nextjs: q={:?} top_score={:?} top_cosine={:?}",
+            q, top, top_cosine
+        );
+    }
+    // Hard FP gate on the real corpus (see MAX_FALSE_POSITIVE_RATE).
+    nowdocs::eval::assert_negative_quality(&neg_report);
+}
+
+/// Cosine similarity helper for gate-calibration prints (mirrors the private
+/// `retrieve::cosine`; duplicated here to keep the calibration instrumentation
+/// test-local).
+fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na * nb)
     }
 }
 
@@ -471,6 +574,8 @@ fn test_eval_nextjs_diagnose() {
     // (absent from top-50) — and (b) the top-15 source_urls + unique count, so
     // repeated source_urls reveal whether per-source_url dedup would lift the
     // expected chunk into the top-5.
+    let mut lambda_ranks: std::collections::HashMap<u32, Vec<Option<usize>>> =
+        std::collections::HashMap::new();
     for q in &golden {
         let qv = embedder.embed(&q.query).expect("embed query");
         let hits = store
@@ -483,6 +588,51 @@ fn test_eval_nextjs_diagnose() {
         let miss = raw_rank.is_none_or(|r| r > 5);
         let tag = if miss { "MISS" } else { "ok  " };
         eprintln!("  [{}] q={:?} expected rank={:?}", tag, q.query, raw_rank);
+        // Replicate the retrieve::search rerank pipeline (raw_k=40 pool ->
+        // fetch_vectors -> MMR) for EVERY query across a lambda sweep, so one
+        // run shows the relevance/diversity trade-off's effect on the expected
+        // chunk's MMR rank. Per-lambda recall@5/MRR is printed after the loop
+        // (MMR top-5 rank equals the final window rank — hits lead the window).
+        {
+            let raw_k = 40usize;
+            let pool = store
+                .hybrid_search_k(&qv, &q.query, raw_k, 60.0)
+                .expect("hybrid search raw_k pool");
+            let ids: Vec<u32> = pool.iter().map(|h| h.chunk_idx).collect();
+            let vecs = store.fetch_vectors(&ids).expect("fetch vectors");
+            // Pool's top-8 by query-cosine with each chunk's fused rank — shows
+            // whether a miss is a relevance-signal gap (expected cosine rank
+            // 6+) or a selection/diversity issue (competitive cosine, unselected).
+            let mut by_cos: Vec<(usize, f32, &str)> = pool
+                .iter()
+                .enumerate()
+                .map(|(i, h)| {
+                    let c = vecs
+                        .get(&h.chunk_idx)
+                        .map(|v| cosine_sim(&qv, v))
+                        .unwrap_or(0.0);
+                    (i + 1, c, h.source_url.as_str())
+                })
+                .collect();
+            by_cos.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+            let top8: Vec<String> = by_cos
+                .iter()
+                .take(8)
+                .map(|(fr, c, u)| format!("{}(cos {:.3}, fused {})", u, c, fr))
+                .collect();
+            eprintln!("        pool top-8 by cosine: {}", top8.join(", "));
+            for &lambda in &[0.7_f32, 0.8, 0.9, 1.0] {
+                let mmr = nowdocs::retrieve::mmr_rerank(&qv, pool.clone(), &vecs, 5, lambda);
+                let rank = mmr
+                    .iter()
+                    .position(|h| h.source_url == q.expected_source_url)
+                    .map(|p| p + 1);
+                lambda_ranks.entry(lambda.to_bits()).or_default().push(rank);
+                if lambda == 0.7 {
+                    eprintln!("        lambda=0.7 expected MMR rank: {:?}", rank);
+                }
+            }
+        }
         if miss {
             // Pure-channel ranks isolate whether FTS or vector recall is weak.
             // hybrid = FTS ∪ vector + RRF; a miss absent from both pure top-50
@@ -534,5 +684,19 @@ fn test_eval_nextjs_diagnose() {
             let unique = urls.iter().filter(|u| seen.insert(**u)).count();
             eprintln!("        unique source_urls in top-15: {}/15", unique);
         }
+    }
+
+    // Lambda sweep summary: recall@5 / MRR the retrieve::search pipeline would
+    // score with each MMR lambda (raw_k=40 pool, cosine relevance). Guides the
+    // relevance/diversity trade-off without re-running the full eval per value.
+    let mut lambdas: Vec<f32> = lambda_ranks.keys().map(|b| f32::from_bits(*b)).collect();
+    lambdas.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    for lambda in lambdas {
+        let ranks = &lambda_ranks[&lambda.to_bits()];
+        let (recall, mrr) = nowdocs::eval::compute_metrics(ranks);
+        eprintln!(
+            "  lambda-sweep: lambda={:.2} recall@5={:.3} mrr={:.3} ranks={:?}",
+            lambda, recall, mrr, ranks
+        );
     }
 }

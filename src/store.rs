@@ -26,6 +26,7 @@ use lancedb::{table::NewColumnTransform, Session};
 use crate::cache;
 use crate::chunker::{Chunk, ChunkType};
 
+#[derive(Clone)]
 pub struct SearchHit {
     pub score: f32,
     pub chunk_idx: u32,

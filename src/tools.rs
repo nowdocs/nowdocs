@@ -14,12 +14,11 @@ const ERR_METHOD_NOT_FOUND: i64 = -32601;
 /// plus an actionable hint — never as a raw JSON-RPC error, and never with the
 /// internal error chain leaked to the LLM.
 ///
-/// Note: the parent spec (a1-mcp-error-contract §3.1) suggests classifying via
-/// downcastable sentinel error types defined in `retrieve.rs`/`store.rs`. This
-/// phase's file-scope rule forbids touching those modules, so classification is
-/// done here: `NotInstalled` via a deterministic pre-flight manifest check (no
-/// string matching), and the rest via inspection of the `anyhow` error chain
-/// returned by `retrieve::search`. See Open Question in the phase report.
+/// Classification uses the downcastable sentinel error types defined in
+/// `retrieve.rs` (N2, a1-mcp-error-contract §3.1): `NotInstalled` via a
+/// deterministic pre-flight manifest check plus the `DocsetNotInstalled`
+/// sentinel as defense-in-depth, and the rest via
+/// `anyhow::Error::downcast_ref` — no string matching on the error chain.
 #[derive(Debug)]
 #[allow(dead_code)] // QueryInvalid + detail fields are spec-mandated, not yet wired.
 enum ToolError {
@@ -61,47 +60,29 @@ impl ToolError {
 
 /// Classify a `retrieve::search` error into a [`ToolError`] variant.
 ///
-/// `NotInstalled` is deliberately NOT produced here: it is detected by a
-/// pre-flight manifest check in `handle_search` so we never string-match the
-/// not-installed vs store-corrupt distinction (per spec §3.1 security note).
-/// The remaining variants are distinguished by inspecting the error chain,
-/// which the spec permits for model/embedder detection.
+/// N2: pure sentinel downcast — zero string matching. `NotInstalled` is
+/// normally produced by the pre-flight manifest check in `handle_search`; the
+/// `DocsetNotInstalled` downcast here is defense-in-depth for the race between
+/// that check and `retrieve::search`'s manifest read.
 fn classify_error(err: &anyhow::Error, docset: &str) -> ToolError {
-    let chain: String = err
-        .chain()
-        .map(|e| e.to_string().to_ascii_lowercase())
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    let is_model = chain.contains("model")
-        || chain.contains("embedder")
-        || chain.contains("tokenizer")
-        || chain.contains("sha256")
-        || chain.contains("download")
-        || chain.contains("hf_hub")
-        || chain.contains("safetensors")
-        || chain.contains("weights")
-        || chain.contains("mmap");
-
-    if is_model {
-        ToolError::ModelUnavailable {
+    if err.downcast_ref::<retrieve::DocsetNotInstalled>().is_some() {
+        return ToolError::NotInstalled {
+            docset: docset.to_string(),
+        };
+    }
+    if err.downcast_ref::<retrieve::EmbedderLoadError>().is_some() {
+        return ToolError::ModelUnavailable {
             detail: err.to_string(),
-        }
-    } else if chain.contains("lancedb")
-        || chain.contains("lance")
-        || chain.contains("table")
-        || chain.contains("connect")
-        || chain.contains("manifest")
-        || chain.contains("store")
-    {
-        ToolError::StoreCorrupt {
+        };
+    }
+    if err.downcast_ref::<retrieve::StoreError>().is_some() {
+        return ToolError::StoreCorrupt {
             docset: docset.to_string(),
             detail: err.to_string(),
-        }
-    } else {
-        ToolError::Internal {
-            detail: err.to_string(),
-        }
+        };
+    }
+    ToolError::Internal {
+        detail: err.to_string(),
     }
 }
 
@@ -260,10 +241,10 @@ mod tests {
     #[allow(non_snake_case)]
     #[test]
     fn tools_call_search_returns_isError_when_model_unavailable() {
-        // Mocked: synthetic error chain describing an embedder/model failure.
-        let err = anyhow::anyhow!("fetch model weights")
-            .context("hf-hub api")
-            .context("embedder load failed");
+        // N2: sentinel downcast — an EmbedderLoadError (anywhere in the
+        // context chain) classifies as ModelUnavailable, no string matching.
+        let err = anyhow::Error::new(retrieve::EmbedderLoadError("hf-hub download failed".into()))
+            .context("embedder init");
         let te = classify_error(&err, "nextjs");
         assert!(
             matches!(te, ToolError::ModelUnavailable { .. }),
@@ -284,7 +265,7 @@ mod tests {
             !result["content"][0]["text"]
                 .as_str()
                 .unwrap()
-                .contains("fetch model weights"),
+                .contains("hf-hub download failed"),
             "raw error chain must not leak to the client"
         );
     }
@@ -292,8 +273,11 @@ mod tests {
     #[allow(non_snake_case)]
     #[test]
     fn tools_call_search_returns_isError_on_store_error() {
-        // Mocked: synthetic error chain describing a LanceDB store failure.
-        let err = anyhow::anyhow!("failed to connect to lancedb").context("store open failed");
+        // N2: sentinel downcast — a StoreError classifies as StoreCorrupt.
+        let err = anyhow::Error::new(retrieve::StoreError {
+            docset: "nextjs".into(),
+            reason: "failed to open table".into(),
+        });
         let te = classify_error(&err, "nextjs");
         assert!(
             matches!(te, ToolError::StoreCorrupt { .. }),
@@ -318,6 +302,33 @@ mod tests {
         let te = classify_error(&err, "nextjs");
         assert!(matches!(te, ToolError::Internal { .. }));
         assert_eq!(te.to_tool_result()["isError"], true);
+    }
+
+    #[test]
+    fn classify_error_downcasts_docset_not_installed() {
+        // N2 defense-in-depth: the pre-flight manifest check in handle_search
+        // is the primary not-installed detection, but if the manifest vanishes
+        // between that check and retrieve::search's read, the DocsetNotInstalled
+        // sentinel must still classify as NotInstalled (not StoreCorrupt).
+        let err = anyhow::Error::new(retrieve::DocsetNotInstalled {
+            docset: "nextjs".into(),
+            reason: "failed to read manifest".into(),
+        });
+        let te = classify_error(&err, "nextjs");
+        assert!(
+            matches!(te, ToolError::NotInstalled { .. }),
+            "expected NotInstalled, got {te:?}"
+        );
+        let result = te.to_tool_result();
+        assert_eq!(result["isError"], true);
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("not installed"),
+            "hint must mention installation, got: {:?}",
+            result["content"][0]["text"]
+        );
     }
 
     #[test]

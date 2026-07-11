@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::chunker::ChunkType;
 use crate::embedder::{self, EmbedderSpec};
@@ -15,20 +15,59 @@ use crate::token::count_tokens;
 /// `MMR = lambda * relevance - (1 - lambda) * max_cosine_sim`. (N1/OQ4)
 const MMR_LAMBDA: f32 = 0.7;
 
-/// Minimum top-hit relevance to return any results (N4/OQ11). If the best hit
-/// is below this floor the docset is treated as having no answer and `search`
+/// MMR source_url penalty: subtracted per already-selected chunk that shares
+/// the candidate's `source_url`. Vector diversity alone cannot suppress hub
+/// files whose many chunks have mutually DISSIMILAR vectors — measured on the
+/// real Next.js corpus: backend-for-frontend.md held 6 of the top-8 cosine
+/// slots for the route-handlers query, and caching-without-cache-components.md
+/// held 2 of the 5 slots above the revalidating answer. The penalty restores
+/// cross-page diversity without reviving the old `dedup_by_source_url`
+/// collapse: multiple chunks from one page still survive when their relevance
+/// clears the penalty (N1/OQ4's distinct-APIs-per-page case).
+const MMR_URL_PENALTY: f32 = 0.05;
+
+/// Minimum raw vector cosine similarity between the query embedding and the
+/// top hit's embedding for the result to count as "answered" (N4 redesign).
+/// Below this floor the docset is treated as having no answer and `search`
 /// returns empty rather than the irrelevant top-K.
 ///
-/// The default RRF fusion constant is `k=60`, i.e. `score = 1/(rank + 60)`. A
-/// hit that surfaces in only ONE channel (vector-only or FTS-only) tops out at
-/// about `1/60 ≈ 0.0167` for rank 1, while a hit in BOTH channels can reach
-/// `2/61 ≈ 0.0328`. The gate must therefore stay BELOW the single-channel
-/// rank-1 floor (~0.0164) or it would discard every vector-only / FTS-only
-/// answer. 0.015 sits just under that floor so single-channel top matches pass
-/// while deep-noise hits (rank ≳ 10 single-channel, ~0.014) are still dropped.
-/// Proper calibration against real Next.js eval data is deferred to A1.3.
-// TODO(A1.3): calibrate threshold against real eval data.
-pub const MIN_RELEVANCE_THRESHOLD: f32 = 0.015;
+/// This replaces the old RRF-only gate, which was structurally ~1.0 FP: RRF
+/// scores are rank-based, not similarity-based, so a rank-1 single-channel hit
+/// always scored `1/60 ≈ 0.0167` regardless of relevance — and dense vector
+/// search always returns a rank-1 neighbor for ANY query. Cosine similarity
+/// directly measures query–chunk semantic relatedness: an out-of-scope query
+/// (e.g. Vue syntax against React docs) produces top-hit cosine well below a
+/// relevant query's, and the threshold sits between those bands.
+///
+/// The gate's primary signal is cosine similarity; a secondary BYPASS admits
+/// dual-channel rank-1 agreement — see DUAL_RANK1_RRF.
+///
+/// Calibrated 2026-07-11 on the real Next.js corpus (~7480 chunks): golden
+/// positive queries cluster at top-hit cosine 0.831–0.901 (n=10), negative
+/// out-of-scope queries at 0.759–0.807 (n=12). 0.82 sits in the gap: all
+/// positives pass, all negatives are blocked (measured FP rate 0.0).
+///
+/// The gate is cosine-ONLY: the originally planned secondary RRF floor
+/// (`MIN_RELEVANCE_THRESHOLD` = 0.015) was dropped after measurement. Once MMR
+/// ranks by cosine, the top hit is often a vector-only chunk whose fused RRF
+/// rank is deep (measured: legitimate answers at fused rank 9–33, RRF score
+/// < 0.015), so the RRF floor false-blocked relevant queries (caching,
+/// authentication on the real Next.js corpus). Deep noise with "moderate"
+/// cosine is already handled by the cosine floor itself — the negative band
+/// tops out at 0.807.
+pub const MIN_ANSWER_COSINE: f32 = 0.82;
+
+/// RRF score reachable ONLY by dual-channel rank-1 agreement: with lancedb's
+/// 0-based ranks, both channels at rank 0 gives `1/60 + 1/60 = 0.0333`, while
+/// the next best (rank 0 + rank 1) is `1/60 + 1/61 ≈ 0.03306`. A chunk ranked
+/// #1 independently by BOTH BM25 and vector search is a high-precision answer
+/// signal that bypasses the cosine floor: keyword-dense queries against small
+/// docsets systematically under-score on embedding cosine (toy golden fixture:
+/// "502 503 504 gateway timeout" -> cos 0.747 but dual rank-1), and exact
+/// keyword + semantic agreement is stronger evidence than either channel
+/// alone. Measured safe on the real Next.js corpus: no negative query reaches
+/// dual rank-1 (max negative RRF 0.0302), so the bypass adds zero FP there.
+pub const DUAL_RANK1_RRF: f32 = 0.0331;
 
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -36,6 +75,50 @@ pub struct SearchResult {
     pub tokens_returned: u32,
     pub truncated: bool,
 }
+
+// N2: downcastable sentinel error types. `retrieve::search` maps each failure
+// point to one of these so `tools::classify_error` can classify via
+// `anyhow::Error::downcast_ref::<T>()` instead of fragile string matching on
+// the error chain (see a1-mcp-error-contract §3.1). `Display` + `Error` are
+// implemented manually — thiserror was removed from the dependency tree (M16)
+// and must not be re-added.
+
+/// The docset's manifest is missing, unparseable, or fails validation.
+#[derive(Debug)]
+pub struct DocsetNotInstalled {
+    pub docset: String,
+    pub reason: String,
+}
+impl std::fmt::Display for DocsetNotInstalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "docset {} not installed: {}", self.docset, self.reason)
+    }
+}
+impl std::error::Error for DocsetNotInstalled {}
+
+/// The docset's store (lance table) is missing, corrupt, or unreadable.
+#[derive(Debug)]
+pub struct StoreError {
+    pub docset: String,
+    pub reason: String,
+}
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "store error for docset {}: {}", self.docset, self.reason)
+    }
+}
+impl std::error::Error for StoreError {}
+
+/// The embedder model could not be loaded (download failure, sha256 mismatch,
+/// config error, tokenizer error).
+#[derive(Debug)]
+pub struct EmbedderLoadError(pub String);
+impl std::fmt::Display for EmbedderLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "embedder load failed: {}", self.0)
+    }
+}
+impl std::error::Error for EmbedderLoadError {}
 
 #[derive(Debug, Clone)]
 pub struct ResultChunk {
@@ -59,12 +142,23 @@ pub fn search(
     let max_tokens = resolve_max_tokens(max_tokens);
     let top_k = resolve_top_k(top_k);
 
-    // Load and validate manifest.
+    // Load and validate manifest. N2: map each failure point to a downcastable
+    // sentinel so tools::classify_error needs no string matching.
     let manifest_path = crate::cache::manifest_path(&docset);
-    let manifest_json = std::fs::read_to_string(&manifest_path)
-        .with_context(|| format!("failed to read manifest for docset {docset:?}"))?;
-    let manifest: manifest::Manifest = manifest::parse_manifest(&manifest_json)?;
-    manifest::validate(&manifest)?;
+    let manifest_json =
+        std::fs::read_to_string(&manifest_path).map_err(|e| DocsetNotInstalled {
+            docset: docset.clone(),
+            reason: format!("failed to read manifest: {e}"),
+        })?;
+    let manifest: manifest::Manifest =
+        manifest::parse_manifest(&manifest_json).map_err(|e| DocsetNotInstalled {
+            docset: docset.clone(),
+            reason: format!("manifest parse error: {e}"),
+        })?;
+    manifest::validate(&manifest).map_err(|e| DocsetNotInstalled {
+        docset: docset.clone(),
+        reason: format!("manifest validation: {e}"),
+    })?;
 
     // Build embedder spec from manifest (model-version lock).
     let embedder_spec = EmbedderSpec {
@@ -72,28 +166,58 @@ pub fn search(
         model_revision: manifest.embedder.model_revision.clone(),
         model_sha256: manifest.embedder.model_sha256.clone(),
     };
-    let embedder = embedder::Embedder::load_for(&embedder_spec)?;
+    let embedder = embedder::Embedder::load_for(&embedder_spec)
+        .map_err(|e| EmbedderLoadError(e.to_string()))?;
 
     // Embed query and run hybrid search.
     let query_vector = embedder.embed(&query)?;
-    let store = Store::open(&docset)?;
-    // Over-fetch (top_k*3, min 15) then diversity-rerank with Maximal Marginal
-    // Relevance (N1/OQ4). MMR keeps multiple chunks from the same source_url
-    // when their vectors differ (e.g. distinct APIs on one reference page),
-    // fixing the old `dedup_by_source_url` heuristic that collapsed single-page
-    // API references. Over-fetching gives MMR a candidate pool to trade
-    // relevance off against redundancy before the window pass re-attaches
-    // same-file neighbors as context.
-    let raw_k = (top_k * 3).max(15) as usize;
-    let candidates = store.hybrid_search(&query_vector, &query, raw_k)?;
+    let store = Store::open(&docset).map_err(|e| StoreError {
+        docset: docset.clone(),
+        reason: e.to_string(),
+    })?;
+    // Over-fetch then diversity-rerank with Maximal Marginal Relevance
+    // (N1/OQ4). MMR keeps multiple chunks from the same source_url when their
+    // vectors differ (e.g. distinct APIs on one reference page), fixing the old
+    // `dedup_by_source_url` heuristic that collapsed single-page API
+    // references. Over-fetching gives MMR a candidate pool to trade relevance
+    // off against redundancy before the window pass re-attaches same-file
+    // neighbors as context.
+    //
+    // Pool size: diagnosed on the real Next.js corpus (2026-07-11) — queries
+    // whose expected page is recalled by the vector channel only (FTS misses
+    // it) see the fused RRF rank sink to ~33 because k=60 lets dual-channel
+    // hub chunks outrank vector-only hits. `top_k*3` (15) left those expected
+    // chunks outside the MMR pool entirely; 40 covers the measured worst case
+    // (fused rank 33) with headroom.
+    let raw_k = (top_k * 8).max(40) as usize;
+    let candidates = store
+        .hybrid_search(&query_vector, &query, raw_k)
+        .map_err(|e| StoreError {
+            docset: docset.clone(),
+            reason: e.to_string(),
+        })?;
     let cand_ids: Vec<u32> = candidates.iter().map(|h| h.chunk_idx).collect();
-    let vectors = store.fetch_vectors(&cand_ids)?;
-    let hits = mmr_rerank(candidates, &vectors, top_k as usize, MMR_LAMBDA);
+    let vectors = store.fetch_vectors(&cand_ids).map_err(|e| StoreError {
+        docset: docset.clone(),
+        reason: e.to_string(),
+    })?;
+    let hits = mmr_rerank(
+        &query_vector,
+        candidates,
+        &vectors,
+        top_k as usize,
+        MMR_LAMBDA,
+    );
 
-    // N4/OQ11: if the best hit is still below the relevance floor, the docset
-    // likely has no answer (e.g. Vue syntax queried against React docs) — return
-    // empty rather than the irrelevant top-K.
-    let hits = apply_relevance_gate(hits);
+    // N4/OQ11 (redesigned): answer gate. The old RRF-only gate was
+    // structurally ~1.0 FP (RRF scores are rank-based, not similarity-based,
+    // so every query cleared it). Gate on the query–top-hit cosine similarity
+    // plus a dual-channel rank-1 agreement bypass (exact-keyword + semantic
+    // agreement — covers keyword-dense queries that under-score on cosine):
+    // if the best hit clears neither signal the docset is treated as having
+    // no answer (e.g. Vue syntax queried against React docs) — return empty
+    // rather than the irrelevant top-K.
+    let hits = apply_answer_gate(hits, &query_vector, &vectors);
     if hits.is_empty() {
         return Ok(SearchResult {
             chunks: vec![],
@@ -117,7 +241,10 @@ pub fn search(
 
     // Fetch window chunks by chunk_idx (store returns them idx-ascending), then
     // restore the relevance-first window order.
-    let window_hits = store.fetch_by_idx(&window_ids)?;
+    let window_hits = store.fetch_by_idx(&window_ids).map_err(|e| StoreError {
+        docset: docset.clone(),
+        reason: e.to_string(),
+    })?;
     let window_chunks: Vec<ResultChunk> = window_hits
         .into_iter()
         .map(|h| ResultChunk {
@@ -137,13 +264,33 @@ pub fn search(
 }
 
 /// Maximal Marginal Relevance rerank (N1/OQ4). Greedy: repeatedly pick the
-/// candidate maximizing `lambda * relevance - (1 - lambda) * max_sim`, where
-/// `max_sim` is the candidate's largest cosine similarity to any already-picked
-/// chunk. Replaces the old `dedup_by_source_url`: diversity comes from vector
-/// dissimilarity, so multiple chunks from one URL survive when they cover
-/// distinct APIs. Candidates without a fetched vector fall back to score order,
-/// appended after the MMR-selected hits (should not happen post-S1).
+/// candidate maximizing `lambda * relevance - (1 - lambda) * max_sim -
+/// (1 - lambda) * MMR_URL_PENALTY * same_url_selected`, where `relevance`
+/// is the query–candidate cosine similarity, `max_sim` is the candidate's
+/// largest cosine similarity to any already-picked chunk, and
+/// `same_url_selected` counts already-picked chunks sharing the candidate's
+/// `source_url`. The URL penalty is scaled by `(1 - lambda)` so it vanishes
+/// in pure-relevance mode (`lambda = 1.0`), keeping that mode's ordering
+/// strictly by query–cosine.
+/// Replaces the old `dedup_by_source_url`: diversity comes from vector
+/// dissimilarity plus a mild per-URL penalty, so multiple chunks from one URL
+/// survive when they cover distinct APIs but hub files cannot monopolize the
+/// top-K with many mutually-diverse chunks. Candidates without a fetched
+/// vector fall back to score order, appended after the MMR-selected hits
+/// (should not happen post-S1).
+///
+/// Relevance is the raw query–chunk COSINE (textbook MMR, Carbonell &
+/// Goldstein 1998: Sim1 = query–doc similarity), not the RRF score: with the
+/// default fusion constant k=60 the RRF scores across the candidate pool are
+/// nearly flat (rank 1 ≈ 1/61 vs rank 15 ≈ 1/75), so a score-based relevance
+/// term carried almost no signal and MMR ranking collapsed into the diversity
+/// term alone — dual-channel hub chunks floated above vector-only specific
+/// answers. Cosine relevance restored recall on the real Next.js corpus
+/// (see the quality-lift commit message for measurements). Cosines are used
+/// RAW (absolute similarities, not min-max normalized within the pool) so the
+/// relevance weight stays stable as the over-fetch pool size changes.
 pub fn mmr_rerank(
+    query_vector: &[f32],
     hits: Vec<SearchHit>,
     vectors: &HashMap<u32, Vec<f32>>,
     top_k: usize,
@@ -162,29 +309,21 @@ pub fn mmr_rerank(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    // Codex review fix: RRF scores (~0.01-0.03) and cosine similarity (0-1)
-    // are on very different scales, so the raw diversity term would dominate
-    // after the first pick. Normalize the RRF relevance scores of the vector
-    // pool to [0, 1] within this candidate set so lambda=0.7 actually means
-    // "relevance-leaning" rather than "diversity-leaning".
-    let min_score = pool
+    // Query–candidate cosine for every pooled hit, computed once. Used RAW
+    // (not min-max normalized): cosines are already absolute similarities in
+    // ~[0, 1], and normalizing within the pool made relevance unstable w.r.t.
+    // pool size — a larger over-fetch pool stretches the [min, max] range with
+    // low-cosine tail chunks and silently dilutes the relevance weight of
+    // every real candidate (measured regression: recall@5 dropped 0.80 -> 0.60
+    // when the pool grew 15 -> 40 under normalization).
+    let query_cos: HashMap<u32, f32> = pool
         .iter()
-        .map(|h| h.score)
-        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap_or(0.0);
-    let max_score = pool
-        .iter()
-        .map(|h| h.score)
-        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap_or(0.0);
-    let score_range = max_score - min_score;
-    let normalize_score = |s: f32| {
-        if score_range > 0.0 {
-            (s - min_score) / score_range
-        } else {
-            1.0
-        }
-    };
+        .filter_map(|h| {
+            vectors
+                .get(&h.chunk_idx)
+                .map(|v| (h.chunk_idx, cosine(query_vector, v)))
+        })
+        .collect();
 
     let mut selected: Vec<SearchHit> = Vec::with_capacity(top_k);
 
@@ -193,8 +332,14 @@ pub fn mmr_rerank(
         let mut best_score = f32::MIN;
         for (i, cand) in pool.iter().enumerate() {
             let max_sim = max_cosine_to_selected(cand, &selected, vectors);
-            let rel = normalize_score(cand.score);
-            let mmr = lambda * rel - (1.0 - lambda) * max_sim;
+            let rel = query_cos.get(&cand.chunk_idx).copied().unwrap_or(0.0);
+            let same_url = selected
+                .iter()
+                .filter(|s| s.source_url == cand.source_url)
+                .count() as f32;
+            let mmr = lambda * rel
+                - (1.0 - lambda) * max_sim
+                - (1.0 - lambda) * MMR_URL_PENALTY * same_url;
             if mmr > best_score {
                 best_score = mmr;
                 best_i = i;
@@ -242,12 +387,30 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-/// Apply the no-answer relevance gate (N4/OQ11): return `Vec::new()` when there
-/// are no hits or the top hit is below `MIN_RELEVANCE_THRESHOLD`, else return
-/// the hits unchanged. Exposed (`pub`) so the gate is unit-testable without a
-/// full docset.
-pub fn apply_relevance_gate(hits: Vec<SearchHit>) -> Vec<SearchHit> {
-    if hits.is_empty() || hits[0].score < MIN_RELEVANCE_THRESHOLD {
+/// Apply the no-answer gate (N4/OQ11, cosine redesign): return `Vec::new()`
+/// when there are no hits, unless the top hit clears EITHER answer signal:
+/// (1) its cosine similarity to the query is at least `MIN_ANSWER_COSINE`
+/// (semantic match), or (2) its RRF score reaches `DUAL_RANK1_RRF` — rank-1
+/// agreement between the BM25 and vector channels (exact-keyword + semantic
+/// agreement, which covers keyword-dense queries whose embeddings under-score).
+/// A top hit without a fetched vector is treated as cosine 0 (blocked unless
+/// the dual-rank-1 bypass applies) — MMR selects from the vector pool first,
+/// so this is defensive. Exposed (`pub`) so the gate is unit-testable without
+/// a full docset.
+pub fn apply_answer_gate(
+    hits: Vec<SearchHit>,
+    query_vector: &[f32],
+    vectors: &HashMap<u32, Vec<f32>>,
+) -> Vec<SearchHit> {
+    if hits.is_empty() {
+        return hits;
+    }
+    let top = &hits[0];
+    let cosine_sim = vectors
+        .get(&top.chunk_idx)
+        .map(|v| cosine(query_vector, v))
+        .unwrap_or(0.0);
+    if cosine_sim < MIN_ANSWER_COSINE && top.score < DUAL_RANK1_RRF {
         Vec::new()
     } else {
         hits
