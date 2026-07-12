@@ -1,6 +1,6 @@
 [package]
 name = "nowdocs"
-version = "0.1.1"
+version = "0.1.2"
 rust-version = "1.97"
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -30,6 +30,11 @@ path = "src/lib.rs"
 [[bin]]
 name = "nowdocs"
 path = "src/main.rs"
+
+[[bin]]
+name = "nowdocs-registry-build"
+path = "src/bin/nowdocs-registry-build.rs"
+required-features = ["registry-builder"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
@@ -72,6 +77,7 @@ pkg-fmt = "tgz"
 # and `NOWDOCS_TEST_URL` are rejected in production builds. `cargo test`
 # activates it automatically via the self dev-dependency below.
 test-fixture = []
+registry-builder = []
 
 [dev-dependencies]
 # Self-dependency: activates `test-fixture` during `cargo test` so integration

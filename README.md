@@ -2,7 +2,7 @@
 
 > 纯 Rust 单二进制 MCP server，本地运行，给 LLM coding agent（Cursor / Claude Code / Aider）提供最新第三方开发文档，治 LLM 对快变库的幻觉。
 
-**状态**：v0.1.1 release candidate — 本地 MCP、三套 registry docset 和真实安装链路已验证；crates.io、Homebrew 和五平台正式二进制发布仍待完成。
+**状态**：v0.1.2 patch release — 修复 cargo-binstall 对内部 registry builder 二进制的识别问题。
 
 ---
 
@@ -22,7 +22,7 @@ cargo install --git https://github.com/nowdocs/nowdocs
 
 需 Rust 工具链（stable）、`protoc`（prost-build 依赖；macOS `brew install protobuf`，Linux `sudo apt-get install protobuf-compiler`）。另外 nowdocs 需要 `curl` 已安装且在 PATH 上可用——registry 联网下载预编译 docset 必经 curl，`nowdocs doctor` 会检查并在缺失时告警。首次 `serve` 会从 HuggingFace 下载 embedder 模型（jina-v2-small-en，约 66 MB），之后本地缓存；可提前跑 `nowdocs doctor --model` 预下载，避免首次检索阻塞。
 
-### v0.1.1 正式发布后（预编译二进制）
+### v0.1.2 正式发布后（预编译二进制）
 
 release 产物就绪后，免编译安装：
 
@@ -123,7 +123,7 @@ serve  ← MCP stdio
 - **retrieve**：lancedb 0.31 hybrid search（Lance FTS BM25 + 向量近邻 + RRFReranker 融合）
 - **share**：只发文本 + manifest，向量由 registry CI 重建（关闭向量投毒与模型漂移两个攻击面）
 
-## 局限性（v0.1.1）
+## 局限性（v0.1.2）
 
 - **发布渠道仍在收尾**：crates.io、Homebrew 和五平台二进制尚未完成最终发布
 - **registry 早期**：目前只有 Next.js、React、Vue 三个 canonical docset

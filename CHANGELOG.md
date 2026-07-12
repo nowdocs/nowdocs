@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.2] - 2026-07-12
+
+- Fix cargo-binstall discovery by excluding the internal registry builder from the default binary set.
+
 ## [0.1.1] - 2026-07-12
 
 - Verified the local stdio MCP flow with protocol `2025-11-25`.
