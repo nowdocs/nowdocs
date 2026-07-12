@@ -2,7 +2,7 @@
 
 > 纯 Rust 单二进制 MCP server，本地运行，给 LLM coding agent（Cursor / Claude Code / Aider）提供最新第三方开发文档，治 LLM 对快变库的幻觉。
 
-**状态**：v0.1.0 pre-release — 源码可用（`cargo install --git`）；预编译二进制与 Homebrew 待正式 release。
+**状态**：v0.1.1 release candidate — 本地 MCP、三套 registry docset 和真实安装链路已验证；crates.io、Homebrew 和五平台正式二进制发布仍待完成。
 
 ---
 
@@ -119,24 +119,24 @@ serve  ← MCP stdio
 ```
 
 - **chunk**：按 token 边界切分，保留 metadata（source_url / line / heading）
-- **embed**：candle 纯 Rust 推理，jina-v2-small-en（512 维，Apache-2.0），结果缓存在 `~/.cache/huggingface/`
-- **retrieve**：lancedb 0.30 hybrid search（FTS Tantivy BM25 + 向量近邻 + RRFReranker 融合）
+- **embed**：candle 纯 Rust 推理，jina-v2-small-en（512 维，Apache-2.0），结果缓存在平台默认 cache 目录下的 `nowdocs/`
+- **retrieve**：lancedb 0.31 hybrid search（Lance FTS BM25 + 向量近邻 + RRFReranker 融合）
 - **share**：只发文本 + manifest，向量由 registry CI 重建（关闭向量投毒与模型漂移两个攻击面）
 
-## 局限性（v0.1.0）
+## 局限性（v0.1.1）
 
-- **pre-release**：预编译二进制与 Homebrew 未发布，当前需从源码编译
-- **registry 早期**：策展制，初始可用 docset 有限
+- **发布渠道仍在收尾**：crates.io、Homebrew 和五平台二进制尚未完成最终发布
+- **registry 早期**：目前只有 Next.js、React、Vue 三个 canonical docset
 - **embedding 模型固定**：jina-v2-small-en（512 维），暂不可配置
 - **embedding backend 固定**：candle（纯 Rust），无 ONNX / 远程 API 选项
-- **eval 覆盖有限**：仅 nextjs-corpus 验证（recall@5 = 0.8，MRR = 0.587）
-- **平台**：CI 构建 linux musl（x86_64 / aarch64）+ macOS（arm64 / x86_64）+ Windows，未在所有平台广泛实测
+- **eval 覆盖有限**：Next.js 真实语料 gate 的 recall@5 = 0.900，MRR = 0.725；不代表所有文档集准确率
+- **平台**：CI 目标为 linux musl（x86_64 / aarch64）+ macOS（arm64 / x86_64）+ Windows，尚未完成每个平台的安装实测
 
 ## 技术栈
 
 - **语言**：Rust（Edition 2021），lib + bin 双 target
 - **嵌入**：candle（纯 Rust）+ jina-embeddings-v2-small-en（512 维，Apache-2.0）
-- **检索**：lancedb 0.30（内置 hybrid + RRF）
+- **检索**：lancedb 0.31（内置 hybrid + RRF）
 - **协议**：MCP over stdio（NDJSON）
 - **分发**：cargo-binstall + Homebrew，不签名（完整性靠 SHA-256 + cargo-binstall 校验）
 

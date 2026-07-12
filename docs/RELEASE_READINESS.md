@@ -74,3 +74,15 @@ Only after the above pass:
 - verify `cargo binstall nowdocs`;
 - verify Homebrew tap install;
 - update README from pre-release wording.
+
+## v0.1.1 sign-off record
+
+| Gate | Evidence | Owner | Status |
+|---|---|---|---|
+| Quality Gates | GitHub Quality Gates run 29178406917; local L1 hook green | Kaige Gao | PASS |
+| Strict Eval | Next.js real gate: recall@5 0.900, MRR 0.725 | Kaige Gao | PASS |
+| 5-target dry run | `.github/workflows/release.yml` workflow_dispatch path | Kaige Gao | PENDING |
+| Registry install/update/smoke | Public catalog; Next.js/React/Vue install, Next.js update and smoke verified locally | Kaige Gao | PASS |
+| cargo-binstall | v0.1.1 package metadata and archive contract tests | Kaige Gao | PENDING |
+| Homebrew install | `nowdocs-registry/homebrew-nowdocs` formula still needs release SHA values | Kaige Gao | PENDING |
+| crates.io publication | `cargo package` passes; publication not yet executed | Kaige Gao | PENDING |
