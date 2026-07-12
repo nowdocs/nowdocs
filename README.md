@@ -22,7 +22,7 @@ cargo install --git https://github.com/nowdocs/nowdocs
 
 需 Rust 工具链（stable）、`protoc`（prost-build 依赖；macOS `brew install protobuf`，Linux `sudo apt-get install protobuf-compiler`）。另外 nowdocs 需要 `curl` 已安装且在 PATH 上可用——registry 联网下载预编译 docset 必经 curl，`nowdocs doctor` 会检查并在缺失时告警。首次 `serve` 会从 HuggingFace 下载 embedder 模型（jina-v2-small-en，约 66 MB），之后本地缓存；可提前跑 `nowdocs doctor --model` 预下载，避免首次检索阻塞。
 
-### 待正式 release（预编译二进制）
+### v0.1.1 正式发布后（预编译二进制）
 
 release 产物就绪后，免编译安装：
 

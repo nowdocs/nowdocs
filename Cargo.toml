@@ -1,6 +1,7 @@
 [package]
 name = "nowdocs"
-version = "0.1.0"
+version = "0.1.1"
+rust-version = "1.97"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Single-binary MCP documentation server for LLM coding agents — ingest, chunk, embed, and retrieve docs locally"
@@ -9,6 +10,18 @@ homepage = "https://github.com/nowdocs/nowdocs"
 readme = "README.md"
 keywords = ["mcp", "llm", "documentation", "retrieval", "embeddings"]
 categories = ["command-line-utilities", "development-tools", "text-processing"]
+
+include = [
+  "/Cargo.toml",
+  "/Cargo.lock",
+  "/build.rs",
+  "/src/**",
+  "/README.md",
+  "/LICENSE",
+  "/LICENSE-MIT",
+  "/LICENSE-APACHE",
+  "/NOTICE",
+]
 
 [lib]
 name = "nowdocs"
@@ -47,8 +60,8 @@ futures = "0.3"
 lance-arrow = "8"
 
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }{ archive-suffix }"
-bin-dir = "{ name }-v{ version }-{ target }"
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.tar.gz"
+bin-dir = "{ name }-v{ version }-{ target }/{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
 
 [features]
