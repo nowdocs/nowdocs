@@ -71,7 +71,7 @@ fi
 #    eval job builds --release, so this adds no second build.
 if [ ! -d "$LANCE_PATH" ] || [ ! -f "$MANIFEST_PATH" ]; then
     echo "Ingesting corpus into docset '$DOCSET' (this takes minutes)..."
-    cargo run --locked --release -- ingest "$REBUILT_DIR" "$DOCSET" \
+    cargo run --locked --release --bin nowdocs -- ingest "$REBUILT_DIR" "$DOCSET" \
         --license MIT \
         --copyright-holder "Vercel, Inc." \
         --source-url "https://github.com/vercel/next.js" \
