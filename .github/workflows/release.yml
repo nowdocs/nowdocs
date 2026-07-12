@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target to build (all or one matrix target)'
+        required: false
+        default: all
+        type: string
 
 permissions:
   contents: write
@@ -55,23 +62,21 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # prost-build (lance-encoding) reads PROTOC first, then PATH. setup-protoc
-      # only adds protoc to PATH, which cargo build-script subprocesses don't
-      # reliably inherit — the same root cause as the ci/gates protoc fix. Set
-      # PROTOC to the resolved path explicitly. Cross-platform: bash + which
-      # are available on ubuntu/macos/windows runners.
+      # prost-build reads PROTOC first, then PATH. Set PROTOC explicitly for
+      # native runner builds. Cross builds install protoc inside the container
+      # via Cross.toml, so the host path is intentionally not reused there.
       - name: Export PROTOC for prost-build
+        if: matrix.target != 'aarch64-unknown-linux-musl'
         shell: bash
         run: echo "PROTOC=$(which protoc)" >> "$GITHUB_ENV"
 
       - name: Install musl-tools (Linux x86_64 musl only)
         if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools g++
 
       - name: Install Cross (Linux aarch64 musl only)
         if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: |
-          curl -L https://github.com/cross-rs/cross/releases/download/v0.2.5/cross-x86_64-unknown-linux-musl.tar.gz | tar xz -C ~/.cargo/bin
+        run: cargo install cross --version 0.2.5 --locked
 
       - name: Cache cargo registry and target
         uses: actions/cache@v6
@@ -83,8 +88,12 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build release binary
+        if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target
         shell: bash
         run: |
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
+            export CXX_x86_64_unknown_linux_musl=g++
+          fi
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
             cross build --locked --release --target ${{ matrix.target }}
           else
@@ -92,23 +101,26 @@ jobs:
           fi
 
       - name: Verify static linking (Linux musl only)
-        if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
+        if: (github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target) && (matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl')
         shell: bash
         run: |
           echo "Verifying static linking via ldd (should report 'not a dynamic executable')..."
           # ldd exits non-zero on a correctly static binary; guard with || true
           # so `set -e` doesn't abort the step before the grep check below.
-          ldd target/${{ matrix.target }}/release/nowdocs || true
-          # Verify the binary is statically linked
-          if ldd target/${{ matrix.target }}/release/nowdocs 2>&1 | grep -q "not a dynamic executable"; then
+          LDD_OUTPUT=$(ldd target/${{ matrix.target }}/release/nowdocs 2>&1 || true)
+          printf '%s\n' "$LDD_OUTPUT"
+          # Verify the binary is statically linked. Capture ldd first so
+          # grep -q cannot trigger pipefail via SIGPIPE on ldd.
+          if printf '%s\n' "$LDD_OUTPUT" | grep -Eq "not a dynamic executable|statically linked"; then
             echo "OK: Binary is statically linked"
           else
             echo "ERROR: Binary is not statically linked"
-            ldd target/${{ matrix.target }}/release/nowdocs
+            printf '%s\n' "$LDD_OUTPUT"
             exit 1
           fi
 
       - name: Package binary
+        if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target
         shell: bash
         run: |
           # Unified layout for every target: archive root contains a single
@@ -120,17 +132,34 @@ jobs:
           STAGE="nowdocs-${{ github.ref_name }}-${{ matrix.target }}"
           mkdir -p "$STAGE"
           cp "target/${{ matrix.target }}/release/$BIN_NAME" "$STAGE/"
-          tar -czf "${STAGE}${{ matrix.archive_suffix }}" "$STAGE"
+          tar --format=ustar -czf "${STAGE}${{ matrix.archive_suffix }}" "$STAGE"
           ls -la "${STAGE}${{ matrix.archive_suffix }}"
 
       - name: Create SHA-256 checksum
+        if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target
         shell: bash
         run: |
           ARCHIVE="nowdocs-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.archive_suffix }}"
-          shasum -a 256 "$ARCHIVE" > "${ARCHIVE}.sha256"
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$ARCHIVE" > "${ARCHIVE}.sha256"
+          else
+            sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+          fi
           cat "${ARCHIVE}.sha256"
 
+      - name: Upload matrix artifact
+        if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target
+        uses: actions/upload-artifact@v4
+        with:
+          name: nowdocs-${{ matrix.target }}
+          retention-days: 1
+          path: |
+            nowdocs-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.archive_suffix }}
+            nowdocs-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.archive_suffix }}.sha256
+          if-no-files-found: error
+
       - name: Upload release asset
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v3
         with:
           files: |

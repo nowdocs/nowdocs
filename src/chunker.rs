@@ -166,7 +166,7 @@ pub fn chunk_markdown(md: &str, cfg: &ChunkConfig) -> Vec<Chunk> {
         |chunks: &mut Vec<Chunk>, path: &str, ctype: ChunkType, text: String, idx: &mut u32| {
             chunks.push(Chunk {
                 idx: *idx,
-                heading_path: path.to_string(),
+                heading_path: normalize_heading_path(path),
                 source_url: String::new(),
                 api_version: None,
                 chunk_type: ctype,
@@ -202,11 +202,23 @@ pub fn chunk_markdown(md: &str, cfg: &ChunkConfig) -> Vec<Chunk> {
 }
 
 fn path_prefix(path: &str) -> String {
+    let path = normalize_heading_path(path);
     if path.is_empty() {
         String::new()
     } else {
         format!("## {path}\n\n")
     }
+}
+
+/// Normalize heading paths assembled from scraped markdown metadata. Some
+/// sources already include Markdown markers or empty `>` segments, which would
+/// otherwise leak into retrieval headings and returned MCP metadata.
+pub(crate) fn normalize_heading_path(path: &str) -> String {
+    path.split('>')
+        .map(|part| part.trim().trim_start_matches('#').trim())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" > ")
 }
 
 fn with_path_prefix(path: &str, body: &str) -> String {

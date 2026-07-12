@@ -1,0 +1,5 @@
+[target.aarch64-unknown-linux-musl]
+pre-build = [
+  "apt-get update && apt-get install -y curl unzip",
+  "curl -fsSL https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-linux-x86_64.zip -o /tmp/protoc.zip && unzip -qo /tmp/protoc.zip -d /usr/local && rm -f /tmp/protoc.zip",
+]

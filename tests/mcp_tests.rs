@@ -259,6 +259,10 @@ fn test_tools_list_declares_integer_schema() {
     assert_eq!(props["top_k"]["minimum"].as_i64(), Some(1));
     assert_eq!(props["top_k"]["maximum"].as_i64(), Some(50));
     assert_eq!(props["top_k"]["default"].as_i64(), Some(5));
+    assert_eq!(
+        props["top_k"]["description"].as_str(),
+        Some("Number of top hybrid hits; each hit may include adjacent context chunks")
+    );
 }
 
 // M7: a request line larger than 1 MiB must be rejected with JSON-RPC parse

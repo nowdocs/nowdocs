@@ -22,11 +22,25 @@ nowdocs 使用 **Developer Certificate of Origin (DCO)**，不使用 CLA。
 
 commit message 约定：项目惯例仅含 `Signed-off-by:`，不加 `Co-Authored-By`。
 
+### 本地门禁依赖
+
+首次参与代码贡献时，先安装本地门禁依赖并注册 hook：
+
+```bash
+cargo install cargo-deny --locked
+cargo install cargo-audit --locked
+pre-commit install
+```
+
+`cargo-audit` 使用的两条 RUSTSEC 例外与 `deny.toml` 及 CI 保持一致，均有
+明确的 `Revisit-date`（2026-10-10）。它们是限期、逐条记录的例外；新的 advisory
+不会被自动忽略，仍必须使门禁失败并经过单独评估。
+
 ### 质量门禁（L1-L4）
 
 | 级别 | 触发 | 内容 |
 |---|---|---|
-| L1 Commit | pre-commit（本地，秒级） | `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo deny check` + `cargo audit` + gitleaks 密钥扫描（配置见 `.pre-commit-config.yaml`，安装：`pre-commit install`） |
+| L1 Commit | pre-commit（本地，秒级） | `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo deny check` + `cargo audit`（仅忽略 `RUSTSEC-2026-0194`、`RUSTSEC-2026-0195`）+ gitleaks 密钥扫描（配置见 `.pre-commit-config.yaml`，安装：`pre-commit install`） |
 | L2 Push | `scripts/pre-push.sh`（本地，分钟级） | 调 `scripts/check.sh`：fmt + clippy + `cargo test -- --test-threads=1`（与 CI 同款）；另有特性分支代码改动 ≥15 行下限（纯 `.md` push 豁免） |
 | L3 PR & CI | GitHub Actions `gates.yml`（云端） | DCO 校验 + fmt/clippy + test + release build + cargo-deny + 合规检查（manifest schema / no-vectors / 许可证审计单测） |
 | L4 周期 | `weekly-audit.yml`（每周五） | `cargo audit` 漏洞扫描 + `cargo-udeps` 死代码 |

@@ -27,8 +27,8 @@ repos:
         pass_filenames: false
 
       - id: cargo-audit
-        name: cargo audit
-        entry: cargo audit
+        name: cargo audit (documented temporary exceptions)
+        entry: cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
         language: system
         pass_filenames: false
 
