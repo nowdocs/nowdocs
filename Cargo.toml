@@ -45,7 +45,7 @@ candle-core = { version = "0.11", default-features = false }
 candle-nn = "0.11"
 candle-transformers = "0.11"
 tokenizers = "0.23"
-hf-hub = "0.5"
+hf-hub = { version = "0.5", default-features = false, features = ["tokio", "ureq", "rustls-tls"] }
 # store (Wave 2 — only task 2b may touch these lines, AGENTS §4.5)
 lancedb = "0.31"
 # Enable Lance's vendored protobuf compiler path so transitive Lance crates
