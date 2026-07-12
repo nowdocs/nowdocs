@@ -56,18 +56,17 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # prost-build (lance-encoding) reads PROTOC first, then PATH. setup-protoc
-      # only adds protoc to PATH, which cargo build-script subprocesses don't
-      # reliably inherit — the same root cause as the ci/gates protoc fix. Set
-      # PROTOC to the resolved path explicitly. Cross-platform: bash + which
-      # are available on ubuntu/macos/windows runners.
+      # prost-build reads PROTOC first, then PATH. Set PROTOC explicitly for
+      # native runner builds. Cross builds install protoc inside the container
+      # via Cross.toml, so the host path is intentionally not reused there.
       - name: Export PROTOC for prost-build
+        if: matrix.target != 'aarch64-unknown-linux-musl'
         shell: bash
         run: echo "PROTOC=$(which protoc)" >> "$GITHUB_ENV"
 
       - name: Install musl-tools (Linux x86_64 musl only)
         if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools g++
 
       - name: Install Cross (Linux aarch64 musl only)
         if: matrix.target == 'aarch64-unknown-linux-musl'
@@ -85,6 +84,9 @@ jobs:
       - name: Build release binary
         shell: bash
         run: |
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
+            export CXX_x86_64_unknown_linux_musl=g++
+          fi
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
             cross build --locked --release --target ${{ matrix.target }}
           else

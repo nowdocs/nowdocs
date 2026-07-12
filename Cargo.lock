@@ -886,15 +886,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
-name = "cmake"
-version = "0.1.58"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2190,9 +2181,6 @@ name = "esaxx-rs"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d817e038c30374a4bcb22f94d0a8a0e216958d4c3dcde369b1439fec4bdda6e6"
-dependencies = [
- "cc",
-]
 
 [[package]]
 name = "ethnum"
@@ -3349,7 +3337,6 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-types",
- "protobuf-src",
  "rand",
  "rayon",
  "roaring",
@@ -3557,7 +3544,6 @@ dependencies = [
  "num-traits",
  "prost",
  "prost-build",
- "protobuf-src",
  "rand",
  "strum 0.26.3",
  "tokio",
@@ -3594,7 +3580,6 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-types",
- "protobuf-src",
  "tokio",
  "tracing",
 ]
@@ -3651,7 +3636,6 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-types",
- "protobuf-src",
  "rand",
  "rand_distr",
  "rangemap",
@@ -3826,7 +3810,6 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-types",
- "protobuf-src",
  "rand",
  "rangemap",
  "roaring",
@@ -4932,15 +4915,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f94967dc7688f3054c7fac87473ffae4cc4c3904800e2d9f5b857246d8963b0a"
 dependencies = [
  "prost",
-]
-
-[[package]]
-name = "protobuf-src"
-version = "2.1.1+27.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6217c3504da19b85a3a4b2e9a5183d635822d83507ba0986624b5c05b83bfc40"
-dependencies = [
- "cmake",
 ]
 
 [[package]]
@@ -6296,7 +6270,6 @@ dependencies = [
  "derive_builder",
  "esaxx-rs",
  "getrandom 0.3.4",
- "indicatif",
  "itertools 0.14.0",
  "log",
  "macro_rules_attribute",

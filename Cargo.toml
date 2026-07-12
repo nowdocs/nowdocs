@@ -45,13 +45,13 @@ tiktoken-rs = "0.12"
 candle-core = { version = "0.11", default-features = false }
 candle-nn = "0.11"
 candle-transformers = "0.11"
-tokenizers = "0.23"
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 hf-hub = { version = "0.5", default-features = false, features = ["tokio", "ureq", "rustls-tls"] }
 # store (Wave 2 — only task 2b may touch these lines, AGENTS §4.5)
 lancedb = "0.31"
-# Enable Lance's vendored protobuf compiler path so transitive Lance crates
-# do not require a system `protoc` during clean builds.
-lance = { version = "8", default-features = false, features = ["protoc"] }
+# Use the runner-provided protobuf compiler; release CI installs it explicitly
+# (including inside the Cross container for aarch64 musl builds).
+lance = { version = "8", default-features = false }
 tokio = { version = "1", features = ["rt", "macros", "fs"] }
 arrow = "58.3"
 arrow-array = "58.3"
