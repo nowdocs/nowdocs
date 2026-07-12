@@ -5,6 +5,12 @@ on:
     tags:
       - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target to build (all or one matrix target)'
+        required: false
+        default: all
+        type: string
 
 permissions:
   contents: write
@@ -15,6 +21,7 @@ env:
 jobs:
   build:
     name: Build (${{ matrix.target }})
+    if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -100,13 +107,15 @@ jobs:
           echo "Verifying static linking via ldd (should report 'not a dynamic executable')..."
           # ldd exits non-zero on a correctly static binary; guard with || true
           # so `set -e` doesn't abort the step before the grep check below.
-          ldd target/${{ matrix.target }}/release/nowdocs || true
-          # Verify the binary is statically linked
-          if ldd target/${{ matrix.target }}/release/nowdocs 2>&1 | grep -Eq "not a dynamic executable|statically linked"; then
+          LDD_OUTPUT=$(ldd target/${{ matrix.target }}/release/nowdocs 2>&1 || true)
+          printf '%s\n' "$LDD_OUTPUT"
+          # Verify the binary is statically linked. Capture ldd first so
+          # grep -q cannot trigger pipefail via SIGPIPE on ldd.
+          if printf '%s\n' "$LDD_OUTPUT" | grep -Eq "not a dynamic executable|statically linked"; then
             echo "OK: Binary is statically linked"
           else
             echo "ERROR: Binary is not statically linked"
-            ldd target/${{ matrix.target }}/release/nowdocs
+            printf '%s\n' "$LDD_OUTPUT"
             exit 1
           fi
 
