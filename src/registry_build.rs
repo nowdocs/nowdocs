@@ -87,14 +87,16 @@ pub fn build_registry_release(input: &RegistryReleaseBuild) -> Result<PathBuf> {
                 position
             ),
         };
+        let normalized_heading = crate::chunker::normalize_heading_path(&row.heading_path);
+        let normalized_text = normalize_chunk_text(&normalized_heading, &row.text);
         let source_url = canonical_source_url(&input.source_url_base, &row.source_url)?;
         chunks.push(Chunk {
             idx: row.idx,
-            heading_path: row.heading_path.clone(),
+            heading_path: normalized_heading,
             source_url,
             api_version: row.api_version.clone().filter(|v| !v.is_empty()),
             chunk_type,
-            text: row.text.clone(),
+            text: normalized_text,
         });
     }
 
@@ -207,6 +209,16 @@ fn canonical_source_url(base: &str, source: &str) -> Result<String> {
         anyhow::bail!("invalid relative source_url: {source:?}");
     }
     Ok(format!("{}/{}", base.trim_end_matches('/'), relative))
+}
+
+fn normalize_chunk_text(heading: &str, text: &str) -> String {
+    if heading.is_empty() || !text.starts_with("## ") {
+        return text.to_string();
+    }
+    match text.find('\n') {
+        Some(end) => format!("## {heading}{}", &text[end..]),
+        None => format!("## {heading}\n"),
+    }
 }
 
 fn reject_vector_files(root: &Path) -> Result<()> {

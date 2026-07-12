@@ -216,7 +216,7 @@ pub fn handle_tools_list() -> Value {
                             "minimum": 1,
                             "maximum": 50,
                             "default": 5,
-                            "description": "Number of chunks to retrieve"
+                            "description": "Number of top hybrid hits; each hit may include adjacent context chunks"
                         }
                     }
                 },

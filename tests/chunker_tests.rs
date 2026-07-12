@@ -24,6 +24,24 @@ fn heading_path_tracks_stack() {
 }
 
 #[test]
+fn heading_path_normalizes_scraped_markers_and_empty_segments() {
+    let cfg = default_config();
+    let chunks = chunk_markdown(
+        "# > > Exports > Matcher\n\nmatcher configuration.\n# API > ## Config\n\napi configuration.\n",
+        &cfg,
+    );
+    assert!(chunks
+        .iter()
+        .any(|chunk| chunk.heading_path == "Exports > Matcher"));
+    assert!(chunks
+        .iter()
+        .any(|chunk| chunk.heading_path == "API > Config"));
+    assert!(chunks
+        .iter()
+        .all(|chunk| !chunk.heading_path.contains("> >")));
+}
+
+#[test]
 fn chunks_are_sequentially_indexed_from_zero() {
     let cfg = default_config();
     let md = "# H1\n\npara one.\n\n## H2\n\npara two.\n\n## H3\n\npara three.\n";
