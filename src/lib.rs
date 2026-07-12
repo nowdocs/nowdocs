@@ -13,6 +13,7 @@ pub mod embedder; // from S0; if S0 not yet run, create an empty src/embedder.rs
 pub mod eval;
 pub mod ingest;
 pub mod registry;
+pub mod registry_build;
 pub mod retrieve;
 pub mod smoke;
 pub mod store;
