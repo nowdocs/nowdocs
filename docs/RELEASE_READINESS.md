@@ -75,14 +75,19 @@ Only after the above pass:
 - verify Homebrew tap install;
 - update README from pre-release wording.
 
-## v0.1.1 sign-off record
+## v0.1.2 sign-off record
 
 | Gate | Evidence | Owner | Status |
 |---|---|---|---|
-| Quality Gates | GitHub Quality Gates run 29178406917; local L1 hook green | Kaige Gao | PASS |
-| Strict Eval | Next.js real gate: recall@5 0.900, MRR 0.725 | Kaige Gao | PASS |
-| 5-target dry run | `.github/workflows/release.yml` workflow_dispatch path | Kaige Gao | PENDING |
+| Quality Gates | GitHub Quality Gates run 29207164349; local L1 hook green | Kaige Gao | PASS |
+| Strict Eval | [manual strict run 29212963934](https://github.com/nowdocs/nowdocs/actions/runs/29212963934): recall@5 0.900, MRR 0.720 | Kaige Gao | PASS |
+| 5-target Release | [v0.1.2 Release run 29210668096](https://github.com/nowdocs/nowdocs/actions/runs/29210668096); five assets and checksums uploaded | Kaige Gao | PASS |
 | Registry install/update/smoke | Public catalog; Next.js/React/Vue install, Next.js update and smoke verified locally | Kaige Gao | PASS |
-| cargo-binstall | v0.1.1 package metadata and archive contract tests | Kaige Gao | PENDING |
-| Homebrew install | `nowdocs-registry/homebrew-nowdocs` formula still needs release SHA values | Kaige Gao | PENDING |
-| crates.io publication | `cargo package` passes; publication not yet executed | Kaige Gao | PENDING |
+| cargo-binstall | v0.1.2 clean isolated install: `nowdocs 0.1.2`; internal builder correctly ignored | Kaige Gao | PASS |
+| Homebrew formula | `nowdocs-registry/homebrew-nowdocs` commit `634a515`; v0.1.2 macOS/Linux SHA values verified | Kaige Gao | PASS |
+| crates.io publication | `nowdocs v0.1.2` published and available | Kaige Gao | PASS |
+
+> v0.1.1 was superseded by v0.1.2 after clean cargo-binstall verification found
+> that the internal registry-builder target was advertised but absent from the
+> release archive. The patch release makes that target feature-gated and keeps
+> the default installation to the `nowdocs` binary.
