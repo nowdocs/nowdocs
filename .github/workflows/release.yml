@@ -21,7 +21,6 @@ env:
 jobs:
   build:
     name: Build (${{ matrix.target }})
-    if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -89,6 +88,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build release binary
+        if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target
         shell: bash
         run: |
           if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
@@ -101,7 +101,7 @@ jobs:
           fi
 
       - name: Verify static linking (Linux musl only)
-        if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
+        if: (github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target) && (matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl')
         shell: bash
         run: |
           echo "Verifying static linking via ldd (should report 'not a dynamic executable')..."
@@ -120,6 +120,7 @@ jobs:
           fi
 
       - name: Package binary
+        if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target
         shell: bash
         run: |
           # Unified layout for every target: archive root contains a single
@@ -135,6 +136,7 @@ jobs:
           ls -la "${STAGE}${{ matrix.archive_suffix }}"
 
       - name: Create SHA-256 checksum
+        if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target
         shell: bash
         run: |
           ARCHIVE="nowdocs-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.archive_suffix }}"
@@ -146,6 +148,7 @@ jobs:
           cat "${ARCHIVE}.sha256"
 
       - name: Upload matrix artifact
+        if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.target
         uses: actions/upload-artifact@v4
         with:
           name: nowdocs-${{ matrix.target }}
