@@ -102,7 +102,7 @@ jobs:
           # so `set -e` doesn't abort the step before the grep check below.
           ldd target/${{ matrix.target }}/release/nowdocs || true
           # Verify the binary is statically linked
-          if ldd target/${{ matrix.target }}/release/nowdocs 2>&1 | grep -q "not a dynamic executable"; then
+          if ldd target/${{ matrix.target }}/release/nowdocs 2>&1 | grep -Eq "not a dynamic executable|statically linked"; then
             echo "OK: Binary is statically linked"
           else
             echo "ERROR: Binary is not statically linked"
@@ -129,7 +129,11 @@ jobs:
         shell: bash
         run: |
           ARCHIVE="nowdocs-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.archive_suffix }}"
-          shasum -a 256 "$ARCHIVE" > "${ARCHIVE}.sha256"
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$ARCHIVE" > "${ARCHIVE}.sha256"
+          else
+            sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+          fi
           cat "${ARCHIVE}.sha256"
 
       - name: Upload matrix artifact
