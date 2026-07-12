@@ -1,6 +1,6 @@
 //! Registry lifecycle: install / share / update / uninstall docsets.
 
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -231,6 +231,20 @@ fn verify_archive_integrity(path: &Path, expected: &str, is_temp: bool) -> Resul
         return Err(anyhow::anyhow!("{}", err));
     }
     Ok(())
+}
+
+/// Detect gzip-wrapped tar archives and feed either the decompressed or raw
+/// stream to the minimal ustar reader. Release assets use `.tar.gz`, while
+/// keeping raw tar support preserves existing fixture compatibility.
+fn extract_archive<R: Read>(reader: R) -> Result<Vec<(String, Vec<u8>)>> {
+    let mut buffered = BufReader::new(reader);
+    let is_gzip = buffered.fill_buf()?.starts_with(&[0x1f, 0x8b]);
+    if is_gzip {
+        let mut decoder = flate2::read::GzDecoder::new(buffered);
+        extract_tar(&mut decoder)
+    } else {
+        extract_tar(&mut buffered)
+    }
 }
 
 /// Minimal ustar tar reader (no GNU extensions, no PAX).
@@ -860,9 +874,8 @@ fn install_to_staging(docset: &str, url: &str, expected_sha256: Option<&str>) ->
         verify_archive_integrity(&archive_path, expected, is_temp)?;
     }
 
-    let mut file = std::fs::File::open(&archive_path).context("open archive")?;
-    let entries = extract_tar(&mut file)?;
-    drop(file);
+    let file = std::fs::File::open(&archive_path).context("open archive")?;
+    let entries = extract_archive(file)?;
     if is_temp {
         let _ = std::fs::remove_file(&archive_path);
     }
@@ -1455,6 +1468,7 @@ pub fn search_index(query: &str, json: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Cursor, Write};
 
     // --- S2: sha256 integrity verification ---
 
@@ -1489,6 +1503,22 @@ mod tests {
             "caller-supplied fixture must NOT be deleted on mismatch"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn extract_archive_accepts_gzip_compressed_tar() {
+        let mut tar = Vec::new();
+        tar.extend(tar_entry_for_test("manifest.json", b"{}", 0));
+        tar.extend_from_slice(&[0u8; 1024]);
+        let mut compressed = Vec::new();
+        {
+            let mut encoder =
+                flate2::write::GzEncoder::new(&mut compressed, flate2::Compression::default());
+            encoder.write_all(&tar).unwrap();
+            encoder.finish().unwrap();
+        }
+        let entries = extract_archive(Cursor::new(compressed)).unwrap();
+        assert_eq!(entries, vec![("manifest.json".to_string(), b"{}".to_vec())]);
     }
 
     // --- OQ6: curl must cap redirect following ---

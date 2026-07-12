@@ -4393,6 +4393,7 @@ dependencies = [
  "candle-transformers",
  "clap",
  "dirs",
+ "flate2",
  "futures",
  "half",
  "hf-hub",

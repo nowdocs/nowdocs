@@ -182,7 +182,7 @@ fn accepts_index_with_github_release_download_url() {
           "license": "MIT",
           "chunk_count": 100,
           "freshness": "2026-07-07",
-          "download_url": "https://github.com/nowdocs-registry/nextjs/releases/download/nextjs-14.2.5/nextjs-14.2.5.lance.tar",
+          "download_url": "https://github.com/nowdocs-registry/nextjs-docs/releases/download/docs-2026-07-12/nextjs-2026-07-12-ustar.tar.gz",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "description": "release artifact"
         }

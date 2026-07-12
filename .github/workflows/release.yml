@@ -120,7 +120,7 @@ jobs:
           STAGE="nowdocs-${{ github.ref_name }}-${{ matrix.target }}"
           mkdir -p "$STAGE"
           cp "target/${{ matrix.target }}/release/$BIN_NAME" "$STAGE/"
-          tar -czf "${STAGE}${{ matrix.archive_suffix }}" "$STAGE"
+          tar --format=ustar -czf "${STAGE}${{ matrix.archive_suffix }}" "$STAGE"
           ls -la "${STAGE}${{ matrix.archive_suffix }}"
 
       - name: Create SHA-256 checksum
