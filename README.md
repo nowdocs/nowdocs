@@ -22,9 +22,9 @@ cargo install --git https://github.com/nowdocs/nowdocs
 
 需 Rust 工具链（stable）、`protoc`（prost-build 依赖；macOS `brew install protobuf`，Linux `sudo apt-get install protobuf-compiler`）。另外 nowdocs 需要 `curl` 已安装且在 PATH 上可用——registry 联网下载预编译 docset 必经 curl，`nowdocs doctor` 会检查并在缺失时告警。首次 `serve` 会从 HuggingFace 下载 embedder 模型（jina-v2-small-en，约 66 MB），之后本地缓存；可提前跑 `nowdocs doctor --model` 预下载，避免首次检索阻塞。
 
-### v0.1.2 正式发布后（预编译二进制）
+### v0.1.2 正式发布（预编译二进制）
 
-release 产物就绪后，免编译安装：
+现在即可免编译安装：
 
 ```bash
 # cargo-binstall（推荐）
@@ -39,7 +39,7 @@ release 二进制覆盖 linux musl（x86_64 / aarch64）、macOS（arm64 / x86_6
 
 ## 快速开始
 
-完整教程见 [Getting Started](docs/GETTING_STARTED.md)，常见问题见 [Troubleshooting](docs/TROUBLESHOOTING.md)，MCP 客户端配置见 [MCP Clients](docs/MCP_CLIENTS.md)，发版门禁见 [Release Readiness](docs/RELEASE_READINESS.md)。
+完整教程见 [Getting Started](docs/GETTING_STARTED.md)，常见问题见 [Troubleshooting](docs/TROUBLESHOOTING.md)，MCP 客户端配置见 [MCP Clients](docs/MCP_CLIENTS.md)。
 
 1. **先跑诊断**：
    ```bash
@@ -125,12 +125,11 @@ serve  ← MCP stdio
 
 ## 局限性（v0.1.2）
 
-- **发布渠道仍在收尾**：crates.io、Homebrew 和五平台二进制尚未完成最终发布
 - **registry 早期**：目前只有 Next.js、React、Vue 三个 canonical docset
 - **embedding 模型固定**：jina-v2-small-en（512 维），暂不可配置
 - **embedding backend 固定**：candle（纯 Rust），无 ONNX / 远程 API 选项
-- **eval 覆盖有限**：Next.js 真实语料 gate 的 recall@5 = 0.900，MRR = 0.725；不代表所有文档集准确率
-- **平台**：CI 目标为 linux musl（x86_64 / aarch64）+ macOS（arm64 / x86_64）+ Windows，尚未完成每个平台的安装实测
+- **eval 覆盖有限**：Next.js 真实语料 gate 的 recall@5 = 0.900，MRR = 0.720；不代表所有文档集准确率
+- **平台安装验证**：五个平台的 Release 资产和 SHA-256 已验证；Homebrew CLI 的实际安装仍需在装有 Homebrew 的环境中复测
 
 ## 技术栈
 
@@ -144,11 +143,7 @@ serve  ← MCP stdio
 
 贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)：DCO（非 CLA）+ L1-L4 质量门禁 + registry 策展审核。行为准则见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
 
-### 开发文档
-
-- [设计 spec](docs/superpowers/specs/2026-06-28-nowdocs-design-review.md) — 逐环节决策 + ground-truth 核实
-- [实施 plan](docs/superpowers/plans/2026-06-28-nowdocs-impl.md) — 6 wave TDD task
-- [派发手册](docs/superpowers/plans/2026-06-28-nowdocs-dispatch.md) — 每 task 一份 agent prompt
+架构与安全边界见 [Architecture](docs/ARCHITECTURE.md)。
 
 ## 仓库结构
 

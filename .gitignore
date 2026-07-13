@@ -16,6 +16,15 @@
 *.swo
 .DS_Store
 
+# 本地协作与内部归档（不属于公开仓库）
+.nowdocs-internal/
+.mimocode/
+.workbuddy/
+.zcode/
+tmp/
+clippy_job.log
+test.log
+
 # 环境与密钥（三防线：密钥不入库）
 .env
 .env.*
