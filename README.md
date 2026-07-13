@@ -4,6 +4,8 @@
 
 Coding agents can confidently suggest APIs that have changed since their training data was collected. nowdocs indexes documentation on your machine and exposes it through MCP, so clients such as Claude Code, Cursor, and Aider can search current documentation instead of relying only on model memory.
 
+![Architecture overview: documentation sources are ingested, embedded, indexed locally, retrieved through hybrid search, sanitized, and served to MCP clients over stdio.](docs/assets/architecture.png)
+
 **Current release:** [v0.1.2](CHANGELOG.md). nowdocs is free to run, has no telemetry, and keeps queries, embeddings, and indexed documentation on your device.
 
 ## Why nowdocs
