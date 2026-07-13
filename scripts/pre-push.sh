@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# L2: Pre-push hook (本地，与 CI Quality Gates 对齐)
-# 安装方式:
+# L2: Local pre-push hook aligned with CI Quality Gates.
+# Installation:
 #   1. git config core.hooksPath scripts
-#   2. 或 ln -s ../../scripts/pre-push.sh .git/hooks/pre-push
+#   2. Or: ln -s ../../scripts/pre-push.sh .git/hooks/pre-push
 #
-# 实际检查逻辑在 check.sh (fmt + clippy + test，与 gates.yml 同款)。
-# 紧急避险: --no-verify 仅经用户批准可临时绕过 L1/L2
+# check.sh contains the actual checks (fmt, Clippy, and tests matching gates.yml).
+# Emergency exception: --no-verify may bypass L1/L2 only with user approval.
 
 set -euo pipefail
 
-# 可移植的符号链接解析: readlink -f 是 GNU 扩展, 在 macOS/BSD 上会以
-# "illegal option -- f" 退出非零, 导致 set -e 在调用 check.sh 前就挂掉。
-# 改用纯 POSIX readlink (无 flag, 返回链接目标) + 循环跟随, 解析物理路径。
-# 参考: https://pubs.opengroup.org/onlinepubs/9799919799/utilities/readlink.html
+# Portable symlink resolution: readlink -f is a GNU extension and exits nonzero
+# with "illegal option -- f" on macOS/BSD, causing set -e to abort before check.sh.
+# Use POSIX readlink without flags and follow links in a loop to resolve the path.
+# Reference: https://pubs.opengroup.org/onlinepubs/9799919799/utilities/readlink.html
 resolve_script_dir() {
   src="$1"
   while [ -L "$src" ]; do
@@ -27,7 +27,7 @@ resolve_script_dir() {
 }
 SCRIPT_DIR="$(resolve_script_dir "$0")"
 
-# --- 拦截低于 15 行修改的代码直接 push ---
+# --- Block feature-branch code pushes with fewer than 15 changed lines ---
 CURRENT_BRANCH=$(git symbolic-ref --short HEAD)
 if [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BRANCH" != "master" ]; then
     if git rev-parse --verify origin/main >/dev/null 2>&1; then
@@ -62,4 +62,3 @@ if [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BRANCH" != "master" ]; then
 fi
 
 bash "$SCRIPT_DIR/check.sh"
-

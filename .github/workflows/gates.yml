@@ -1,4 +1,4 @@
-# L3: CI 门禁 (云端，PR / push 到 main 时触发)
+# L3: CI quality gates (cloud; triggered by pull requests and pushes to main).
 name: Quality Gates
 
 on:

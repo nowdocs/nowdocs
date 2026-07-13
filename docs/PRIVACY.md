@@ -1,68 +1,60 @@
 # Privacy Policy
 
 > Copyright (c) 2026 GWMM LLC.
-> 最后更新：2026-07-04
+> Last updated: July 4, 2026.
 
-## 核心承诺
+## Core commitment
 
-nowdocs 本地运行。你的 **query、embedding、文档内容永不出网**。
+nowdocs runs locally. Your query text, embeddings, and document content do not leave your device through the nowdocs software.
 
-## 三类网络行为
+## Network activity
 
-nowdocs 仅在以下用户主动触发的场景联网：
+nowdocs accesses the network only when the user explicitly initiates one of the following actions:
 
-| 场景 | 是否联网 | 连接目标 |
+| Action | Network access | Destination |
 |---|---|---|
-| `nowdocs ingest`（导入本地文档） | ❌ 不联网 | 仅读本地目录 |
-| `nowdocs install` / `update`（安装/更新 docset） | ✅ | registry 白名单：`github.com/nowdocs-registry/*`、`registry.nowdocs.dev/*`（后者已保留域名，尚未启用） |
-| 首次 `nowdocs serve`（加载 embedder） | ✅ 一次性 | HuggingFace（`hf-hub`，下载 jina-v2-small 模型，66MB），之后本地缓存 |
+| `nowdocs ingest` for local documents | No | Reads only a local directory. |
+| `nowdocs install` or `nowdocs update` | Yes | Trusted registry sources: `github.com/nowdocs-registry/*` and the reserved, currently inactive `registry.nowdocs.dev/*`. |
+| First model-enabled command | One-time download | Hugging Face through `hf-hub`, to download the approximately 66 MB Jina v2 small model; later use reads the local cache. |
 
-`nowdocs ingest` 连接 GitHub 等源站属**用户自行 clone 源 repo 的行为**，与 nowdocs 无关。
+Cloning a source repository from GitHub or another host is a separate user action, not an action performed by `nowdocs ingest`.
 
-**第三方连接元数据**：上述下载发生时，GitHub 与 HuggingFace 的服务器会收到你的
-IP 地址、User-Agent 等标准连接元数据，由其按各自隐私政策处理（见
-[GitHub 隐私政策](https://docs.github.com/en/site-policy/privacy-policies)、
-[HuggingFace 隐私政策](https://huggingface.co/privacy)）。nowdocs 不向这些请求
-附加任何额外标识信息。
+When downloads occur, GitHub and Hugging Face receive standard connection metadata such as your IP address and User-Agent under their own privacy policies: [GitHub](https://docs.github.com/en/site-policy/privacy-policies) and [Hugging Face](https://huggingface.co/privacy). nowdocs adds no additional identifier to these requests.
 
-## 不收集
+## Data we do not collect
 
-**nowdocs 软件不收集任何数据**：
+The nowdocs software collects no data:
 
-- 无遥测（telemetry）
-- 无分析（analytics）
-- 无追踪（tracking）
-- 无用户账号
-- 无云服务
+- No telemetry.
+- No analytics.
+- No tracking.
+- No user accounts.
+- No hosted service.
 
-代码中无 telemetry/analytics/tracking 调用。
+The code contains no telemetry, analytics, or tracking calls.
 
-例外说明：若你主动通过 `legal@gwmmai.com` 联系我们（如 DMCA 举报、行为准则
-举报），我们会为处理该事项而处理你邮件中的联系信息，仅用于该事项，不用于
-其他目的。
+If you contact `legal@gwmmai.com`, for example for a DMCA or Code of Conduct report, GWMM LLC processes the contact information in your message only to handle that matter.
 
-## 本地存储
+## Local storage
 
-| 数据 | 位置 |
+| Data | Location |
 |---|---|
-| docset 数据（lance 表 + manifest + license） | `~/.cache/nowdocs/db/`（或平台等价路径） |
-| embedder 模型缓存 | `~/.cache/nowdocs/models/` |
-| 配置 | 无（nowdocs 不写 config 目录；MCP 客户端配置在客户端侧 `mcp.json`） |
+| Docset data: Lance tables, manifests, and licenses | `~/.cache/nowdocs/db/`, or the platform-equivalent cache path |
+| Embedder model cache | `~/.cache/nowdocs/models/` |
+| Application configuration | None. nowdocs does not create a configuration directory; MCP client configuration lives in the client's own `mcp.json`. |
 
-## GDPR / CCPA
+## GDPR and CCPA
 
-nowdocs 软件不收集个人数据，GDPR（欧盟）与 CCPA（加州）对软件本身不适用。
-本声明以示透明。
+Because the nowdocs software does not collect personal data, GDPR and CCPA do not apply to the software itself. This statement is provided for transparency.
 
-## registry 网站隐私
+## Registry website privacy
 
-当前 registry 走 GitHub，适用 [GitHub 隐私政策](https://docs.github.com/en/site-policy/privacy-policies)。
-若未来 `registry.nowdocs.dev` 提供网页，将另行发布隐私声明。
+The registry currently uses GitHub and is therefore subject to the [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies). If `registry.nowdocs.dev` later provides a website, it will publish a separate privacy notice.
 
-## 变更
+## Changes
 
-本政策变更会在仓库 commit 历史中记录。重大变更通过 release notes 通告。
+Policy changes are recorded in repository history. Material changes are announced in release notes.
 
-## 联络
+## Contact
 
-邮箱：`legal@gwmmai.com`
+`legal@gwmmai.com`

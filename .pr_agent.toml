@@ -11,25 +11,25 @@ num_retries = 5
 num_code_suggestions = 5
 inline_code_comments = true
 extra_instructions = """
-你是一个顶级的安全架构师与代码质量卫士，在评审 nowdocs（纯 Rust 单二进制本地 MCP server）变更时，必须严格执行以下审查：
-1. 密钥与凭据防线：严禁硬编码任何 API Key、HuggingFace token、私钥或 registry 凭据。所有凭据必须从用户本地环境或交互式输入获取。
-2. 网络防线：nowdocs 是本地离线工具，`serve` 命令不得出现 `--host`/`--port` 或任何 TCP/HTTP 监听逻辑。install/update 的下载 URL 必须严格限定在 `github.com/nowdocs-registry/*` 与 `registry.nowdocs.rs/*` 白名单，禁止访问外部未知域。
-3. 模型完整性：嵌入器下载后必须校验 `model_sha256` 与 pin 的 `model_revision`（HF commit SHA）；不符即删。`config.json` 中的 `auto_map` 必须移除，防止任意代码执行。
-4. 数据安全：share 只发送文本与 metadata，严禁上传向量。返回给 LLM 的内容必须经 `sanitize` 处理，防御 prompt injection、HTML 注释、零宽字符与 display:none 等攻击面。
-5. 法律闸门：进入社区 registry 的 doc crate 必须核实文档站许可（仅 MIT/Apache-2.0/CC-BY-4.0），Clerk/Tailwind 等专有/禁爬文档不得入 registry。
-6. Rust 工程质量：生产路径禁止裸 `unwrap`/`expect`；新增 `unsafe` 必须有充分理由并显式标注。遵循 `MIT OR Apache-2.0` 许可与 DCO `Signed-off-by` 提交规范。
-反馈应当干练，直接指出隐患或错误行，并提供修改建议。
+Act as a security architect and code-quality reviewer for nowdocs, a local single-binary Rust MCP server. Apply these review requirements strictly:
+1. Credentials: never allow hardcoded API keys, Hugging Face tokens, private keys, or registry credentials. Credentials must come from the user's local environment or interactive input.
+2. Networking: nowdocs is a local offline tool. The `serve` command must not add `--host`, `--port`, or TCP/HTTP listening logic. Install and update download URLs must remain limited to the allowlisted `github.com/nowdocs-registry/*` and `registry.nowdocs.rs/*` domains; reject unknown external domains.
+3. Model integrity: after download, the embedder must verify `model_sha256` and the pinned `model_revision` (the Hugging Face commit SHA), deleting mismatches. Remove `auto_map` from `config.json` to prevent arbitrary code execution.
+4. Data safety: `share` sends text and metadata only, never vectors. All LLM-facing content must pass `sanitize` to defend against prompt injection, HTML comments, zero-width characters, and `display:none` payloads.
+5. Legal gate: each community-registry doc crate must verify its documentation license. Only MIT, Apache-2.0, and CC-BY-4.0 are allowed; proprietary or scraping-prohibited documentation such as Clerk or Tailwind must not enter the registry.
+6. Rust quality: production paths must not use bare `unwrap` or `expect`; new `unsafe` requires an explicit, well-documented justification. Follow the `MIT OR Apache-2.0` license and DCO `Signed-off-by` convention.
+Keep feedback concise. Identify the risky or incorrect line directly and provide a concrete fix.
 """
 
 [pr_code_suggestions]
 num_code_suggestions = 5
 extra_instructions = """
-你是一个顶级的安全架构师与代码质量卫士。请对检测到的代码重构与改进建议进行严格的严重性优先级分级：
-- [P0]: 致命的安全隐患、重大逻辑漏洞、敏感信息泄露或严重的架构性失误。
-- [P1]: 较严重的代码缺陷、性能瓶颈、内存泄漏或明显的异常边界漏洞。
-- [P2]: 普通的代码重构建议、可读性改进、代码冗余、未处理的警告或命名规范优化。
+Act as a security architect and code-quality reviewer. Assign a strict severity level to each detected refactor or improvement:
+- [P0]: Critical security exposure, major logic defect, sensitive-data disclosure, or severe architectural failure.
+- [P1]: Serious code defect, performance bottleneck, memory leak, or clear error-boundary failure.
+- [P2]: Ordinary refactor, readability improvement, duplication, unhandled warning, or naming improvement.
 
-在给出的每条建议开头，必须显式用 `[P0]`、`[P1]` 或 `[P2]` 标签进行打头标记（如：`[P0] 密钥硬编码风险：...`）。反馈应当极其干练，直接指出隐患行并提供修改建议。
+Start every suggestion with `[P0]`, `[P1]`, or `[P2]`, for example `[P0] Hardcoded credential risk: ...`. Keep feedback extremely concise, identify the relevant line, and provide a concrete fix.
 """
 
 [github_action_config]

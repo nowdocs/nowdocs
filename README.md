@@ -1,214 +1,127 @@
 # nowdocs
 
-> 纯 Rust 单二进制 MCP server，本地运行，给 LLM coding agent（Cursor / Claude Code / Aider）提供最新第三方开发文档，治 LLM 对快变库的幻觉。
+> A local, single-binary MCP server that gives coding agents current third-party documentation.
 
-**状态**：v0.1.2 patch release — 修复 cargo-binstall 对内部 registry builder 二进制的识别问题。
+Coding agents can confidently suggest APIs that have changed since their training data was collected. nowdocs indexes documentation on your machine and exposes it through MCP, so clients such as Claude Code, Cursor, and Aider can search current documentation instead of relying only on model memory.
 
----
+**Current release:** [v0.1.2](CHANGELOG.md). nowdocs is free to run, has no telemetry, and keeps queries, embeddings, and indexed documentation on your device.
 
-## 为什么需要
+## Why nowdocs
 
-LLM 训练有截止日期，对快速变化的库（Next.js 15 / React 19 / Vue 3.5）会产生幻觉。nowdocs 在本地跑一个 MCP server，把官方文档做成本地可混合检索（hybrid search：向量语义 + BM25 关键词 + RRF）的 docset，LLM agent 通过 MCP 工具 `nowdocs_search` 查到**最新且精确**的 API——零 API 费用、完全离线、query 永不离开设备。
+- **Local-first:** query text, embeddings, and document content stay on your machine.
+- **Hybrid retrieval:** semantic search, BM25 full-text search, and reciprocal-rank fusion (RRF).
+- **MCP over stdio:** no listening port, host, or public service to configure.
+- **Curated registry:** start with current Next.js, React, and Vue docsets, or ingest local Markdown documentation.
+- **One Rust binary:** prebuilt releases for macOS, Linux musl, and Windows.
 
-核心定位：MCP 协议 + 本地嵌入（candle + jina-v2-small）+ 本地混合检索（lancedb）+ 单一自包含二进制 + 社区 registry。
+## Install
 
-## 安装
-
-### 当前可用（从源码构建）
-
-```bash
-cargo install --git https://github.com/nowdocs/nowdocs
-```
-
-需 Rust 工具链（stable）、`protoc`（prost-build 依赖；macOS `brew install protobuf`，Linux `sudo apt-get install protobuf-compiler`）。另外 nowdocs 需要 `curl` 已安装且在 PATH 上可用——registry 联网下载预编译 docset 必经 curl，`nowdocs doctor` 会检查并在缺失时告警。首次 `serve` 会从 HuggingFace 下载 embedder 模型（jina-v2-small-en，约 66 MB），之后本地缓存；可提前跑 `nowdocs doctor --model` 预下载，避免首次检索阻塞。
-
-### v0.1.2 正式发布（预编译二进制）
-
-现在即可免编译安装：
+### Prebuilt binary
 
 ```bash
-# cargo-binstall（推荐）
+# Recommended: Cargo binstall verifies GitHub Release checksums.
 cargo binstall nowdocs
 
-# Homebrew（macOS / Linux）
+# macOS or Linux through the Homebrew tap.
 brew tap nowdocs-registry/nowdocs
 brew install nowdocs
 ```
 
-release 二进制覆盖 linux musl（x86_64 / aarch64）、macOS（arm64 / x86_64）、Windows（msvc）。不做代码签名，完整性靠 SHA-256 checksum + `cargo-binstall` 校验。
+### Build from source
 
-## 快速开始
+```bash
+cargo install nowdocs
+# or use the current repository checkout
+cargo build --release
+```
 
-完整教程见 [Getting Started](docs/GETTING_STARTED.md)，常见问题见 [Troubleshooting](docs/TROUBLESHOOTING.md)，MCP 客户端配置见 [MCP Clients](docs/MCP_CLIENTS.md)。
+Source builds require a compatible Rust toolchain, `protoc`, and `curl` on `PATH`.
 
-1. **先跑诊断**：
-   ```bash
-   nowdocs doctor
-   nowdocs doctor --json
-   ```
+- macOS: `brew install protobuf`
+- Debian/Ubuntu: `sudo apt-get install protobuf-compiler`
 
-2. **导入本地文档**（Markdown 目录）：
-   ```bash
-   nowdocs ingest ./my-docs my-docset --license MIT --source-url https://github.com/org/repo
-   ```
-   或从 registry 安装（registry 早期，可用 docset 有限）：
-   ```bash
-   nowdocs install <docset>
-   ```
+The first model-enabled command downloads the Apache-2.0 `jina-embeddings-v2-small-en` model (about 66 MB) from Hugging Face and then caches it locally. Run `nowdocs doctor --model` before your first search to make that download explicit.
 
-3. **跑真实检索冒烟测试**：
-   ```bash
-   nowdocs smoke my-docset "installation configuration example"
-   ```
+## Five-minute quick start
 
-4. **启动 MCP server**：
-   ```bash
-   nowdocs serve
-   ```
-   `serve` 通过 stdio 通信，不绑定端口/Host。
+This path installs the curated Next.js docset, verifies retrieval, and starts the MCP server.
 
-5. **配置 MCP client**：将 `nowdocs serve` 注册为 stdio MCP server。示例（多数 client 兼容的 `mcp.json` 格式）：
-   ```json
-   {
-     "mcpServers": {
-       "nowdocs": { "command": "nowdocs", "args": ["serve"] }
-     }
-   }
-   ```
-   配好后，LLM agent 可调用 `nowdocs_search`（语义检索）与 `nowdocs_list`（列出已装 docset）两个工具。
+```bash
+# 1. Check the local environment and download the model if it is missing.
+nowdocs doctor --model
 
-## CLI 命令
+# 2. Install a curated docset.
+nowdocs install nextjs
 
-| 命令 | 说明 |
+# 3. Confirm that retrieval returns useful documentation.
+nowdocs smoke nextjs "middleware matcher configuration"
+
+# 4. Start the local MCP server.
+nowdocs serve
+```
+
+`serve` uses newline-delimited JSON over stdio. It never binds a host or port.
+
+Register the server with an MCP client using this generic configuration:
+
+```json
+{
+  "mcpServers": {
+    "nowdocs": {
+      "command": "nowdocs",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+Client-specific configuration for Cursor, Claude Code, Claude Desktop, and Aider is in [MCP Clients](docs/MCP_CLIENTS.md).
+
+## Common workflows
+
+| Goal | Command |
 |---|---|
-| `nowdocs serve` | 启动 MCP stdio server |
-| `nowdocs ingest <dir> <name>` | 导入本地 Markdown 目录为 docset |
-| `nowdocs install <docset>` | 从 registry 安装预构建 docset |
-| `nowdocs update <docset>` | 更新 docset 至最新 registry 版本 |
-| `nowdocs uninstall <docset>` | 卸载 docset |
-| `nowdocs list-installed` | 列出已安装 docset |
-| `nowdocs smoke <docset> [query]` | 对已安装 docset 跑真实检索冒烟测试 |
-| `nowdocs doctor [--json] [--docset <name>] [--mcp] [--model] [--repair]` | 诊断环境、缓存、docset、MCP 与模型状态 |
-| `nowdocs cache status [--json]` | 查看 cache 路径、大小、已安装 docset 与 staging 状态 |
-| `nowdocs cache clean-staging [--older-than <duration>]` | 安全清理 nowdocs-owned staging 目录 |
-| `nowdocs share <docset>` | 打包 docset 供 registry 贡献（文本 + manifest，不含向量） |
+| List registry docsets | `nowdocs registry list` |
+| Install a curated docset | `nowdocs install <docset>` |
+| Import local Markdown | `nowdocs ingest <dir> <name> --license MIT --source-url <url>` |
+| Verify retrieval | `nowdocs smoke <docset> [query]` |
+| Start the MCP server | `nowdocs serve` |
+| List installed docsets | `nowdocs list-installed` |
+| Update a docset | `nowdocs update <docset>` |
+| Rebuild a local cache | `nowdocs rebuild <docset>` |
+| Diagnose or safely repair setup | `nowdocs doctor [--model] [--repair]` |
+| Inspect the cache | `nowdocs cache status` |
 
-`ingest` 参数：`--license`（MIT / Apache-2.0 / CC-BY-4.0，默认 MIT）、`--copyright-holder`、`--attribution`（CC-BY-4.0 必填）、`--source-url`、`--entry-url`。
+Use `nowdocs ingest` when you own or are allowed to use the source material. For CC-BY-4.0 documentation, supply the required `--attribution` value. Use `nowdocs share <docset>` to create a text-and-manifest contribution bundle; it intentionally excludes vectors.
 
-## 使用路径与架构边界
+## Documentation
 
-nowdocs 针对不同使用场景提供三条清晰路径：
-1. **终端用户 (End User)**: 通过 `nowdocs install <docset>` 安装文档包，再通过 `nowdocs serve` 提供本地 MCP 服务。
-2. **贡献者 (Contributor)**: 使用 `nowdocs ingest <dir>` 导入 Markdown 文档，并通过 `nowdocs share <docset>` 打包分享到 registry 社区。
-3. **诊断与排错 (Troubleshooting)**: 使用 `nowdocs doctor` 诊断本地环境，用 `nowdocs smoke <docset> [query]` 冒烟测试检索质量。
+- [Getting Started](docs/GETTING_STARTED.md) — installation, ingest, smoke testing, and recovery.
+- [MCP Clients](docs/MCP_CLIENTS.md) — client-specific configuration and verification.
+- [Troubleshooting](docs/TROUBLESHOOTING.md) — model, cache, registry, MCP, and source-build failures.
+- [Architecture](docs/ARCHITECTURE.md) — data flow and security boundaries.
+- [Contributing](CONTRIBUTING.md) — code and docset contribution workflow.
 
-> **架构安全声明 (Security Boundaries)**：
-> - **MCP tools are read-only / MCP 工具是只读的**：MCP 接口暴露的工具（`nowdocs_search`、`nowdocs_list`）是纯只读查询 (read-only queries)，LLM agent 绝无可能通过 MCP 触发任何写操作（如安装、卸载、导入等）。
-> - **Side-effect commands are CLI-only / 有副作用的操作均为 CLI 独占**：所有修改状态、写入文件和下载数据的敏感指令 (side-effect commands, such as `install`, `uninstall`, `ingest` etc.) 必须在终端中由用户手动运行 CLI 指令执行。
+## Security and privacy
 
-## 工作原理
+MCP exposes only the read-only `nowdocs_search` and `nowdocs_list` tools. Commands that modify local state, such as `install`, `ingest`, and `uninstall`, are CLI-only and require an explicit user action.
 
-```
-ingest → chunk（按 token 切分，保留 source_url / heading 等 metadata）
-       → embed（candle + jina-v2-small-en，512 维 f16）
-       → store（lancedb：FTS + 向量列）
+Before documentation reaches an LLM, nowdocs sanitizes returned text and metadata to reduce prompt-injection content. Registry downloads are restricted to trusted registry releases and verified with SHA-256. Shared docsets contain text and manifests only; registry CI rebuilds vectors with the pinned model.
 
-serve  ← MCP stdio
-       ← nowdocs_search(query → embed → hybrid search[FTS BM25 + 向量 + RRF] → top-k)
-       ← nowdocs_list(列出已装 docset)
-```
+See the [Privacy Policy](docs/PRIVACY.md), [Threat Model](docs/THREAT_MODEL.md), and [Security Policy](.github/SECURITY.md) for details.
 
-- **chunk**：按 token 边界切分，保留 metadata（source_url / line / heading）
-- **embed**：candle 纯 Rust 推理，jina-v2-small-en（512 维，Apache-2.0），结果缓存在平台默认 cache 目录下的 `nowdocs/`
-- **retrieve**：lancedb 0.31 hybrid search（Lance FTS BM25 + 向量近邻 + RRFReranker 融合）
-- **share**：只发文本 + manifest，向量由 registry CI 重建（关闭向量投毒与模型漂移两个攻击面）
+## Current scope and limitations
 
-## 局限性（v0.1.2）
+- The curated registry currently provides Next.js, React, and Vue docsets.
+- Retrieval is English-first and uses the fixed Candle/Jina embedding backend.
+- The Next.js real-corpus evaluation gate currently reports recall@5 of 0.900 and MRR of 0.720. It does not represent accuracy for every docset or query.
+- Releases are not code-signed. Verify release checksums; `cargo-binstall` does this automatically.
+- Five platform release assets are built and checksum-verified. Homebrew CLI installation should still be rechecked on a machine with Homebrew available.
 
-- **registry 早期**：目前只有 Next.js、React、Vue 三个 canonical docset
-- **embedding 模型固定**：jina-v2-small-en（512 维），暂不可配置
-- **embedding backend 固定**：candle（纯 Rust），无 ONNX / 远程 API 选项
-- **eval 覆盖有限**：Next.js 真实语料 gate 的 recall@5 = 0.900，MRR = 0.720；不代表所有文档集准确率
-- **平台安装验证**：五个平台的 Release 资产和 SHA-256 已验证；Homebrew CLI 的实际安装仍需在装有 Homebrew 的环境中复测
+## Contributing and policies
 
-## 技术栈
+nowdocs is licensed under `MIT OR Apache-2.0`. Contributions use the Developer Certificate of Origin (DCO), not a CLA. See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-- **语言**：Rust（Edition 2021），lib + bin 双 target
-- **嵌入**：candle（纯 Rust）+ jina-embeddings-v2-small-en（512 维，Apache-2.0）
-- **检索**：lancedb 0.31（内置 hybrid + RRF）
-- **协议**：MCP over stdio（NDJSON）
-- **分发**：cargo-binstall + Homebrew，不签名（完整性靠 SHA-256 + cargo-binstall 校验）
+The public registry is curated and accepts only documentation whose license permits redistribution. Review the [Acceptable Use Policy](docs/AUP.md), [DMCA Policy](docs/DMCA.md), [Trademark Policy](docs/TRADEMARK.md), and [NOTICE](NOTICE).
 
-## 贡献
-
-贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)：DCO（非 CLA）+ L1-L4 质量门禁 + registry 策展审核。行为准则见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
-
-架构与安全边界见 [Architecture](docs/ARCHITECTURE.md)。
-
-## 仓库结构
-
-```
-nowdocs/
-├── src/                 # Rust 源码（lib + bin）
-│   ├── cli.rs           # 7 子命令
-│   ├── store.rs         # lancedb hybrid search
-│   ├── embedder.rs      # candle + jina 推理
-│   ├── registry.rs      # install / share / update / uninstall
-│   └── mcp.rs           # MCP stdio server
-├── tests/               # 集成测试
-├── docs/                # 法务政策 + 设计文档
-├── dist/homebrew/       # Homebrew formula + tap 设置
-├── scripts/             # CI / 门禁脚本
-└── .github/workflows/   # gates / release / weekly-audit
-```
-
-## 许可证
-
-`MIT OR Apache-2.0`（Rust 双许可惯例）。完整文本见 [LICENSE-MIT](LICENSE-MIT) 与
-[LICENSE-APACHE](LICENSE-APACHE)，二者任选其一遵守，义务不叠加。版权归 GWMM LLC。
-
-依赖许可证审计：全树 616 个 crate，零强 copyleft（无 GPL/AGPL 传染），见
-[NOTICE](NOTICE) 与 `deny.toml`。其中 `option-ext` 为 MPL-2.0（文件级 copyleft，
-不感染整个二进制），其 notice 在 NOTICE 中保留。
-
-贡献遵循 DCO（Developer Certificate of Origin），不使用 CLA。每个 commit 须带
-`Signed-off-by:`（`git commit -s`），CI 由 `scripts/ci-check-dco.sh` 强制校验。
-
-## 商标
-
-"nowdocs"™ 名称及 logo 为 GWMM LLC 的商标（common-law，未注册）。MIT/Apache-2.0
-授予代码使用权，**不授予商标权**；分发未修改的官方版本可使用原名。完整政策见
-[TRADEMARK.md](docs/TRADEMARK.md)（English）。
-
-## 隐私与遥测
-
-nowdocs 本地运行，**query、embedding、文档内容永不出网**，无遥测、无分析、无
-追踪。联网仅限用户主动触发的 `install` / `update`（registry 白名单）与首次
-embedder 模型下载（HuggingFace）。完整政策见 [PRIVACY.md](docs/PRIVACY.md)。
-
-## 安全漏洞披露
-
-**请勿为安全漏洞开启公开 GitHub issue**——这会在修复前公开暴露风险。
-
-通过 GitHub 仓库 **Security** 标签页 → **Report a vulnerability**（私有渠道）
-报告；或邮件 `legal@gwmmai.com`（标题加 `[nowdocs security]`）。详见
-[SECURITY.md](.github/SECURITY.md)。响应窗口：3 个工作日内确认，高危 30 天内修复。
-
-## 侵权下架（DMCA Takedown）
-
-公共 registry 为**策展制**（curated），上架前审核许可证。侵权举报走 **GitHub
-内置 DMCA 流程**（[github.com/contact/dmca](https://github.com/contact/dmca)），
-备用邮箱 `legal@gwmmai.com`（标题 `[nowdocs DMCA]`）。通知要件与响应流程见
-[DMCA.md](docs/DMCA.md)（English）。
-
-## 法务与合规
-
-| 文件 | 内容 |
-|---|---|
-| [DMCA.md](docs/DMCA.md) | DMCA takedown 流程 + registry 上架许可证审核（English） |
-| [PRIVACY.md](docs/PRIVACY.md) | 隐私政策：本地运行，软件不收集数据 |
-| [TRADEMARK.md](docs/TRADEMARK.md) | 商标政策（English） |
-| [AUP.md](docs/AUP.md) | Acceptable Use Policy：registry 准入与软件使用边界 |
-| [SECURITY.md](.github/SECURITY.md) | 安全漏洞披露流程 |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献流程：DCO + 质量门禁 + 策展审核 |
-| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | 行为准则（Contributor Covenant 2.1） |
+Do not report security vulnerabilities in a public issue. Use GitHub's private vulnerability-reporting flow or email `legal@gwmmai.com` with `[nowdocs security]` in the subject line.

@@ -1,7 +1,7 @@
 # Nightly + manual retrieval-quality gate (S5 / A1.3).
 #
 # gates.yml runs `cargo test` without `--ignored`, so every test that needs the
-# real embedder (golden eval, retrieve/ingest/tools/cli e2e, E2 命门) never runs
+# The real embedder (golden evaluation and retrieve/ingest/tools/CLI end-to-end checks) never runs.
 # in CI — the retrieval bug fixes and "MRR 0.65 -> 1.000" had no regression
 # protection. This job runs them on a nightly schedule + manual dispatch. Not
 # on every push: the jina model download (~66 MB) and the Next.js ingest are

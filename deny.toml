@@ -1,5 +1,5 @@
 # cargo-deny configuration for nowdocs
-# L1 门禁: 许可证/重复依赖/advisory 检查
+# L1 quality gate: license, duplicate-dependency, and advisory checks.
 
 [graph]
 targets = []
@@ -10,23 +10,24 @@ no-default-features = false
 feature-depth = 1
 
 [advisories]
-# 安全 advisory 检查
+# Security advisory checks.
 db-urls = ["https://github.com/rustsec/advisory-db"]
 db-path = "~/.cargo/advisory-dbs"
 unmaintained = "none"
 yanked = "warn"
 ignore = [
     # RUSTSEC-2026-0194 & RUSTSEC-2026-0195:
-    # quick-xml 漏洞是由测试组件 lance-testing 中的性能剖析工具 pprof 间接拉入的。
-    # nowdocs 核心生产二进制中不包含 pprof，且整个项目完全不涉及 XML 解析逻辑，
-    # 故该漏洞在运行期和生产环境下完全不可达 (Unreachable)，不构成实质性安全风险。
+    # The quick-xml advisory is pulled in indirectly by pprof, a profiling tool
+    # in the lance-testing test component. The nowdocs production binary does
+    # not include pprof and does not parse XML, so the advisory is unreachable
+    # at runtime and in production.
     # Revisit-date: 2026-10-10
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195"
 ]
 
 [licenses]
-# 许可证白名单
+# License allowlist.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -53,7 +54,7 @@ ignore = false
 registries = []
 
 [bans]
-# 重复依赖检查
+# Duplicate-dependency checks.
 multiple-versions = "warn"
 wildcards = "allow"
 highlight = "all"
@@ -65,7 +66,7 @@ skip = []
 skip-tree = []
 
 [sources]
-# 来源检查
+# Source checks.
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]

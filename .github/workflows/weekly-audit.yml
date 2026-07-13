@@ -1,10 +1,10 @@
-# L4: 周级异步审计
+# L4: Weekly asynchronous audit.
 
 name: Weekly Audit
 
 on:
   schedule:
-    # 每周五 17:00 UTC
+    # Every Friday at 17:00 UTC.
     - cron: "0 17 * * 5"
   workflow_dispatch:
 
