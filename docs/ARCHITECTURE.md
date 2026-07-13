@@ -13,6 +13,20 @@ Markdown or registry docset
   -> sanitized MCP response over stdio
 ```
 
+```mermaid
+flowchart LR
+    Registry[Trusted registry docset] --> Ingest[ingest and chunk]
+    Markdown[Local Markdown] --> Ingest
+    Ingest --> Embedder[Pinned Candle/Jina embedder]
+    Embedder --> Store[LanceDB vector and full-text indexes]
+    Store --> Retrieve[Hybrid retrieval: vector + BM25 + RRF]
+    Retrieve --> Sanitize[Sanitize text and metadata]
+    Sanitize --> MCP[Read-only MCP tools over stdio]
+    Client[Coding agent] <--> MCP
+    CLI[Explicit CLI commands] --> Ingest
+    CLI --> Registry
+```
+
 ## Main components
 
 - `ingest`: validates and chunks local Markdown documentation.

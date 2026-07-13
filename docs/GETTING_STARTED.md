@@ -2,6 +2,11 @@
 
 This is the supported path from a new installation to a working local MCP documentation server.
 
+```mermaid
+flowchart LR
+    A[Install nowdocs] --> B[Configure an MCP client] --> C[Search current documentation]
+```
+
 ## 1. Install nowdocs
 
 Install a prebuilt binary when possible:
