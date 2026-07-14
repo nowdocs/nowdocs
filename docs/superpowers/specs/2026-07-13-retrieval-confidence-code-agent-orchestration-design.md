@@ -52,6 +52,7 @@ belongs to Codex and the maintainer.
 | C07 | Implement deterministic global-policy calibration and split isolation. | L4 | 9 | C03, C04, C05, G01 | N04, G03, C08 |
 | C08 | Embed and activate the frozen policy after frozen-test approval. | L4 | 10 code scope | C07, G03 | C09, G04 |
 | C09 | Add three-docset fixture preparation and JSON-gated CI. | L4 | 11 code scope | C03, C08 | G04 |
+| C10 | Add automated count, split, and near-domain gates for reviewed evaluation suites. | L2 | 5 Step 3 | C03, N01 fixture data | G01 |
 
 ### Difficulty rationale
 
