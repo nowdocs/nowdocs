@@ -339,4 +339,16 @@ fn cli_rejects_invalid_code_commit_without_model_initialization() {
         RetrievalEvalArgs::try_parse_args(&zero_runs).is_err(),
         "--benchmark-runs 0 must be rejected"
     );
+
+    let mut excessive_runs = base.to_vec();
+    excessive_runs.extend([
+        "--code-commit",
+        "2539729d317def57fee4e30cb6cea8172f1d02aa",
+        "--benchmark-runs",
+        "1001",
+    ]);
+    assert!(
+        RetrievalEvalArgs::try_parse_args(&excessive_runs).is_err(),
+        "--benchmark-runs above the supported maximum must be rejected"
+    );
 }

@@ -3,10 +3,20 @@
 //! serialization. Pure: no embedder, no I/O beyond the committed fixture.
 
 use nowdocs::confidence::AnswerState;
+use std::collections::HashSet;
+
 use nowdocs::eval::{
-    hit_matches_target, validate_suite, EvalQuery, EvalSplit, QueryClass, QueryForm,
-    RelevanceTarget,
+    hit_matches_target, load_eval_file, validate_suite, EvalQuery, EvalSplit, QueryClass,
+    QueryForm, RelevanceTarget,
 };
+
+/// String name of an `EvalSplit` variant for readable assertion messages.
+fn split_name(split: &EvalSplit) -> &'static str {
+    match split {
+        EvalSplit::Development => "development",
+        EvalSplit::Test => "test",
+    }
+}
 use nowdocs::retrieve::ResultChunk;
 
 fn hit(source_url: &str, heading_path: &str) -> ResultChunk {
@@ -268,5 +278,119 @@ fn answer_state_serializes_snake_case() {
         assert_eq!(json, expected);
         let back: AnswerState = serde_json::from_str(&json).expect("deserialize AnswerState");
         assert_eq!(back, state);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// C10: real-suite composition gates
+// ---------------------------------------------------------------------------
+
+/// Load each real eval suite independently via `load_eval_file` and assert
+/// minimum family counts. Counts are by distinct `intent_family`, not query
+/// rows. `schema-smoke.json` is deliberately excluded — it shares a Next.js
+/// intent family and would inflate counts if loaded through the directory
+/// loader.
+#[test]
+fn real_suites_meet_minimum_family_counts() {
+    let fixtures_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/eval");
+    let suites = ["nextjs.json", "react.json", "vue.json"];
+
+    for suite_file in suites {
+        let path = format!("{fixtures_dir}/{suite_file}");
+        let queries = load_eval_file(&path).expect("load_eval_file must succeed");
+
+        // 1. All records use the corresponding docset name.
+        let expected_docset = suite_file.trim_end_matches(".json");
+        for q in &queries {
+            assert_eq!(
+                q.docset, expected_docset,
+                "{suite_file}: query {} has docset {}, expected {expected_docset}",
+                q.id, q.docset
+            );
+        }
+
+        // 2. validate_suite succeeds on the individual suite.
+        validate_suite(&queries).expect("{suite_file}: validate_suite must succeed");
+
+        // 3. Per-split minimum family counts.
+        for split in &[EvalSplit::Development, EvalSplit::Test] {
+            let sn = split_name(split);
+            let pos_families: HashSet<&str> = queries
+                .iter()
+                .filter(|q| q.split == *split && q.query_class == QueryClass::Positive)
+                .map(|q| q.intent_family.as_str())
+                .collect();
+            let neg_families: HashSet<&str> = queries
+                .iter()
+                .filter(|q| {
+                    q.split == *split
+                        && matches!(
+                            q.query_class,
+                            QueryClass::NearDomainNegative | QueryClass::CrossDomainNegative
+                        )
+                })
+                .map(|q| q.intent_family.as_str())
+                .collect();
+            let near_neg_families: HashSet<&str> = queries
+                .iter()
+                .filter(|q| q.split == *split && q.query_class == QueryClass::NearDomainNegative)
+                .map(|q| q.intent_family.as_str())
+                .collect();
+
+            assert!(
+                pos_families.len() >= 20,
+                "{suite_file} {sn}: expected >= 20 distinct positive intent families, got {}",
+                pos_families.len()
+            );
+            assert!(
+                neg_families.len() >= 15,
+                "{suite_file} {sn}: expected >= 15 distinct negative intent families, got {}",
+                neg_families.len()
+            );
+
+            // 4. At least 50% of distinct negative families are near_domain_negative.
+            let near_share = near_neg_families.len() as f32 / neg_families.len() as f32;
+            assert!(
+                near_share >= 0.50,
+                "{suite_file} {sn}: near_domain_negative share {:.0}% < 50%",
+                near_share * 100.0
+            );
+        }
+
+        // 5. (docset, intent_family) appears in only one split.
+        // validate_suite already enforces this; we exercise it through the
+        // real suites by loading each independently and calling validate_suite
+        // above.
+    }
+}
+
+#[test]
+fn real_suite_targets_use_installed_corpus_source_urls() {
+    let fixtures_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/eval");
+    let suites = [
+        (
+            "nextjs.json",
+            "https://github.com/vercel/next.js/tree/canary/docs",
+        ),
+        (
+            "react.json",
+            "https://github.com/reactjs/react.dev/tree/main/src/content",
+        ),
+        ("vue.json", "https://github.com/vuejs/docs/tree/main/src"),
+    ];
+
+    for (suite_file, source_url_base) in suites {
+        let path = format!("{fixtures_dir}/{suite_file}");
+        let queries = load_eval_file(&path).expect("load_eval_file must succeed");
+        let required_prefix = format!("{source_url_base}/");
+
+        for target in queries.iter().flat_map(|query| &query.targets) {
+            assert!(
+                target.source_url.starts_with(&required_prefix),
+                "{suite_file}: target URL {:?} must start with {:?}",
+                target.source_url,
+                required_prefix
+            );
+        }
     }
 }
