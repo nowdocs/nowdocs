@@ -42,9 +42,10 @@ guard for `rate_estimate`.
    that realizes the top `k` target gains at the top `k` ranks must have
    `ndcg == 1.0`, even when more than `k` targets are labeled.
 2. `rate_estimate(count, total)` preserves results for valid inputs
-   `count <= total`. For invalid `count > total`, retain a `debug_assert!` for
-   the violated invariant and compute the saturated `count = total` rate and
-   finite Wilson bounds; `total == 0` keeps its existing zero-valued result.
+   `count <= total`. For invalid `count > total`, compute the saturated
+   `count = total` rate and finite Wilson bounds; `total == 0` keeps its
+   existing zero-valued result. Do not add a `debug_assert!`: it would panic in
+   the debug test profile and contradict the required defensive result.
 3. Rebase the PR branch onto current `origin/main` without a merge commit.
    Every resulting PR-only commit must retain a valid DCO sign-off. This is a
    history repair, not permission to merge or push.
