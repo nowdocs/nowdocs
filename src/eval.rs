@@ -520,6 +520,11 @@ pub const BINARY_GATE_POLICY_ID: &str = "binary-current-gate-v1";
 const STAGE_K_40: usize = 40;
 /// MMR-selection and final-output stage cutoff, matching production `top_k`.
 const STAGE_K_5: usize = 5;
+/// Largest supported number of measured retrieval repetitions per query.
+///
+/// This keeps the evaluator from allocating an attacker-controlled amount of
+/// memory or accidentally scheduling an impractical number of full searches.
+const MAX_BENCHMARK_RUNS: u32 = 1_000;
 
 /// RRF fusion constant used by `Store::hybrid_search` (its default). Restated
 /// here only to record the evaluated retrieval parameters in the report.
@@ -608,7 +613,8 @@ pub struct RetrievalParameters {
 pub struct CorpusIdentity {
     pub docset: String,
     pub code_commit: String,
-    /// Reproducible evaluator invocation metadata, without query or chunk text.
+    /// Evaluator invocation summary, without query or chunk text. Full
+    /// retrieval settings are recorded separately in [`RetrievalParameters`].
     pub command: String,
     pub parameters: RetrievalParameters,
     pub os: String,
@@ -758,6 +764,11 @@ fn parse_benchmark_runs(raw: &str) -> Result<u32, String> {
         .map_err(|_| format!("--benchmark-runs must be a positive integer, got {raw:?}"))?;
     if runs == 0 {
         return Err("--benchmark-runs must be a positive integer, got 0".to_string());
+    }
+    if runs > MAX_BENCHMARK_RUNS {
+        return Err(format!(
+            "--benchmark-runs must be at most {MAX_BENCHMARK_RUNS}, got {runs}"
+        ));
     }
     Ok(runs)
 }
