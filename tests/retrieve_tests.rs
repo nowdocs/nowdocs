@@ -568,6 +568,7 @@ fn retrieve_search_returns_store_error_sentinel() {
 // --- C02: behavior-preserving retrieval trace ---
 
 use nowdocs::retrieve::rank_and_gate_candidates;
+use nowdocs::store::CandidateEvidence;
 
 /// Query vector for the trace tests: unit vector on the x axis, so a
 /// candidate's query-cosine is just its first component (unit-normalized).
@@ -575,14 +576,23 @@ fn qv() -> Vec<f32> {
     vec![1.0, 0.0]
 }
 
+/// Wrap a SearchHit in CandidateEvidence with no channel-rank evidence.
+fn evidence(hit: SearchHit) -> CandidateEvidence {
+    CandidateEvidence {
+        hit,
+        dense_rank: None,
+        lexical_rank: None,
+    }
+}
+
 /// Fused candidate pool for `trace_does_not_change_rank_or_gate`: RRF scores
 /// sit below DUAL_RANK1_RRF so the gate decision is driven by cosine alone.
-fn hits() -> Vec<SearchHit> {
+fn hits() -> Vec<CandidateEvidence> {
     vec![
-        hit_url(0, "a.md", 0.030),
-        hit_url(1, "b.md", 0.029),
-        hit_url(2, "c.md", 0.028),
-        hit_url(3, "d.md", 0.027),
+        evidence(hit_url(0, "a.md", 0.030)),
+        evidence(hit_url(1, "b.md", 0.029)),
+        evidence(hit_url(2, "c.md", 0.028)),
+        evidence(hit_url(3, "d.md", 0.027)),
     ]
 }
 
@@ -621,9 +631,9 @@ fn trace_pre_mmr_cosines_come_from_fused_pool_not_mmr_order() {
     // pre_mmr_top_cosines must therefore list 0.95, 0.94 — the fused-pool
     // distribution — not the MMR selection's 0.95, 0.90.
     let hits = vec![
-        hit_url(0, "a.md", 0.030),
-        hit_url(1, "b.md", 0.029),
-        hit_url(2, "c.md", 0.028),
+        evidence(hit_url(0, "a.md", 0.030)),
+        evidence(hit_url(1, "b.md", 0.029)),
+        evidence(hit_url(2, "c.md", 0.028)),
     ];
     let mut diverse = vec_with_cosine(0.90);
     diverse[1] = -diverse[1]; // same query-cosine, dissimilar to chunk 0
@@ -669,7 +679,10 @@ fn trace_pre_mmr_cosines_come_from_fused_pool_not_mmr_order() {
 
 #[test]
 fn trace_pre_mmr_cosines_omit_non_finite_values() {
-    let hits = vec![hit_url(0, "valid.md", 0.030), hit_url(1, "nan.md", 0.029)];
+    let hits = vec![
+        evidence(hit_url(0, "valid.md", 0.030)),
+        evidence(hit_url(1, "nan.md", 0.029)),
+    ];
     let vectors = vecs(&[(0, vec_with_cosine(0.90)), (1, vec![f32::NAN, 1.0])]);
 
     let result = rank_and_gate_candidates(&qv(), hits, &vectors, 2, true);

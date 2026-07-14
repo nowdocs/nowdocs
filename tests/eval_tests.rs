@@ -504,9 +504,9 @@ fn test_eval_nextjs_real() {
             .expect("hybrid search negative query");
         let top_cosine = raw.first().and_then(|h| {
             store
-                .fetch_vectors(&[h.chunk_idx])
+                .fetch_vectors(&[h.hit.chunk_idx])
                 .ok()
-                .and_then(|v| v.get(&h.chunk_idx).map(|hv| cosine_sim(&qv, hv)))
+                .and_then(|v| v.get(&h.hit.chunk_idx).map(|hv| cosine_sim(&qv, hv)))
         });
         eprintln!(
             "negative-eval-nextjs: q={:?} top_score={:?} top_cosine={:?}",
@@ -583,7 +583,7 @@ fn test_eval_nextjs_diagnose() {
             .expect("hybrid search");
         let raw_rank = hits
             .iter()
-            .position(|h| h.source_url == q.expected_source_url)
+            .position(|h| h.hit.source_url == q.expected_source_url)
             .map(|p| p + 1);
         let miss = raw_rank.is_none_or(|r| r > 5);
         let tag = if miss { "MISS" } else { "ok  " };
@@ -598,7 +598,7 @@ fn test_eval_nextjs_diagnose() {
             let pool = store
                 .hybrid_search_k(&qv, &q.query, raw_k, 60.0)
                 .expect("hybrid search raw_k pool");
-            let ids: Vec<u32> = pool.iter().map(|h| h.chunk_idx).collect();
+            let ids: Vec<u32> = pool.iter().map(|h| h.hit.chunk_idx).collect();
             let vecs = store.fetch_vectors(&ids).expect("fetch vectors");
             // Pool's top-8 by query-cosine with each chunk's fused rank — shows
             // whether a miss is a relevance-signal gap (expected cosine rank
@@ -608,10 +608,10 @@ fn test_eval_nextjs_diagnose() {
                 .enumerate()
                 .map(|(i, h)| {
                     let c = vecs
-                        .get(&h.chunk_idx)
+                        .get(&h.hit.chunk_idx)
                         .map(|v| cosine_sim(&qv, v))
                         .unwrap_or(0.0);
-                    (i + 1, c, h.source_url.as_str())
+                    (i + 1, c, h.hit.source_url.as_str())
                 })
                 .collect();
             by_cos.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
@@ -622,7 +622,13 @@ fn test_eval_nextjs_diagnose() {
                 .collect();
             eprintln!("        pool top-8 by cosine: {}", top8.join(", "));
             for &lambda in &[0.7_f32, 0.8, 0.9, 1.0] {
-                let mmr = nowdocs::retrieve::mmr_rerank(&qv, pool.clone(), &vecs, 5, lambda);
+                let mmr = nowdocs::retrieve::mmr_rerank(
+                    &qv,
+                    pool.iter().map(|c| c.hit.clone()).collect(),
+                    &vecs,
+                    5,
+                    lambda,
+                );
                 let rank = mmr
                     .iter()
                     .position(|h| h.source_url == q.expected_source_url)
@@ -675,10 +681,10 @@ fn test_eval_nextjs_diagnose() {
                 .expect("hybrid search top-50");
             let rank50 = hits50
                 .iter()
-                .position(|h| h.source_url == q.expected_source_url)
+                .position(|h| h.hit.source_url == q.expected_source_url)
                 .map(|p| p + 1);
             eprintln!("        hybrid rank in top-50: {:?}", rank50);
-            let urls: Vec<&str> = hits.iter().map(|h| h.source_url.as_str()).collect();
+            let urls: Vec<&str> = hits.iter().map(|h| h.hit.source_url.as_str()).collect();
             eprintln!("        top-15: {}", urls.join(", "));
             let mut seen = std::collections::HashSet::new();
             let unique = urls.iter().filter(|u| seen.insert(**u)).count();

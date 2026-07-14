@@ -8,7 +8,7 @@ use crate::chunker::ChunkType;
 use crate::embedder::{self, EmbedderSpec};
 use crate::input::{resolve_max_tokens, resolve_top_k, validate_docset, validate_query};
 use crate::manifest;
-use crate::store::{SearchHit, Store};
+use crate::store::{CandidateEvidence, SearchHit, Store};
 use crate::token::count_tokens;
 
 /// MMR lambda: weight of relevance vs. redundancy (0.7 = relevance-leaning).
@@ -284,7 +284,7 @@ fn search_impl(
             docset: docset.clone(),
             reason: e.to_string(),
         })?;
-    let cand_ids: Vec<u32> = candidates.iter().map(|h| h.chunk_idx).collect();
+    let cand_ids: Vec<u32> = candidates.iter().map(|c| c.hit.chunk_idx).collect();
     let vectors = store.fetch_vectors(&cand_ids).map_err(|e| StoreError {
         docset: docset.clone(),
         reason: e.to_string(),
@@ -515,23 +515,33 @@ pub fn apply_answer_gate(
 /// trace.
 pub fn rank_and_gate_candidates(
     query_vector: &[f32],
-    candidates: Vec<SearchHit>,
+    candidates: Vec<CandidateEvidence>,
     vectors: &HashMap<u32, Vec<f32>>,
     top_k: usize,
     trace: bool,
 ) -> RankedGateResult {
+    // Build per-channel rank maps from CandidateEvidence before MMR consumes
+    // the candidates. MMR only operates on SearchHit; ranks are reattached
+    // to the trace after selection.
+    let mut rank_map: HashMap<u32, (Option<u32>, Option<u32>)> = HashMap::new();
+    for c in &candidates {
+        rank_map.insert(c.hit.chunk_idx, (c.dense_rank, c.lexical_rank));
+    }
+
     // Fused-pool trace view, built before MMR consumes the candidates.
     // `bool::then` skips the closure entirely when tracing is disabled.
     let fused_trace = trace.then(|| {
         candidates
             .iter()
-            .map(|h| TraceHit {
-                chunk_idx: h.chunk_idx,
-                source_url: h.source_url.clone(),
-                rrf_score: h.score,
-                cosine: vectors.get(&h.chunk_idx).map(|v| cosine(query_vector, v)),
-                dense_rank: None,
-                lexical_rank: None,
+            .map(|c| TraceHit {
+                chunk_idx: c.hit.chunk_idx,
+                source_url: c.hit.source_url.clone(),
+                rrf_score: c.hit.score,
+                cosine: vectors
+                    .get(&c.hit.chunk_idx)
+                    .map(|v| cosine(query_vector, v)),
+                dense_rank: c.dense_rank,
+                lexical_rank: c.lexical_rank,
             })
             .collect::<Vec<TraceHit>>()
     });
@@ -545,18 +555,23 @@ pub fn rank_and_gate_candidates(
         cosines
     });
 
-    let hits = mmr_rerank(query_vector, candidates, vectors, top_k, MMR_LAMBDA);
+    // MMR operates on SearchHit only; extract hits from evidence.
+    let cand_hits: Vec<SearchHit> = candidates.into_iter().map(|c| c.hit).collect();
+    let hits = mmr_rerank(query_vector, cand_hits, vectors, top_k, MMR_LAMBDA);
 
     // MMR-selection trace view, built before the gate consumes the hits.
     let mmr_trace = trace.then(|| {
         hits.iter()
-            .map(|h| TraceHit {
-                chunk_idx: h.chunk_idx,
-                source_url: h.source_url.clone(),
-                rrf_score: h.score,
-                cosine: vectors.get(&h.chunk_idx).map(|v| cosine(query_vector, v)),
-                dense_rank: None,
-                lexical_rank: None,
+            .map(|h| {
+                let (dr, lr) = rank_map.get(&h.chunk_idx).copied().unwrap_or((None, None));
+                TraceHit {
+                    chunk_idx: h.chunk_idx,
+                    source_url: h.source_url.clone(),
+                    rrf_score: h.score,
+                    cosine: vectors.get(&h.chunk_idx).map(|v| cosine(query_vector, v)),
+                    dense_rank: dr,
+                    lexical_rank: lr,
+                }
             })
             .collect::<Vec<TraceHit>>()
     });

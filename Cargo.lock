@@ -4381,6 +4381,7 @@ dependencies = [
  "arrow",
  "arrow-array",
  "arrow-schema",
+ "async-trait",
  "candle-core",
  "candle-nn",
  "candle-transformers",
