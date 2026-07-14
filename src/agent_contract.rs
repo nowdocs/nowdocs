@@ -239,10 +239,14 @@ pub fn capabilities_data() -> CapabilitiesData {
         // Single source of truth shared with MCP initialize.
         mcp_protocol_version: crate::mcp::PROTOCOL_VERSION.to_string(),
         transport: "stdio_ndjson".to_string(),
-        mcp_tools: vec!["nowdocs_list".to_string(), "nowdocs_search".to_string()],
+        // Derived from the single mcp::MCP_TOOL_NAMES source (P2 repair).
+        mcp_tools: crate::mcp::MCP_TOOL_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
         commands: vec![
             command("capabilities", true, true, false),
-            command("status", false, true, false),
+            command("status", true, true, false),
             command("setup.plan", false, false, true),
             command("setup.apply", false, false, true),
             command("setup.rollback", false, false, false),

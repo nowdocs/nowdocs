@@ -21,6 +21,12 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Report a read-only, offline snapshot of local nowdocs state
+    Status {
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
     /// Install a pre-built doc crate from the registry
     Install { docset: String },
     /// Import a Markdown directory as a local docset

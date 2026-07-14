@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub const CACHE_LAYOUT_VERSION: u32 = 1;
 
@@ -308,6 +308,102 @@ pub fn ensure_layout() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Read-only observation of the on-disk cache layout (C2 pure inspector).
+///
+/// Serializes snake_case for the `nowdocs status` JSON contract. Observation
+/// never creates the root, never writes a probe, and never follows symlinks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheLayoutState {
+    /// Cache root does not exist; observation never creates it.
+    NotInitialized,
+    /// `.layout_version` matches `CACHE_LAYOUT_VERSION`.
+    Ready,
+    /// `.layout_version` parses but differs from `CACHE_LAYOUT_VERSION`.
+    VersionMismatch,
+    /// The version file is absent, unreadable, not a regular file, or does
+    /// not parse as a number.
+    VersionUnreadable,
+    /// The cache root exists but cannot be inspected, or is not a plain
+    /// directory (for example a file or symlink).
+    Unreadable,
+}
+
+impl CacheLayoutState {
+    /// Stable snake-case label shared by JSON and human output.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotInitialized => "not_initialized",
+            Self::Ready => "ready",
+            Self::VersionMismatch => "version_mismatch",
+            Self::VersionUnreadable => "version_unreadable",
+            Self::Unreadable => "unreadable",
+        }
+    }
+}
+
+/// Pure read-only observation of the cache layout state.
+///
+/// Unlike [`ensure_layout`], this never creates the cache tree or writes a
+/// version file, and it never follows symlinks: an absent root is reported as
+/// [`CacheLayoutState::NotInitialized`] and left absent.
+pub fn observe_layout_state() -> CacheLayoutState {
+    let root = cache_root();
+    let version_file = root.join(LAYOUT_VERSION_FILE);
+
+    let root_meta = match std::fs::symlink_metadata(&root) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return CacheLayoutState::NotInitialized;
+        }
+        Err(_) => return CacheLayoutState::Unreadable,
+    };
+    if !root_meta.is_dir() {
+        // A file or symlink where the cache root should be: never follow it.
+        return CacheLayoutState::Unreadable;
+    }
+
+    let version_meta = match std::fs::symlink_metadata(&version_file) {
+        Ok(meta) => meta,
+        Err(_) => return CacheLayoutState::VersionUnreadable,
+    };
+    if !version_meta.is_file() {
+        return CacheLayoutState::VersionUnreadable;
+    }
+    match std::fs::read_to_string(&version_file) {
+        Ok(raw) => match raw.trim().parse::<u32>() {
+            Ok(v) if v == CACHE_LAYOUT_VERSION => CacheLayoutState::Ready,
+            Ok(_) => CacheLayoutState::VersionMismatch,
+            Err(_) => CacheLayoutState::VersionUnreadable,
+        },
+        Err(_) => CacheLayoutState::VersionUnreadable,
+    }
+}
+
+/// Names of installed docsets (`.lance` store stems under `db/`), lexical.
+///
+/// Pure read-only listing: an absent or unreadable `db/` yields an empty list
+/// instead of an error, so status tolerates a corrupt or uninitialized cache.
+pub fn installed_docset_names() -> Vec<String> {
+    let db_dir = cache_root().join("db");
+    let mut names = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&db_dir) {
+        for entry in entries.flatten() {
+            // DirEntry::file_type does not follow symlinks.
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir {
+                if let Some(name) = entry.file_name().to_str() {
+                    if let Some(stem) = name.strip_suffix(".lance") {
+                        names.push(stem.to_string());
+                    }
+                }
+            }
+        }
+    }
+    names.sort();
+    names
+}
+
 /// Metadata about an installed docset.
 #[derive(Debug, Serialize)]
 pub struct InstalledDocset {
@@ -421,6 +517,56 @@ pub fn check_docset_state(docset: &str) -> InstalledDocsetState {
             } else {
                 InstalledDocsetState::RowCountMismatch
             }
+        }
+    }
+}
+
+/// Pure, read-only variant of [`check_docset_state`] for `nowdocs status`.
+///
+/// It classifies manifest/store presence, schema compatibility, and manifest
+/// validity exactly like [`check_docset_state`], but never opens the Lance
+/// store and never follows symlinks: row-count agreement cannot be verified
+/// without opening the store, so a schema-current, manifest-valid docset with
+/// a present store reports [`InstalledDocsetState::Healthy`] here, and
+/// [`InstalledDocsetState::RowCountMismatch`] detection stays with
+/// `doctor`/`smoke`.
+pub fn check_docset_state_pure(docset: &str) -> InstalledDocsetState {
+    let mpath = manifest_path(docset);
+    let manifest_exists = std::fs::symlink_metadata(&mpath)
+        .map(|m| m.is_file())
+        .unwrap_or(false);
+    let store_exists = std::fs::symlink_metadata(db_path(docset))
+        .map(|m| m.is_dir())
+        .unwrap_or(false);
+
+    let parsed = if manifest_exists {
+        std::fs::read_to_string(&mpath)
+            .ok()
+            .and_then(|raw| crate::manifest::parse_manifest(&raw).ok())
+    } else {
+        None
+    };
+
+    match (parsed, store_exists) {
+        (None, false) => InstalledDocsetState::NotInstalled,
+        (None, true) => InstalledDocsetState::StoreOnly,
+        (Some(_), false) => InstalledDocsetState::ManifestOnly,
+        (Some(m), true) => {
+            use crate::manifest::{schema_compatibility, SchemaCompatibility};
+            if !matches!(
+                schema_compatibility(m.nowdocs_schema_version),
+                SchemaCompatibility::Current
+            ) {
+                return InstalledDocsetState::SchemaMismatch;
+            }
+            // Same acceptance as `check_docset_state`: a manifest that fails
+            // `validate` is unusable, so the store reads as StoreOnly.
+            if crate::manifest::validate(&m).is_err() {
+                return InstalledDocsetState::StoreOnly;
+            }
+            // Pure observation stops here: counting live rows would open the
+            // Lance store, which the read-only inspector must never do.
+            InstalledDocsetState::Healthy
         }
     }
 }

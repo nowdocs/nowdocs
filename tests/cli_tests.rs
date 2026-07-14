@@ -520,7 +520,7 @@ fn test_capabilities_human_reports_security_boundaries() {
         stdout.contains("capabilities: implemented"),
         "got: {stdout}"
     );
-    assert!(stdout.contains("status: not implemented"), "got: {stdout}");
+    assert!(stdout.contains("status: implemented"), "got: {stdout}");
     for client in ["claude-code", "claude-desktop", "cursor", "generic"] {
         assert!(
             stdout.contains(client),
@@ -604,4 +604,176 @@ fn test_legacy_cache_status_json_is_not_agent_enveloped() {
         v.get("cache_root").is_some(),
         "legacy cache_root field must remain"
     );
+}
+
+// ---- C2: agent contract — status command ----
+//
+// Same isolation rules as the C1 capabilities tests: per-test temporary
+// HOME/XDG/cwd roots plus deliberately unusable proxy variables, so any
+// accidental network attempt fails fast and nothing touches real user state.
+
+#[test]
+fn test_status_json_uses_agent_envelope_and_is_offline() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["status", "--json"]);
+    assert!(
+        out.status.success(),
+        "status --json must always exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "stderr must be empty on success, got: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // stdout parses as exactly one JSON value (from_slice rejects trailing data).
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout must be one JSON document");
+    assert_eq!(v["schema_version"], 1);
+    assert_eq!(v["nowdocs_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(v["command"], "status");
+    // An absent cache is a degraded observation: warning, never a process error.
+    assert_eq!(v["status"], "warning");
+    assert_eq!(v["code"], "ready");
+    assert!(
+        v["summary"].as_str().is_some_and(|s| !s.is_empty()),
+        "summary must be a non-empty English string"
+    );
+    assert_eq!(v["next_actions"], serde_json::json!([]));
+    assert!(v["rollback"].is_null());
+
+    let data = &v["data"];
+    assert_eq!(data["platform"]["os"], std::env::consts::OS);
+    assert_eq!(data["platform"]["arch"], std::env::consts::ARCH);
+    assert_eq!(data["cache"]["layout"], "not_initialized");
+    assert_eq!(data["cache"]["total_bytes"], 0);
+    assert_eq!(data["cache"]["installed_docsets"], 0);
+    assert_eq!(data["cache"]["staging_count"], 0);
+    assert_eq!(data["model"]["present"], false);
+    assert_eq!(data["docsets"], serde_json::json!([]));
+    assert_eq!(data["mcp"]["protocol_version"], "2025-11-25");
+    assert_eq!(data["mcp"]["transport"], "stdio_ndjson");
+    assert_eq!(
+        data["mcp"]["tools"],
+        serde_json::json!(["nowdocs_list", "nowdocs_search"])
+    );
+    let automation = &data["automation"];
+    assert_eq!(automation["storage_present"], false);
+    for field in [
+        "plan_count",
+        "operation_count",
+        "rollback_count",
+        "expired_count",
+        "total_bytes",
+    ] {
+        assert_eq!(
+            automation[field], 0,
+            "automation.{field} must be 0 when storage is absent"
+        );
+    }
+
+    // Offline and path-free: no absolute path in the output, and the isolated
+    // HOME/XDG/cwd root is left completely empty.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let root_str = root.path().to_string_lossy().to_string();
+    assert!(
+        !stdout.contains(&root_str),
+        "status output must not contain the isolated root path"
+    );
+    let mut entries = std::fs::read_dir(root.path()).expect("read isolated root");
+    assert!(
+        entries.next().is_none(),
+        "status --json must create no files or directories under isolated roots"
+    );
+}
+
+#[test]
+fn test_status_human_output_is_concise_and_path_free() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["status"]);
+    assert!(
+        out.status.success(),
+        "status should exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "stderr must be empty on success, got: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for needle in [
+        "cache layout",
+        "not_initialized",
+        "model",
+        "docsets: 0",
+        "2025-11-25",
+        "nowdocs_list",
+        "nowdocs_search",
+        "automation",
+    ] {
+        assert!(
+            stdout.contains(needle),
+            "human status must mention {needle}, got: {stdout}"
+        );
+    }
+    let root_str = root.path().to_string_lossy().to_string();
+    assert!(
+        !stdout.contains(&root_str),
+        "human status must not contain absolute paths, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("/Users/"),
+        "human status must not contain user paths, got: {stdout}"
+    );
+    let lines = stdout.lines().count();
+    assert!(
+        lines <= 12,
+        "human status must be concise (<= 12 lines), got {lines}: {stdout}"
+    );
+}
+
+#[test]
+fn test_status_absent_roots_create_no_files() {
+    let root = tempfile::tempdir().unwrap();
+    for args in [&["status"][..], &["status", "--json"][..]] {
+        let out = run_nowdocs_isolated(root.path(), args);
+        assert!(
+            out.status.success(),
+            "status {args:?} should exit 0 offline, stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let mut entries = std::fs::read_dir(root.path()).expect("read isolated root");
+    assert!(
+        entries.next().is_none(),
+        "both status forms must leave empty isolated HOME/XDG/cwd roots empty"
+    );
+}
+
+#[test]
+fn test_status_updates_capabilities_implementation_state() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["capabilities", "--json"]);
+    assert!(
+        out.status.success(),
+        "capabilities --json should exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("capabilities emits one JSON document");
+    let commands = v["data"]["commands"]
+        .as_array()
+        .expect("commands must be an array");
+    let status = commands
+        .iter()
+        .find(|c| c["id"] == "status")
+        .expect("status command declaration must exist");
+    assert_eq!(
+        status["implemented"], true,
+        "C2 implements status: capabilities must say so"
+    );
+    assert_eq!(status["read_only"], true);
+    assert_eq!(status["network_access"], false);
 }

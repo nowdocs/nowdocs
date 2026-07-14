@@ -15,6 +15,13 @@ use serde_json::{json, Value};
 use crate::{cache, embedder, tools};
 
 pub const PROTOCOL_VERSION: &str = "2025-11-25";
+
+/// Single source of truth for the MCP tool names, in lexical order (P2).
+/// Capabilities and status derive their tool lists from this constant, and
+/// tests lock the `tools/list` emitted name set to it. The MCP surface stays
+/// read-only: do not add writable tools here.
+pub const MCP_TOOL_NAMES: [&str; 2] = ["nowdocs_list", "nowdocs_search"];
+
 const SERVER_NAME: &str = "nowdocs";
 
 /// JSON-RPC error codes.

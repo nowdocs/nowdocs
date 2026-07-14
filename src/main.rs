@@ -38,6 +38,19 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Commands::Status { json } => {
+            // Strictly read-only and offline; degraded observations are
+            // reported as status=warning in the envelope, never as a process
+            // error, so status always exits 0.
+            let data = nowdocs::inspect::collect_status();
+            if json {
+                let envelope = nowdocs::inspect::status_envelope(&data);
+                println!("{}", serde_json::to_string_pretty(&envelope)?);
+            } else {
+                print!("{}", nowdocs::inspect::format_status_human(&data));
+            }
+            Ok(())
+        }
         Commands::Install { docset } => {
             let (url, sha) = catalog_lookup_for(&docset)?;
             nowdocs::registry::install_with_sha256(&docset, &url, &sha)?;
