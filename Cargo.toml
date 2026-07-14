@@ -64,6 +64,20 @@ arrow-schema = "58.3"
 half = "2"
 futures = "0.3"
 lance-arrow = "8"
+# Cross-platform process-lifetime advisory file lock for the automation
+# operation lock and the hardened per-docset install lock (C3). fs2's
+# `try_lock_exclusive` maps to `flock(2)` on Unix and `LockFileEx` on Windows;
+# the lock is released automatically when the owning process exits (crash
+# included), which is the conservative live-owner guarantee C3 requires.
+fs2 = "0.4"
+# C3-R1: open-time no-follow primitive for plan/lock files. `libc::O_NOFOLLOW`
+# prevents the kernel from following a symlink in the final path component at
+# `open(2)` time, closing the TOCTOU hole left by `symlink_metadata`-then-open.
+# libc is already in the dependency tree (transitive via candle-core); adding
+# it as a direct dependency adds zero new downloads. Unix-only: on Windows the
+# no-follow path fails closed with a stable error (see `open_nofollow`).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.tar.gz"
