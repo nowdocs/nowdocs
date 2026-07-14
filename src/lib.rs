@@ -1,9 +1,12 @@
+pub mod agent_contract;
+pub mod automation;
 pub mod cache;
 pub mod chunker;
 pub mod cli;
 pub mod doctor;
 pub mod errors;
 pub mod input;
+pub mod inspect;
 pub mod manifest;
 pub mod mcp;
 pub mod sanitize;

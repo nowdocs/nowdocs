@@ -19,6 +19,25 @@ fn main() -> ExitCode {
 fn run(cmd: Commands) -> anyhow::Result<()> {
     match cmd {
         Commands::Serve => nowdocs::mcp::run_loop().map_err(anyhow::Error::from),
+        Commands::Capabilities { json } => {
+            let data = nowdocs::agent_contract::capabilities_data();
+            if json {
+                let envelope = nowdocs::agent_contract::AgentEnvelope::new(
+                    "capabilities",
+                    nowdocs::agent_contract::AgentStatus::Ok,
+                    nowdocs::agent_contract::ResultCode::Ready,
+                    "nowdocs agent automation capabilities",
+                    data,
+                );
+                println!("{}", serde_json::to_string_pretty(&envelope)?);
+            } else {
+                print!(
+                    "{}",
+                    nowdocs::agent_contract::format_capabilities_human(&data)
+                );
+            }
+            Ok(())
+        }
         Commands::Install { docset } => {
             let (url, sha) = catalog_lookup_for(&docset)?;
             nowdocs::registry::install_with_sha256(&docset, &url, &sha)?;
