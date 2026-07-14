@@ -363,7 +363,7 @@ pub struct RankingMetrics {
 /// - A target is "found" when at least one of the first `k` chunks matches it
 ///   ([`hit_matches_target`]).
 /// - recall = found targets / labeled targets.
-/// - precision = chunks within the top `k` matching any target / `k`.
+/// - precision = unique gain-bearing primary hits / returned primary hits.
 /// - MRR uses the rank of the first chunk matching any target.
 /// - nDCG uses gain `2^grade - 1` and discount `1 / log2(rank + 1)`, counting
 ///   one gain per labeled target (at its first matching rank) even when
@@ -398,11 +398,16 @@ pub fn compute_ranking_metrics(
     let first_relevant = top.iter().position(|h| relevant_chunk(&h)).map(|p| p + 1);
     let mrr = first_relevant.map_or(0.0, |r| 1.0 / r as f32);
 
-    let relevant_chunks = top.iter().filter(|h| relevant_chunk(h)).count();
-    let precision = if k == 0 {
+    // A primary hit contributes to precision only when it is the first hit for
+    // at least one target. Later chunks matching an already-found target get
+    // zero gain, just as they do for nDCG; count every qualifying hit once even
+    // if it is the first match for more than one target.
+    let gain_bearing_ranks: std::collections::HashSet<usize> =
+        target_ranks.iter().filter_map(|rank| *rank).collect();
+    let precision = if top.is_empty() {
         0.0
     } else {
-        relevant_chunks as f32 / k as f32
+        gain_bearing_ranks.len() as f32 / top.len() as f32
     };
 
     let gain = |grade: u8| 2f32.powi(grade as i32) - 1.0;

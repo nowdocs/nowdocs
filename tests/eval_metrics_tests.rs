@@ -60,9 +60,9 @@ fn recall_counts_found_targets_over_labeled_targets() {
 }
 
 #[test]
-fn precision_counts_relevant_chunks_over_k() {
-    // Two of the five returned chunks match a labeled target (both match the
-    // same one): precision@5 = 2/5 even though recall = 1/1.
+fn precision_counts_only_first_gain_bearing_hit_per_target() {
+    // Ranks 1 and 3 match the same target. Only rank 1 receives that target's
+    // gain, so precision@5 = 1/5 rather than 2/5.
     let hits = vec![
         hit("a.md"),
         hit("x.md"),
@@ -73,11 +73,19 @@ fn precision_counts_relevant_chunks_over_k() {
     let targets = vec![target("a.md", 1)];
     let m = compute_ranking_metrics(&hits, &targets, 5);
     assert!(
-        (m.precision - 0.4).abs() < 1e-6,
-        "precision 2/5, got {}",
+        (m.precision - 0.2).abs() < 1e-6,
+        "precision 1/5, got {}",
         m.precision
     );
     assert!((m.recall - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn precision_uses_returned_hit_count_not_requested_k() {
+    let hits = vec![hit("a.md"), hit("x.md")];
+    let targets = vec![target("a.md", 1)];
+    let m = compute_ranking_metrics(&hits, &targets, 5);
+    assert!((m.precision - 0.5).abs() < 1e-6, "got {}", m.precision);
 }
 
 #[test]
