@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result};
 
-use crate::retrieve;
+use crate::retrieve::{self, ResultChunk};
 
 /// A single golden query: the natural-language question and the `source_url`
 /// of the chunk we expect to recall.
@@ -195,4 +195,296 @@ pub fn evaluate_negatives(docset: &str, queries: &[String]) -> Result<NegativeRe
         n: queries.len(),
         top_scores,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Versioned labeled-query evaluation foundation (C01)
+// ---------------------------------------------------------------------------
+
+/// Which portion of the labeled suite a query belongs to. An
+/// `(docset, intent_family)` pair may live in only one split, so tuned
+/// development-set thresholds never leak into the held-out test set.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EvalSplit {
+    Development,
+    Test,
+}
+
+/// Surface form of a labeled query; used to stratify metrics by phrasing.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryForm {
+    Short,
+    NaturalLanguage,
+    Verbose,
+    KeywordHeavy,
+}
+
+/// Positive queries must be answered with a labeled target; negative queries
+/// (near-domain or cross-domain) must be refused.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryClass {
+    Positive,
+    NearDomainNegative,
+    CrossDomainNegative,
+}
+
+/// A graded relevance label for one query: the chunk at `source_url`
+/// (optionally scoped to a heading subtree) is relevant with `grade` in
+/// `1..=2`. Grades feed the nDCG gain `2^grade - 1`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RelevanceTarget {
+    pub source_url: String,
+    #[serde(default)]
+    pub heading_path_prefix: Option<String>,
+    pub grade: u8,
+}
+
+/// One versioned labeled query. `targets` defaults to empty so negative
+/// queries may omit the field; positive queries must carry at least one
+/// target (enforced by [`validate_suite`]).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct EvalQuery {
+    pub id: String,
+    pub docset: String,
+    pub query: String,
+    pub split: EvalSplit,
+    pub intent_family: String,
+    pub query_form: QueryForm,
+    pub query_class: QueryClass,
+    #[serde(default)]
+    pub targets: Vec<RelevanceTarget>,
+}
+
+/// Whether a retrieved chunk satisfies a labeled relevance target.
+///
+/// `source_url` must match exactly. When the target carries a heading prefix,
+/// both sides are normalized with [`crate::chunker::normalize_heading_path`]
+/// and the chunk's heading must equal the prefix or be a descendant of it
+/// separated by `" > "`: `Exports > Matcher` matches
+/// `Exports > Matcher > Negative matching` but never `Exports > MatcherX`.
+pub fn hit_matches_target(hit: &ResultChunk, target: &RelevanceTarget) -> bool {
+    if hit.source_url != target.source_url {
+        return false;
+    }
+    let Some(prefix) = target.heading_path_prefix.as_deref() else {
+        return true;
+    };
+    let prefix = crate::chunker::normalize_heading_path(prefix);
+    let heading = crate::chunker::normalize_heading_path(&hit.heading_path);
+    heading == prefix
+        || heading
+            .strip_prefix(prefix.as_str())
+            .is_some_and(|rest| rest.starts_with(" > "))
+}
+
+/// Validate a labeled query suite before it is used for evaluation.
+///
+/// Rejects: duplicate query IDs; an `(docset, intent_family)` pair appearing
+/// in both splits (development labels would leak into the held-out test set);
+/// target grades outside `1..=2`; empty id/docset/query/intent_family strings;
+/// a positive query without targets; and either negative class carrying
+/// targets. Multiple targets on a positive query are accepted.
+pub fn validate_suite(suite: &[EvalQuery]) -> Result<()> {
+    let mut ids = std::collections::HashSet::new();
+    let mut family_split: std::collections::HashMap<(&str, &str), &EvalSplit> =
+        std::collections::HashMap::new();
+    for q in suite {
+        anyhow::ensure!(!q.id.is_empty(), "eval query has an empty id");
+        anyhow::ensure!(
+            !q.docset.is_empty(),
+            "eval query {:?} has an empty docset",
+            q.id
+        );
+        anyhow::ensure!(
+            !q.query.is_empty(),
+            "eval query {:?} has an empty query string",
+            q.id
+        );
+        anyhow::ensure!(
+            !q.intent_family.is_empty(),
+            "eval query {:?} has an empty intent_family",
+            q.id
+        );
+        anyhow::ensure!(ids.insert(&q.id), "duplicate eval query id {:?}", q.id);
+
+        let key = (q.docset.as_str(), q.intent_family.as_str());
+        if let Some(split) = family_split.get(&key) {
+            anyhow::ensure!(
+                *split == &q.split,
+                "(docset, intent_family) {:?} appears in both splits",
+                key
+            );
+        } else {
+            family_split.insert(key, &q.split);
+        }
+
+        match q.query_class {
+            QueryClass::Positive => anyhow::ensure!(
+                !q.targets.is_empty(),
+                "positive eval query {:?} must have at least one target",
+                q.id
+            ),
+            QueryClass::NearDomainNegative | QueryClass::CrossDomainNegative => {
+                anyhow::ensure!(
+                    q.targets.is_empty(),
+                    "negative eval query {:?} must not have targets",
+                    q.id
+                )
+            }
+        }
+        for t in &q.targets {
+            anyhow::ensure!(
+                (1..=2).contains(&t.grade),
+                "eval query {:?} has target grade {} outside 1..=2",
+                q.id,
+                t.grade
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Graded ranking metrics for one query over its labeled targets.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RankingMetrics {
+    pub k: usize,
+    pub relevant_targets_found: usize,
+    pub recall: f32,
+    pub mrr: f32,
+    pub ndcg: f32,
+    pub precision: f32,
+}
+
+/// Compute graded ranking metrics for the top-`k` chunks of one query.
+///
+/// - A target is "found" when at least one of the first `k` chunks matches it
+///   ([`hit_matches_target`]).
+/// - recall = found targets / labeled targets.
+/// - precision = unique gain-bearing primary hits / returned primary hits.
+/// - MRR uses the rank of the first chunk matching any target.
+/// - nDCG uses gain `2^grade - 1` and discount `1 / log2(rank + 1)`, counting
+///   one gain per labeled target (at its first matching rank) even when
+///   several chunks match it; IDCG is the same gains in ideal order.
+///
+/// Empty denominators yield zero-valued fields.
+pub fn compute_ranking_metrics(
+    hits: &[ResultChunk],
+    targets: &[RelevanceTarget],
+    k: usize,
+) -> RankingMetrics {
+    let top = &hits[..hits.len().min(k)];
+
+    // First 1-indexed rank matching each target, if any.
+    let target_ranks: Vec<Option<usize>> = targets
+        .iter()
+        .map(|t| {
+            top.iter()
+                .position(|h| hit_matches_target(h, t))
+                .map(|p| p + 1)
+        })
+        .collect();
+
+    let found = target_ranks.iter().filter(|r| r.is_some()).count();
+    let recall = if targets.is_empty() {
+        0.0
+    } else {
+        found as f32 / targets.len() as f32
+    };
+
+    let relevant_chunk = |h: &&ResultChunk| targets.iter().any(|t| hit_matches_target(h, t));
+    let first_relevant = top.iter().position(|h| relevant_chunk(&h)).map(|p| p + 1);
+    let mrr = first_relevant.map_or(0.0, |r| 1.0 / r as f32);
+
+    // A primary hit contributes to precision only when it is the first hit for
+    // at least one target. Later chunks matching an already-found target get
+    // zero gain, just as they do for nDCG; count every qualifying hit once even
+    // if it is the first match for more than one target.
+    let gain_bearing_ranks: std::collections::HashSet<usize> =
+        target_ranks.iter().filter_map(|rank| *rank).collect();
+    let precision = if top.is_empty() {
+        0.0
+    } else {
+        gain_bearing_ranks.len() as f32 / top.len() as f32
+    };
+
+    let gain = |grade: u8| 2f32.powi(grade as i32) - 1.0;
+    let dcg: f32 = targets
+        .iter()
+        .zip(&target_ranks)
+        .filter_map(|(t, r)| r.map(|rank| gain(t.grade) / (rank as f32 + 1.0).log2()))
+        .sum();
+    let mut ideal_gains: Vec<f32> = targets.iter().map(|t| gain(t.grade)).collect();
+    ideal_gains.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    ideal_gains.truncate(k);
+    let idcg: f32 = ideal_gains
+        .iter()
+        .enumerate()
+        .map(|(i, g)| g / (i as f32 + 2.0).log2())
+        .sum();
+    let ndcg = if idcg == 0.0 { 0.0 } else { dcg / idcg };
+
+    RankingMetrics {
+        k,
+        relevant_targets_found: found,
+        recall,
+        mrr,
+        ndcg,
+        precision,
+    }
+}
+
+/// An observed rate `count / total` with a Wilson score confidence interval.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RateEstimate {
+    pub count: usize,
+    pub total: usize,
+    pub rate: f32,
+    pub lower: f32,
+    pub upper: f32,
+}
+
+/// Wilson 95% score interval for an observed rate `count / total`.
+///
+/// `z` is pinned so CI and local runs produce identical intervals. Zero
+/// `total` yields zero-valued fields; degenerate counts clamp the bound that
+/// collapses (`count == 0` → lower 0, `count == total` → upper 1). The math
+/// runs in `f64` and narrows to `f32` on output.
+pub fn rate_estimate(count: usize, total: usize) -> RateEstimate {
+    if total == 0 {
+        return RateEstimate {
+            count,
+            total,
+            rate: 0.0,
+            lower: 0.0,
+            upper: 0.0,
+        };
+    }
+    let count = count.min(total);
+    let n = total as f64;
+    let p = count as f64 / n;
+    let z: f64 = 1.959963984540054;
+    let z2 = z * z;
+    let denom = 1.0 + z2 / n;
+    let center = (p + z2 / (2.0 * n)) / denom;
+    let half = z * (p * (1.0 - p) / n + z2 / (4.0 * n * n)).sqrt() / denom;
+    let lower = if count == 0 {
+        0.0
+    } else {
+        (center - half).max(0.0)
+    };
+    let upper = if count == total {
+        1.0
+    } else {
+        (center + half).min(1.0)
+    };
+    RateEstimate {
+        count,
+        total,
+        rate: p as f32,
+        lower: lower as f32,
+        upper: upper as f32,
+    }
 }
