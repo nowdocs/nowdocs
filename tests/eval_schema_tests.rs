@@ -363,3 +363,34 @@ fn real_suites_meet_minimum_family_counts() {
         // above.
     }
 }
+
+#[test]
+fn real_suite_targets_use_installed_corpus_source_urls() {
+    let fixtures_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/eval");
+    let suites = [
+        (
+            "nextjs.json",
+            "https://github.com/vercel/next.js/tree/canary/docs",
+        ),
+        (
+            "react.json",
+            "https://github.com/reactjs/react.dev/tree/main/src/content",
+        ),
+        ("vue.json", "https://github.com/vuejs/docs/tree/main/src"),
+    ];
+
+    for (suite_file, source_url_base) in suites {
+        let path = format!("{fixtures_dir}/{suite_file}");
+        let queries = load_eval_file(&path).expect("load_eval_file must succeed");
+        let required_prefix = format!("{source_url_base}/");
+
+        for target in queries.iter().flat_map(|query| &query.targets) {
+            assert!(
+                target.source_url.starts_with(&required_prefix),
+                "{suite_file}: target URL {:?} must start with {:?}",
+                target.source_url,
+                required_prefix
+            );
+        }
+    }
+}
