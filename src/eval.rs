@@ -803,6 +803,23 @@ pub struct EvalRunOutcome {
     pub latency: Option<LatencySummary>,
 }
 
+/// Load a single JSON file as an array of [`EvalQuery`] records and validate
+/// it with [`validate_suite`]. Returns contextual errors that name the path.
+pub fn load_eval_file(path: impl AsRef<Path>) -> Result<Vec<EvalQuery>> {
+    let path = path.as_ref();
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read eval file {}", path.display()))?;
+    let records: Vec<EvalQuery> = serde_json::from_str(&raw).with_context(|| {
+        format!(
+            "{} is not a JSON array of EvalQuery records",
+            path.display()
+        )
+    })?;
+    validate_suite(&records)
+        .with_context(|| format!("eval suite validation failed for {}", path.display()))?;
+    Ok(records)
+}
+
 /// Load every `*.json` file in `dir` as an array of [`EvalQuery`] records,
 /// concatenate them in sorted file order, and validate the combined suite.
 /// Callers must run this before opening any embedder or store.
@@ -827,14 +844,7 @@ pub fn load_fixture_suite(dir: &Path) -> Result<Vec<EvalQuery>> {
 
     let mut suite = Vec::new();
     for file in files {
-        let raw = std::fs::read_to_string(&file)
-            .with_context(|| format!("failed to read fixture file {}", file.display()))?;
-        let mut records: Vec<EvalQuery> = serde_json::from_str(&raw).with_context(|| {
-            format!(
-                "{} is not a JSON array of EvalQuery records",
-                file.display()
-            )
-        })?;
+        let mut records = load_eval_file(&file)?;
         suite.append(&mut records);
     }
     validate_suite(&suite).context("eval fixture suite validation failed")?;
