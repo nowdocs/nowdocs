@@ -1,0 +1,945 @@
+[
+  {
+    "id": "react.state-update-queue.test",
+    "docset": "react",
+    "query": "queue multiple React state updates",
+    "split": "test",
+    "intent_family": "state-update-queue",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/adding-interactivity.md",
+        "heading_path_prefix": "Queueing a series of state updates",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.state-snapshot.test",
+    "docset": "react",
+    "query": "why is React state a snapshot",
+    "split": "test",
+    "intent_family": "state-snapshot",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/adding-interactivity.md",
+        "heading_path_prefix": "State as a snapshot",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.state-arrays.test",
+    "docset": "react",
+    "query": "update an array in React state",
+    "split": "test",
+    "intent_family": "state-arrays",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/adding-interactivity.md",
+        "heading_path_prefix": "Updating arrays in state",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.conditional-jsx.test",
+    "docset": "react",
+    "query": "conditionally render JSX in React",
+    "split": "test",
+    "intent_family": "conditional-jsx",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/conditional-rendering.md",
+        "heading_path_prefix": "Conditionally including JSX",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.reducer-state-logic.test",
+    "docset": "react",
+    "query": "move component state logic into a reducer",
+    "split": "test",
+    "intent_family": "reducer-state-logic",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/extracting-state-logic-into-a-reducer.md",
+        "heading_path_prefix": "Consolidate state logic with a reducer",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.state-vs-reducer.test",
+    "docset": "react",
+    "query": "when should React use useReducer instead of useState",
+    "split": "test",
+    "intent_family": "state-vs-reducer",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/extracting-state-logic-into-a-reducer.md",
+        "heading_path_prefix": "Comparing `useState` and `useReducer`",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.effect-dependencies.test",
+    "docset": "react",
+    "query": "understand React Effect dependencies",
+    "split": "test",
+    "intent_family": "effect-dependencies",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/lifecycle-of-reactive-effects.md",
+        "heading_path_prefix": "Effects \"react\" to reactive values",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.effect-lifecycle.test",
+    "docset": "react",
+    "query": "explain the lifecycle of a React Effect",
+    "split": "test",
+    "intent_family": "effect-lifecycle",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/lifecycle-of-reactive-effects.md",
+        "heading_path_prefix": "The lifecycle of an Effect",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.dom-refs.test",
+    "docset": "react",
+    "query": "get a DOM node with a React ref",
+    "split": "test",
+    "intent_family": "dom-refs",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/manipulating-the-dom-with-refs.md",
+        "heading_path_prefix": "Getting a ref to the node",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.context-prop-drilling.test",
+    "docset": "react",
+    "query": "replace React prop drilling with context",
+    "split": "test",
+    "intent_family": "context-prop-drilling",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/passing-data-deeply-with-context.md",
+        "heading_path_prefix": "Use cases for context",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.state-reset-key.test",
+    "docset": "react",
+    "query": "reset React component state with a key",
+    "split": "test",
+    "intent_family": "state-reset-key",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/preserving-and-resetting-state.md",
+        "heading_path_prefix": "Resetting state at the same position > Option 2: Resetting state with a key",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.list-keys.test",
+    "docset": "react",
+    "query": "why does React need keys for list items",
+    "split": "test",
+    "intent_family": "list-keys",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/rendering-lists.md",
+        "heading_path_prefix": "Keeping list items in order with `key` > Why does React need keys?",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.custom-hooks.test",
+    "docset": "react",
+    "query": "share stateful logic with a React custom Hook",
+    "split": "test",
+    "intent_family": "custom-hooks",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/reusing-logic-with-custom-hooks.md",
+        "heading_path_prefix": "Custom Hooks: Sharing logic between components > Custom Hooks let you share stateful logic, not state itself",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.event-vs-effect.test",
+    "docset": "react",
+    "query": "choose between React event handlers and Effects",
+    "split": "test",
+    "intent_family": "event-vs-effect",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/separating-events-from-effects.md",
+        "heading_path_prefix": "Choosing between event handlers and Effects",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.reducer-context.test",
+    "docset": "react",
+    "query": "combine a reducer with React context",
+    "split": "test",
+    "intent_family": "reducer-context",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/scaling-up-with-reducer-and-context.md",
+        "heading_path_prefix": "Combining a reducer with context",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.effect-events.test",
+    "docset": "react",
+    "query": "declare an Effect Event in React",
+    "split": "test",
+    "intent_family": "effect-events",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/separating-events-from-effects.md",
+        "heading_path_prefix": "Extracting non-reactive logic out of Effects > Declaring an Effect Event",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.shared-state.test",
+    "docset": "react",
+    "query": "lift React state up between components",
+    "split": "test",
+    "intent_family": "shared-state",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/sharing-state-between-components.md",
+        "heading_path_prefix": "Lifting state up by example",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.render-commit.test",
+    "docset": "react",
+    "query": "what triggers a React render",
+    "split": "test",
+    "intent_family": "render-commit",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/render-and-commit.md",
+        "heading_path_prefix": "Step 1: Trigger a render > Re-renders when state updates",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.component-purity.test",
+    "docset": "react",
+    "query": "where can a React component cause side effects",
+    "split": "test",
+    "intent_family": "component-purity",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/keeping-components-pure.md",
+        "heading_path_prefix": "Where you _can_ cause side effects",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "react.state-variable.test",
+    "docset": "react",
+    "query": "add a state variable to a React component",
+    "split": "test",
+    "intent_family": "state-variable",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "learn/state-a-components-memory.md",
+        "heading_path_prefix": "Adding a state variable",
+        "grade": 2
+      }
+    ]
+  }
+,
+{
+  "id": "react.vue-watch.test",
+  "docset": "react",
+  "query": "Vue watchEffect cleanup",
+  "split": "test",
+  "intent_family": "vue-watch",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.angular-signals.test",
+  "docset": "react",
+  "query": "Angular signal computed effect",
+  "split": "test",
+  "intent_family": "angular-signals",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.svelte-actions.test",
+  "docset": "react",
+  "query": "Svelte action lifecycle",
+  "split": "test",
+  "intent_family": "svelte-actions",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.solid-resources.test",
+  "docset": "react",
+  "query": "SolidJS createResource data fetching",
+  "split": "test",
+  "intent_family": "solid-resources",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.ember-route.test",
+  "docset": "react",
+  "query": "Ember route model hook",
+  "split": "test",
+  "intent_family": "ember-route",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.backbone-view.test",
+  "docset": "react",
+  "query": "Backbone view event delegation",
+  "split": "test",
+  "intent_family": "backbone-view",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.lit-slots.test",
+  "docset": "react",
+  "query": "Lit web component slots",
+  "split": "test",
+  "intent_family": "lit-slots",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.alpine-store.test",
+  "docset": "react",
+  "query": "Alpine.js global store",
+  "split": "test",
+  "intent_family": "alpine-store",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.postgres-vacuum.test",
+  "docset": "react",
+  "query": "PostgreSQL VACUUM autovacuum tuning",
+  "split": "test",
+  "intent_family": "postgres-vacuum",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.kubernetes-ingress.test",
+  "docset": "react",
+  "query": "Kubernetes Ingress path routing",
+  "split": "test",
+  "intent_family": "kubernetes-ingress",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.terraform-provider.test",
+  "docset": "react",
+  "query": "Terraform provider alias configuration",
+  "split": "test",
+  "intent_family": "terraform-provider",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.python-dataclass.test",
+  "docset": "react",
+  "query": "Python dataclass frozen defaults",
+  "split": "test",
+  "intent_family": "python-dataclass",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.aws-s3.test",
+  "docset": "react",
+  "query": "AWS S3 lifecycle policy",
+  "split": "test",
+  "intent_family": "aws-s3",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.docker-network.test",
+  "docset": "react",
+  "query": "Docker bridge network configuration",
+  "split": "test",
+  "intent_family": "docker-network",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.excel-chart.test",
+  "docset": "react",
+  "query": "Excel chart secondary axis",
+  "split": "test",
+  "intent_family": "excel-chart",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+}
+,
+{
+  "id": "react.state-structure-principles.development",
+  "docset": "react",
+  "query": "principles for structuring React state",
+  "split": "development",
+  "intent_family": "state-structure-principles",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/choosing-the-state-structure.md",
+      "heading_path_prefix": "Principles for structuring state",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.avoid-redundant-state.development",
+  "docset": "react",
+  "query": "avoid redundant state in React",
+  "split": "development",
+  "intent_family": "avoid-redundant-state",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/choosing-the-state-structure.md",
+      "heading_path_prefix": "Avoid redundant state",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.avoid-duplicate-state.development",
+  "docset": "react",
+  "query": "avoid duplicate state in React",
+  "split": "development",
+  "intent_family": "avoid-duplicate-state",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/choosing-the-state-structure.md",
+      "heading_path_prefix": "Avoid duplication in state",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.avoid-nested-state.development",
+  "docset": "react",
+  "query": "avoid deeply nested state in React",
+  "split": "development",
+  "intent_family": "avoid-nested-state",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/choosing-the-state-structure.md",
+      "heading_path_prefix": "Avoid deeply nested state",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.conditional-null.development",
+  "docset": "react",
+  "query": "return null conditionally from a React component",
+  "split": "development",
+  "intent_family": "conditional-null",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/conditional-rendering.md",
+      "heading_path_prefix": "Conditionally returning JSX > Conditionally returning nothing with `null`",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.refs-versus-state.development",
+  "docset": "react",
+  "query": "difference between React refs and state",
+  "split": "development",
+  "intent_family": "refs-versus-state",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/referencing-values-with-refs.md",
+      "heading_path_prefix": "Differences between refs and state",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.refs-stopwatch.development",
+  "docset": "react",
+  "query": "build a stopwatch with a React ref",
+  "split": "development",
+  "intent_family": "refs-stopwatch",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/referencing-values-with-refs.md",
+      "heading_path_prefix": "Example: building a stopwatch",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.declarative-ui.development",
+  "docset": "react",
+  "query": "think about React UI declaratively",
+  "split": "development",
+  "intent_family": "declarative-ui",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/reacting-to-input-with-state.md",
+      "heading_path_prefix": "Thinking about UI declaratively",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.input-usestate.development",
+  "docset": "react",
+  "query": "represent UI state with useState",
+  "split": "development",
+  "intent_family": "input-usestate",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/reacting-to-input-with-state.md",
+      "heading_path_prefix": "Thinking about UI declaratively > Step 3: Represent the state in memory with `useState`",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.list-filtering.development",
+  "docset": "react",
+  "query": "filter an array of items in React",
+  "split": "development",
+  "intent_family": "list-filtering",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/rendering-lists.md",
+      "heading_path_prefix": "Filtering arrays of items",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.state-render-position.development",
+  "docset": "react",
+  "query": "why is React state tied to a render tree position",
+  "split": "development",
+  "intent_family": "state-render-position",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/preserving-and-resetting-state.md",
+      "heading_path_prefix": "State is tied to a position in the render tree",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.context-intermediate-components.development",
+  "docset": "react",
+  "query": "does React context pass through intermediate components",
+  "split": "development",
+  "intent_family": "context-intermediate-components",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/passing-data-deeply-with-context.md",
+      "heading_path_prefix": "Context passes through intermediate components",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.reducer-immer.development",
+  "docset": "react",
+  "query": "write concise React reducers with Immer",
+  "split": "development",
+  "intent_family": "reducer-immer",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/extracting-state-logic-into-a-reducer.md",
+      "heading_path_prefix": "Writing concise reducers with Immer",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.effect-empty-dependencies.development",
+  "docset": "react",
+  "query": "what does an Effect with empty dependencies mean",
+  "split": "development",
+  "intent_family": "effect-empty-dependencies",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/lifecycle-of-reactive-effects.md",
+      "heading_path_prefix": "Effects \"react\" to reactive values > What an Effect with empty dependencies means",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.effect-separate-sync.development",
+  "docset": "react",
+  "query": "separate React synchronization processes into Effects",
+  "split": "development",
+  "intent_family": "effect-separate-sync",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/lifecycle-of-reactive-effects.md",
+      "heading_path_prefix": "The lifecycle of an Effect > Each Effect represents a separate synchronization process",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.render-state-update.development",
+  "docset": "react",
+  "query": "does setting state trigger a React render",
+  "split": "development",
+  "intent_family": "render-state-update",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/state-as-a-snapshot.md",
+      "heading_path_prefix": "Setting state triggers renders",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.component-side-effects.development",
+  "docset": "react",
+  "query": "what are unintended side effects in React components",
+  "split": "development",
+  "intent_family": "component-side-effects",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/keeping-components-pure.md",
+      "heading_path_prefix": "Side Effects: (un)intended consequences",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.custom-hook-naming.development",
+  "docset": "react",
+  "query": "why do React Hook names start with use",
+  "split": "development",
+  "intent_family": "custom-hook-naming",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/reusing-logic-with-custom-hooks.md",
+      "heading_path_prefix": "Custom Hooks: Sharing logic between components > Hook names always start with `use`",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.event-handler-side-effects.development",
+  "docset": "react",
+  "query": "can React event handlers have side effects",
+  "split": "development",
+  "intent_family": "event-handler-side-effects",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/responding-to-events.md",
+      "heading_path_prefix": "Can event handlers have side effects?",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "react.state-isolated.development",
+  "docset": "react",
+  "query": "is React state isolated between components",
+  "split": "development",
+  "intent_family": "state-isolated",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "learn/state-a-components-memory.md",
+      "heading_path_prefix": "State is isolated and private",
+      "grade": 2
+    }
+  ]
+}
+,
+{
+  "id": "react.next-route-handlers.development",
+  "docset": "react",
+  "query": "Next.js route handler caching",
+  "split": "development",
+  "intent_family": "next-route-handlers",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.nuxt-composables.development",
+  "docset": "react",
+  "query": "Nuxt useFetch composable",
+  "split": "development",
+  "intent_family": "nuxt-composables",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.remix-nested-routes.development",
+  "docset": "react",
+  "query": "Remix nested route outlet",
+  "split": "development",
+  "intent_family": "remix-nested-routes",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.svelte-runes.development",
+  "docset": "react",
+  "query": "Svelte 5 runes syntax",
+  "split": "development",
+  "intent_family": "svelte-runes",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.angular-di.development",
+  "docset": "react",
+  "query": "Angular dependency injection provider",
+  "split": "development",
+  "intent_family": "angular-di",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.solid-context.development",
+  "docset": "react",
+  "query": "SolidJS createContext provider",
+  "split": "development",
+  "intent_family": "solid-context",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.astro-islands.development",
+  "docset": "react",
+  "query": "Astro island hydration directives",
+  "split": "development",
+  "intent_family": "astro-islands",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.react-native-navigation.development",
+  "docset": "react",
+  "query": "React Native navigation stack",
+  "split": "development",
+  "intent_family": "react-native-navigation",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.mysql-transactions.development",
+  "docset": "react",
+  "query": "MySQL transaction isolation level",
+  "split": "development",
+  "intent_family": "mysql-transactions",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.helm-chart.development",
+  "docset": "react",
+  "query": "Helm chart values template",
+  "split": "development",
+  "intent_family": "helm-chart",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.rust-ownership.development",
+  "docset": "react",
+  "query": "Rust ownership borrowing lifetimes",
+  "split": "development",
+  "intent_family": "rust-ownership",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.java-stream.development",
+  "docset": "react",
+  "query": "Java Stream collector grouping",
+  "split": "development",
+  "intent_family": "java-stream",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.nginx-proxy.development",
+  "docset": "react",
+  "query": "Nginx reverse proxy upstream",
+  "split": "development",
+  "intent_family": "nginx-proxy",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.grafana-dashboard.development",
+  "docset": "react",
+  "query": "Grafana dashboard variable query",
+  "split": "development",
+  "intent_family": "grafana-dashboard",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "react.git-submodule.development",
+  "docset": "react",
+  "query": "Git submodule update recursive",
+  "split": "development",
+  "intent_family": "git-submodule",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+}
+]

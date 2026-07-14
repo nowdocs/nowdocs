@@ -1,0 +1,944 @@
+[
+  {
+    "id": "nextjs.middleware-matcher.short",
+    "docset": "nextjs",
+    "query": "middleware matcher",
+    "split": "test",
+    "intent_family": "middleware-matcher",
+    "query_form": "short",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+        "heading_path_prefix": "Exports > Matcher",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.route-handler-methods.natural-language",
+    "docset": "nextjs",
+    "query": "which HTTP methods can a Next.js route handler use",
+    "split": "test",
+    "intent_family": "route-handler-methods",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/01-getting-started/15-route-handlers.md",
+        "heading_path_prefix": "Route Handlers > Supported HTTP Methods",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.route-handler-caching.natural-language",
+    "docset": "nextjs",
+    "query": "how is a route handler cached",
+    "split": "test",
+    "intent_family": "route-handler-caching",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/01-getting-started/15-route-handlers.md",
+        "heading_path_prefix": "Route Handlers > Caching",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.generated-metadata.natural-language",
+    "docset": "nextjs",
+    "query": "how to generate dynamic metadata in Next.js",
+    "split": "test",
+    "intent_family": "generated-metadata",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/01-getting-started/14-metadata-and-og-images.md",
+        "heading_path_prefix": "Generated metadata",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.self-host-env.natural-language",
+    "docset": "nextjs",
+    "query": "environment variables when self-hosting Next.js",
+    "split": "test",
+    "intent_family": "self-host-env",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/02-guides/self-hosting.md",
+        "heading_path_prefix": "Environment Variables",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.mutation-redirect.keyword-heavy",
+    "docset": "nextjs",
+    "query": "redirect after a server mutation",
+    "split": "test",
+    "intent_family": "mutation-redirect",
+    "query_form": "keyword_heavy",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/01-getting-started/07-mutating-data.md",
+        "heading_path_prefix": "Examples > Redirect after a mutation",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.data-cache.natural-language",
+    "docset": "nextjs",
+    "query": "cache data in a Next.js app",
+    "split": "test",
+    "intent_family": "data-cache",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/01-getting-started/08-caching.md",
+        "heading_path_prefix": "Usage > Data-level caching",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.ui-cache.natural-language",
+    "docset": "nextjs",
+    "query": "cache UI in Next.js",
+    "split": "test",
+    "intent_family": "ui-cache",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/01-getting-started/08-caching.md",
+        "heading_path_prefix": "Usage > UI-level caching",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.metadata-streaming.natural-language",
+    "docset": "nextjs",
+    "query": "how does streaming metadata work in Next.js",
+    "split": "test",
+    "intent_family": "metadata-streaming",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/01-getting-started/14-metadata-and-og-images.md",
+        "heading_path_prefix": "Generated metadata > Streaming metadata",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.proxy-negative-matcher.natural-language",
+    "docset": "nextjs",
+    "query": "exclude paths with a proxy matcher",
+    "split": "test",
+    "intent_family": "proxy-negative-matcher",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+        "heading_path_prefix": "Examples > Negative matching",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.proxy-function.natural-language",
+    "docset": "nextjs",
+    "query": "how to define a Next.js proxy function",
+    "split": "test",
+    "intent_family": "proxy-function",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+        "heading_path_prefix": "Exports > Proxy function",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.proxy-headers.natural-language",
+    "docset": "nextjs",
+    "query": "set response headers in a Next.js proxy",
+    "split": "test",
+    "intent_family": "proxy-headers",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+        "heading_path_prefix": "Examples > Setting Headers",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.external-rewrite.natural-language",
+    "docset": "nextjs",
+    "query": "rewrite a Next.js path to an external URL",
+    "split": "test",
+    "intent_family": "external-rewrite",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/03-api-reference/05-config/01-next-config-js/rewrites.md",
+        "heading_path_prefix": "Rewriting to an external URL",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.static-params-multiple-segments.natural-language",
+    "docset": "nextjs",
+    "query": "generate static params for multiple dynamic segments",
+    "split": "test",
+    "intent_family": "static-params-multiple-segments",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/03-api-reference/04-functions/generate-static-params.md",
+        "heading_path_prefix": "Multiple Dynamic Segments",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.self-host-image-optimization.natural-language",
+    "docset": "nextjs",
+    "query": "image optimization when self-hosting Next.js",
+    "split": "test",
+    "intent_family": "self-host-image-optimization",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/02-guides/self-hosting.md",
+        "heading_path_prefix": "Image Optimization",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.route-context-helper.natural-language",
+    "docset": "nextjs",
+    "query": "get dynamic route params in a route handler",
+    "split": "test",
+    "intent_family": "route-context-helper",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/01-getting-started/15-route-handlers.md",
+        "heading_path_prefix": "Route Handlers > Route Context Helper",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.metadata-request-memoization.natural-language",
+    "docset": "nextjs",
+    "query": "memoize data requests in generated metadata",
+    "split": "test",
+    "intent_family": "metadata-request-memoization",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/01-getting-started/14-metadata-and-og-images.md",
+        "heading_path_prefix": "Generated metadata > Memoizing data requests",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.server-actions-security.natural-language",
+    "docset": "nextjs",
+    "query": "security features for Next.js Server Actions",
+    "split": "test",
+    "intent_family": "server-actions-security",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/02-guides/data-security.md",
+        "heading_path_prefix": "Mutating Data > Built-in Server Actions Security features",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.form-server-actions.natural-language",
+    "docset": "nextjs",
+    "query": "submit a form with Next.js Server Actions",
+    "split": "test",
+    "intent_family": "form-server-actions",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/03-api-reference/02-components/form.md",
+        "heading_path_prefix": "Examples > Mutations with Server Actions",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.rewrite-path-matching.natural-language",
+    "docset": "nextjs",
+    "query": "match paths in Next.js rewrites",
+    "split": "test",
+    "intent_family": "rewrite-path-matching",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/03-api-reference/05-config/01-next-config-js/rewrites.md",
+        "heading_path_prefix": "Path Matching",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs.react-hooks.near-domain-negative",
+    "docset": "nextjs",
+    "query": "React useEffect dependency array",
+    "split": "test",
+    "intent_family": "react-hooks",
+    "query_form": "keyword_heavy",
+    "query_class": "near_domain_negative",
+    "targets": []
+  },
+  {
+    "id": "nextjs.vue-composition.near-domain-negative",
+    "docset": "nextjs",
+    "query": "Vue composition API ref reactive watch",
+    "split": "test",
+    "intent_family": "vue-composition",
+    "query_form": "keyword_heavy",
+    "query_class": "near_domain_negative",
+    "targets": []
+  },
+  {
+    "id": "nextjs.angular-routing.near-domain-negative",
+    "docset": "nextjs",
+    "query": "Angular route guard configuration",
+    "split": "test",
+    "intent_family": "angular-routing",
+    "query_form": "short",
+    "query_class": "near_domain_negative",
+    "targets": []
+  },
+  {
+    "id": "nextjs.svelte-stores.near-domain-negative",
+    "docset": "nextjs",
+    "query": "Svelte writable store derived store",
+    "split": "test",
+    "intent_family": "svelte-stores",
+    "query_form": "keyword_heavy",
+    "query_class": "near_domain_negative",
+    "targets": []
+  },
+  {
+    "id": "nextjs.nuxt-server-routes.near-domain-negative",
+    "docset": "nextjs",
+    "query": "Nuxt server API route handler",
+    "split": "test",
+    "intent_family": "nuxt-server-routes",
+    "query_form": "short",
+    "query_class": "near_domain_negative",
+    "targets": []
+  },
+  {
+    "id": "nextjs.remix-loaders.near-domain-negative",
+    "docset": "nextjs",
+    "query": "Remix loader and action functions",
+    "split": "test",
+    "intent_family": "remix-loaders",
+    "query_form": "keyword_heavy",
+    "query_class": "near_domain_negative",
+    "targets": []
+  },
+  {
+    "id": "nextjs.astro-content.near-domain-negative",
+    "docset": "nextjs",
+    "query": "Astro content collections schema",
+    "split": "test",
+    "intent_family": "astro-content",
+    "query_form": "short",
+    "query_class": "near_domain_negative",
+    "targets": []
+  },
+  {
+    "id": "nextjs.react-native-list.near-domain-negative",
+    "docset": "nextjs",
+    "query": "React Native FlatList virtualization",
+    "split": "test",
+    "intent_family": "react-native-list",
+    "query_form": "keyword_heavy",
+    "query_class": "near_domain_negative",
+    "targets": []
+  },
+  {
+    "id": "nextjs.postgres-index.cross-domain-negative",
+    "docset": "nextjs",
+    "query": "PostgreSQL composite index query plan",
+    "split": "test",
+    "intent_family": "postgres-index",
+    "query_form": "keyword_heavy",
+    "query_class": "cross_domain_negative",
+    "targets": []
+  },
+  {
+    "id": "nextjs.kubernetes-deployment.cross-domain-negative",
+    "docset": "nextjs",
+    "query": "Kubernetes deployment rolling update strategy",
+    "split": "test",
+    "intent_family": "kubernetes-deployment",
+    "query_form": "natural_language",
+    "query_class": "cross_domain_negative",
+    "targets": []
+  },
+  {
+    "id": "nextjs.terraform-state.cross-domain-negative",
+    "docset": "nextjs",
+    "query": "Terraform remote state locking",
+    "split": "test",
+    "intent_family": "terraform-state",
+    "query_form": "short",
+    "query_class": "cross_domain_negative",
+    "targets": []
+  },
+  {
+    "id": "nextjs.python-asyncio.cross-domain-negative",
+    "docset": "nextjs",
+    "query": "Python asyncio task cancellation",
+    "split": "test",
+    "intent_family": "python-asyncio",
+    "query_form": "short",
+    "query_class": "cross_domain_negative",
+    "targets": []
+  },
+  {
+    "id": "nextjs.aws-iam.cross-domain-negative",
+    "docset": "nextjs",
+    "query": "AWS IAM role trust policy",
+    "split": "test",
+    "intent_family": "aws-iam",
+    "query_form": "short",
+    "query_class": "cross_domain_negative",
+    "targets": []
+  },
+  {
+    "id": "nextjs.docker-compose.cross-domain-negative",
+    "docset": "nextjs",
+    "query": "Docker Compose healthcheck dependency",
+    "split": "test",
+    "intent_family": "docker-compose",
+    "query_form": "short",
+    "query_class": "cross_domain_negative",
+    "targets": []
+  },
+  {
+    "id": "nextjs.excel-pivot.cross-domain-negative",
+    "docset": "nextjs",
+    "query": "Excel pivot table calculated field",
+    "split": "test",
+    "intent_family": "excel-pivot",
+    "query_form": "short",
+    "query_class": "cross_domain_negative",
+    "targets": []
+  }
+,
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.cache-components.development",
+  "intent_family": "cache-components",
+  "query": "enable Cache Components in Next.js",
+  "targets": [
+    {
+      "source_url": "01-app/01-getting-started/08-caching.md",
+      "heading_path_prefix": "Enabling Cache Components",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.streaming-uncached.development",
+  "intent_family": "streaming-uncached",
+  "query": "stream uncached data in Next.js",
+  "targets": [
+    {
+      "source_url": "01-app/01-getting-started/08-caching.md",
+      "heading_path_prefix": "Usage > Streaming uncached data",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.runtime-cache-values.development",
+  "intent_family": "runtime-cache-values",
+  "query": "pass runtime values to cached functions",
+  "targets": [
+    {
+      "source_url": "01-app/01-getting-started/08-caching.md",
+      "heading_path_prefix": "Working with runtime APIs > Passing runtime values to cached functions",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.static-metadata.development",
+  "intent_family": "static-metadata",
+  "query": "configure static metadata in Next.js",
+  "targets": [
+    {
+      "source_url": "01-app/01-getting-started/14-metadata-and-og-images.md",
+      "heading_path_prefix": "Static metadata",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.generated-og-image.development",
+  "intent_family": "generated-og-image",
+  "query": "generate an Open Graph image in Next.js",
+  "targets": [
+    {
+      "source_url": "01-app/01-getting-started/14-metadata-and-og-images.md",
+      "heading_path_prefix": "Generated Open Graph images",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.route-handler-convention.development",
+  "intent_family": "route-handler-convention",
+  "query": "create a route handler file",
+  "targets": [
+    {
+      "source_url": "01-app/01-getting-started/15-route-handlers.md",
+      "heading_path_prefix": "Route Handlers > Convention",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.route-handler-request-response.development",
+  "intent_family": "route-handler-request-response",
+  "query": "use NextRequest and NextResponse in a route handler",
+  "targets": [
+    {
+      "source_url": "01-app/01-getting-started/15-route-handlers.md",
+      "heading_path_prefix": "Route Handlers > Extended `NextRequest` and `NextResponse` APIs",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.proxy-cookies.development",
+  "intent_family": "proxy-cookies",
+  "query": "read cookies in a Next.js proxy",
+  "targets": [
+    {
+      "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+      "heading_path_prefix": "Examples > Using Cookies",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.proxy-cors.development",
+  "intent_family": "proxy-cors",
+  "query": "return CORS headers from a Next.js proxy",
+  "targets": [
+    {
+      "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+      "heading_path_prefix": "Examples > CORS",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.proxy-waituntil.development",
+  "intent_family": "proxy-waituntil",
+  "query": "use waitUntil in a Next.js proxy",
+  "targets": [
+    {
+      "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+      "heading_path_prefix": "Examples > `waitUntil` and `NextFetchEvent`",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.proxy-execution-order.development",
+  "intent_family": "proxy-execution-order",
+  "query": "understand Next.js proxy execution order",
+  "targets": [
+    {
+      "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+      "heading_path_prefix": "Execution order",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.proxy-runtime.development",
+  "intent_family": "proxy-runtime",
+  "query": "which runtime does a Next.js proxy use",
+  "targets": [
+    {
+      "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+      "heading_path_prefix": "Runtime",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.route-cors.development",
+  "intent_family": "route-cors",
+  "query": "add CORS to a route handler",
+  "targets": [
+    {
+      "source_url": "01-app/03-api-reference/03-file-conventions/route.md",
+      "heading_path_prefix": "Examples > CORS",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.route-headers.development",
+  "intent_family": "route-headers",
+  "query": "set headers in a route handler",
+  "targets": [
+    {
+      "source_url": "01-app/03-api-reference/03-file-conventions/route.md",
+      "heading_path_prefix": "Examples > Headers",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.route-redirects.development",
+  "intent_family": "route-redirects",
+  "query": "redirect from a route handler",
+  "targets": [
+    {
+      "source_url": "01-app/03-api-reference/03-file-conventions/route.md",
+      "heading_path_prefix": "Examples > Redirects",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.revalidate-page.development",
+  "intent_family": "revalidate-page",
+  "query": "revalidate a page path in Next.js",
+  "targets": [
+    {
+      "source_url": "01-app/03-api-reference/04-functions/revalidatePath.md",
+      "heading_path_prefix": "Examples > Revalidating a Page path",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.revalidate-layout.development",
+  "intent_family": "revalidate-layout",
+  "query": "revalidate a layout path in Next.js",
+  "targets": [
+    {
+      "source_url": "01-app/03-api-reference/04-functions/revalidatePath.md",
+      "heading_path_prefix": "Examples > Revalidating a Layout path",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.static-params-bottom-up.development",
+  "intent_family": "static-params-bottom-up",
+  "query": "generate static params from the bottom up",
+  "targets": [
+    {
+      "source_url": "01-app/03-api-reference/04-functions/generate-static-params.md",
+      "heading_path_prefix": "Examples > Multiple Dynamic Segments in a Route > Generate params from the bottom up",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.streaming-suspense.development",
+  "intent_family": "streaming-suspense",
+  "query": "stream data with a Suspense boundary in Next.js",
+  "targets": [
+    {
+      "source_url": "01-app/02-guides/streaming.md",
+      "heading_path_prefix": "Granular streaming with `<Suspense>`",
+      "grade": 2
+    }
+  ]
+},
+{
+  "docset": "nextjs",
+  "split": "development",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "id": "nextjs.loading-versus-suspense.development",
+  "intent_family": "loading-versus-suspense",
+  "query": "when should Next.js use loading.js versus Suspense",
+  "targets": [
+    {
+      "source_url": "01-app/02-guides/streaming.md",
+      "heading_path_prefix": "Granular streaming with `<Suspense>` > When to use `loading.js` vs `<Suspense>`",
+      "grade": 2
+    }
+  ]
+}
+,
+{
+  "id": "nextjs.solid-signals.development",
+  "docset": "nextjs",
+  "query": "SolidJS createSignal effect",
+  "split": "development",
+  "intent_family": "solid-signals",
+  "query_form": "keyword_heavy",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "nextjs.qwik-resumability.development",
+  "docset": "nextjs",
+  "query": "Qwik resumability lazy loading",
+  "split": "development",
+  "intent_family": "qwik-resumability",
+  "query_form": "keyword_heavy",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "nextjs.ember-templates.development",
+  "docset": "nextjs",
+  "query": "Ember template component arguments",
+  "split": "development",
+  "intent_family": "ember-templates",
+  "query_form": "keyword_heavy",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "nextjs.backbone-models.development",
+  "docset": "nextjs",
+  "query": "Backbone model collection events",
+  "split": "development",
+  "intent_family": "backbone-models",
+  "query_form": "keyword_heavy",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "nextjs.vuex-store.development",
+  "docset": "nextjs",
+  "query": "Vuex store modules actions",
+  "split": "development",
+  "intent_family": "vuex-store",
+  "query_form": "keyword_heavy",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "nextjs.redux-toolkit.development",
+  "docset": "nextjs",
+  "query": "Redux Toolkit createSlice reducers",
+  "split": "development",
+  "intent_family": "redux-toolkit",
+  "query_form": "keyword_heavy",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "nextjs.alpine-directives.development",
+  "docset": "nextjs",
+  "query": "Alpine.js x-data x-show directives",
+  "split": "development",
+  "intent_family": "alpine-directives",
+  "query_form": "keyword_heavy",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "nextjs.lit-components.development",
+  "docset": "nextjs",
+  "query": "Lit web component reactive properties",
+  "split": "development",
+  "intent_family": "lit-components",
+  "query_form": "keyword_heavy",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "nextjs.mysql-replication.development",
+  "docset": "nextjs",
+  "query": "MySQL replication GTID failover",
+  "split": "development",
+  "intent_family": "mysql-replication",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "nextjs.ansible-playbook.development",
+  "docset": "nextjs",
+  "query": "Ansible playbook inventory variables",
+  "split": "development",
+  "intent_family": "ansible-playbook",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "nextjs.golang-channels.development",
+  "docset": "nextjs",
+  "query": "Go channel select cancellation",
+  "split": "development",
+  "intent_family": "golang-channels",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "nextjs.spring-boot.development",
+  "docset": "nextjs",
+  "query": "Spring Boot dependency injection",
+  "split": "development",
+  "intent_family": "spring-boot",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "nextjs.systemd-service.development",
+  "docset": "nextjs",
+  "query": "systemd service unit restart policy",
+  "split": "development",
+  "intent_family": "systemd-service",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "nextjs.prometheus-alert.development",
+  "docset": "nextjs",
+  "query": "Prometheus alert rule expression",
+  "split": "development",
+  "intent_family": "prometheus-alert",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "nextjs.git-rebase.development",
+  "docset": "nextjs",
+  "query": "Git interactive rebase squash commits",
+  "split": "development",
+  "intent_family": "git-rebase",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+}
+]
