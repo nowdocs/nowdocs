@@ -76,6 +76,43 @@ pub struct SearchResult {
     pub truncated: bool,
 }
 
+/// One candidate in the retrieval trace (C02). `rrf_score` is the fused RRF
+/// score from hybrid search; `cosine` is the raw query–candidate cosine
+/// recomputed from the already-fetched candidate vectors — never LanceDB's
+/// query-local normalized `_distance`/`_score`. `dense_rank`/`lexical_rank`
+/// are `None` at this wave; C04 supplies per-channel rank evidence later.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraceHit {
+    pub chunk_idx: u32,
+    pub source_url: String,
+    pub rrf_score: f32,
+    pub cosine: Option<f32>,
+    pub dense_rank: Option<u32>,
+    pub lexical_rank: Option<u32>,
+}
+
+/// Evaluation-only retrieval trace (C02): the fused candidate pool, the MMR
+/// selection, the pre-MMR raw-cosine distribution, and the gate outcome, so
+/// later evaluation can inspect ranking decisions. Never exposed through MCP,
+/// smoke JSON, human output, logs, or the public `SearchResult`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetrievalTrace {
+    pub fused: Vec<TraceHit>,
+    pub mmr: Vec<TraceHit>,
+    pub pre_mmr_top_cosines: Vec<f32>,
+    pub gate_passed: bool,
+}
+
+/// Outcome of ranking plus the answer gate. Only `Clone` is derived because
+/// `SearchHit` implements `Clone` but not `Debug`/`PartialEq` (tests compare
+/// chunk IDs).
+#[derive(Clone)]
+pub struct RankedGateResult {
+    pub hits: Vec<SearchHit>,
+    pub gate_passed: bool,
+    pub trace: Option<RetrievalTrace>,
+}
+
 // N2: downcastable sentinel error types. `retrieve::search` maps each failure
 // point to one of these so `tools::classify_error` can classify via
 // `anyhow::Error::downcast_ref::<T>()` instead of fragile string matching on
@@ -137,6 +174,31 @@ pub fn search(
     max_tokens: Option<u32>,
     top_k: Option<u32>,
 ) -> Result<SearchResult> {
+    search_impl(docset, query, max_tokens, top_k, false).map(|(result, _)| result)
+}
+
+/// Like [`search`], but also returns the evaluation-only [`RetrievalTrace`]
+/// (fused pool, MMR selection, pre-MMR raw-cosine distribution, gate outcome).
+/// Search behavior is identical to `search`; the trace is for evaluation
+/// inspection only and is never exposed through public output.
+pub fn search_with_trace(
+    docset: &str,
+    query: &str,
+    max_tokens: Option<u32>,
+    top_k: Option<u32>,
+) -> Result<(SearchResult, RetrievalTrace)> {
+    let (result, trace) = search_impl(docset, query, max_tokens, top_k, true)?;
+    let trace = trace.expect("search_impl must produce a trace when tracing is enabled");
+    Ok((result, trace))
+}
+
+fn search_impl(
+    docset: &str,
+    query: &str,
+    max_tokens: Option<u32>,
+    top_k: Option<u32>,
+    trace: bool,
+) -> Result<(SearchResult, Option<RetrievalTrace>)> {
     let docset = validate_docset(docset)?;
     let query = validate_query(query)?;
     let max_tokens = resolve_max_tokens(max_tokens);
@@ -201,29 +263,20 @@ pub fn search(
         docset: docset.clone(),
         reason: e.to_string(),
     })?;
-    let hits = mmr_rerank(
-        &query_vector,
-        candidates,
-        &vectors,
-        top_k as usize,
-        MMR_LAMBDA,
-    );
-
-    // N4/OQ11 (redesigned): answer gate. The old RRF-only gate was
-    // structurally ~1.0 FP (RRF scores are rank-based, not similarity-based,
-    // so every query cleared it). Gate on the query–top-hit cosine similarity
-    // plus a dual-channel rank-1 agreement bypass (exact-keyword + semantic
-    // agreement — covers keyword-dense queries that under-score on cosine):
-    // if the best hit clears neither signal the docset is treated as having
-    // no answer (e.g. Vue syntax queried against React docs) — return empty
-    // rather than the irrelevant top-K.
-    let hits = apply_answer_gate(hits, &query_vector, &vectors);
+    // MMR rerank (N1/OQ4) + answer gate (N4/OQ11) run through one shared
+    // helper so the traced and untraced paths execute identical ranking logic;
+    // the gate's design rationale is documented on `apply_answer_gate`.
+    let RankedGateResult { hits, trace, .. } =
+        rank_and_gate_candidates(&query_vector, candidates, &vectors, top_k as usize, trace);
     if hits.is_empty() {
-        return Ok(SearchResult {
-            chunks: vec![],
-            tokens_returned: 0,
-            truncated: false,
-        });
+        return Ok((
+            SearchResult {
+                chunks: vec![],
+                tokens_returned: 0,
+                truncated: false,
+            },
+            trace,
+        ));
     }
 
     // Build the neighbor window hit-first: all hybrid hits lead (rank 1..N),
@@ -260,7 +313,8 @@ pub fn search(
     let window_chunks = reorder_to_window(window_chunks, &window_ids);
 
     // Assemble within max_tokens budget.
-    assemble_result(window_chunks, max_tokens)
+    let result = assemble_result(window_chunks, max_tokens)?;
+    Ok((result, trace))
 }
 
 /// Maximal Marginal Relevance rerank (N1/OQ4). Greedy: repeatedly pick the
@@ -414,6 +468,84 @@ pub fn apply_answer_gate(
         Vec::new()
     } else {
         hits
+    }
+}
+
+/// Rank fused hybrid candidates with MMR and apply the answer gate,
+/// optionally recording an evaluation-only [`RetrievalTrace`] (C02). Both
+/// `search` (trace off) and `search_with_trace` (trace on) run through here,
+/// so traced evaluation observes exactly the same ranking and gate behavior
+/// as normal search.
+///
+/// With `trace = false` no trace metadata is cloned and no trace vector is
+/// allocated. With `trace = true`, raw query–candidate cosines are recomputed
+/// solely from the already-fetched candidate `vectors` — never from LanceDB's
+/// query-local normalized `_distance`/`_score`. `pre_mmr_top_cosines` is the
+/// descending raw-cosine sequence across the complete fused candidate pool
+/// before MMR (candidates without a fetched vector contribute no cosine); the
+/// gate cosine remains the selected post-MMR top hit's raw cosine, exactly as
+/// `apply_answer_gate` computes it. `gate_passed` is true exactly when the
+/// gate returns at least one hit, so a no-answer decision still yields its
+/// trace.
+pub fn rank_and_gate_candidates(
+    query_vector: &[f32],
+    candidates: Vec<SearchHit>,
+    vectors: &HashMap<u32, Vec<f32>>,
+    top_k: usize,
+    trace: bool,
+) -> RankedGateResult {
+    // Fused-pool trace view, built before MMR consumes the candidates.
+    // `bool::then` skips the closure entirely when tracing is disabled.
+    let fused_trace = trace.then(|| {
+        candidates
+            .iter()
+            .map(|h| TraceHit {
+                chunk_idx: h.chunk_idx,
+                source_url: h.source_url.clone(),
+                rrf_score: h.score,
+                cosine: vectors.get(&h.chunk_idx).map(|v| cosine(query_vector, v)),
+                dense_rank: None,
+                lexical_rank: None,
+            })
+            .collect::<Vec<TraceHit>>()
+    });
+    let pre_mmr_top_cosines = fused_trace.as_ref().map(|fused| {
+        let mut cosines: Vec<f32> = fused.iter().filter_map(|t| t.cosine).collect();
+        cosines.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        cosines
+    });
+
+    let hits = mmr_rerank(query_vector, candidates, vectors, top_k, MMR_LAMBDA);
+
+    // MMR-selection trace view, built before the gate consumes the hits.
+    let mmr_trace = trace.then(|| {
+        hits.iter()
+            .map(|h| TraceHit {
+                chunk_idx: h.chunk_idx,
+                source_url: h.source_url.clone(),
+                rrf_score: h.score,
+                cosine: vectors.get(&h.chunk_idx).map(|v| cosine(query_vector, v)),
+                dense_rank: None,
+                lexical_rank: None,
+            })
+            .collect::<Vec<TraceHit>>()
+    });
+
+    let hits = apply_answer_gate(hits, query_vector, vectors);
+    let gate_passed = !hits.is_empty();
+
+    let trace = fused_trace.map(|fused| RetrievalTrace {
+        fused,
+        mmr: mmr_trace.expect("mmr trace must be built when tracing is enabled"),
+        pre_mmr_top_cosines: pre_mmr_top_cosines
+            .expect("pre-MMR cosines must be built when tracing is enabled"),
+        gate_passed,
+    });
+
+    RankedGateResult {
+        hits,
+        gate_passed,
+        trace,
     }
 }
 

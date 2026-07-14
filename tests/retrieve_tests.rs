@@ -564,3 +564,103 @@ fn retrieve_search_returns_store_error_sentinel() {
         "missing store must surface as StoreError sentinel, got: {err:#}"
     );
 }
+
+// --- C02: behavior-preserving retrieval trace ---
+
+use nowdocs::retrieve::rank_and_gate_candidates;
+
+/// Query vector for the trace tests: unit vector on the x axis, so a
+/// candidate's query-cosine is just its first component (unit-normalized).
+fn qv() -> Vec<f32> {
+    vec![1.0, 0.0]
+}
+
+/// Fused candidate pool for `trace_does_not_change_rank_or_gate`: RRF scores
+/// sit below DUAL_RANK1_RRF so the gate decision is driven by cosine alone.
+fn hits() -> Vec<SearchHit> {
+    vec![
+        hit_url(0, "a.md", 0.030),
+        hit_url(1, "b.md", 0.029),
+        hit_url(2, "c.md", 0.028),
+        hit_url(3, "d.md", 0.027),
+    ]
+}
+
+/// Query-cosines 0.90 / 0.85 / 0.80 / 0.70: the top hit clears
+/// MIN_ANSWER_COSINE, so the gate passes.
+fn vectors() -> HashMap<u32, Vec<f32>> {
+    vecs(&[
+        (0, vec_with_cosine(0.90)),
+        (1, vec_with_cosine(0.85)),
+        (2, vec_with_cosine(0.80)),
+        (3, vec_with_cosine(0.70)),
+    ])
+}
+
+#[test]
+fn trace_does_not_change_rank_or_gate() {
+    let plain = rank_and_gate_candidates(&qv(), hits(), &vectors(), 3, false);
+    let traced = rank_and_gate_candidates(&qv(), hits(), &vectors(), 3, true);
+    let plain_ids: Vec<_> = plain.hits.iter().map(|hit| hit.chunk_idx).collect();
+    let traced_ids: Vec<_> = traced.hits.iter().map(|hit| hit.chunk_idx).collect();
+    assert_eq!(plain_ids, traced_ids);
+    assert_eq!(plain.gate_passed, traced.gate_passed);
+    assert!(
+        plain.trace.is_none(),
+        "tracing disabled must not allocate a trace"
+    );
+    assert!(traced.trace.is_some());
+}
+
+#[test]
+fn trace_pre_mmr_cosines_come_from_fused_pool_not_mmr_order() {
+    // Chunk 1 is the second-best fused raw cosine (0.94) but a near-duplicate
+    // of chunk 0, so MMR demotes it below the diverse chunk 2 (cosine 0.90).
+    // pre_mmr_top_cosines must therefore list 0.95, 0.94 — the fused-pool
+    // distribution — not the MMR selection's 0.95, 0.90.
+    let hits = vec![
+        hit_url(0, "a.md", 0.030),
+        hit_url(1, "b.md", 0.029),
+        hit_url(2, "c.md", 0.028),
+    ];
+    let mut diverse = vec_with_cosine(0.90);
+    diverse[1] = -diverse[1]; // same query-cosine, dissimilar to chunk 0
+    let vectors = vecs(&[
+        (0, vec_with_cosine(0.95)),
+        (1, vec_with_cosine(0.94)), // near-duplicate of chunk 0
+        (2, diverse),
+    ]);
+    let result = rank_and_gate_candidates(&qv(), hits, &vectors, 3, true);
+    assert!(result.gate_passed, "top cosine 0.95 must pass the gate");
+    let trace = result.trace.expect("trace enabled");
+
+    let mmr_ids: Vec<u32> = trace.mmr.iter().map(|t| t.chunk_idx).collect();
+    assert_eq!(
+        mmr_ids,
+        vec![0, 2, 1],
+        "MMR must prefer the diverse chunk over the near-duplicate runner-up"
+    );
+
+    assert_eq!(trace.pre_mmr_top_cosines.len(), 3);
+    assert!(
+        (trace.pre_mmr_top_cosines[0] - 0.95).abs() < 1e-4,
+        "got {}",
+        trace.pre_mmr_top_cosines[0]
+    );
+    assert!(
+        (trace.pre_mmr_top_cosines[1] - 0.94).abs() < 1e-4,
+        "second value must be the fused pool's runner-up cosine 0.94, \
+         not the MMR runner-up 0.90: got {}",
+        trace.pre_mmr_top_cosines[1]
+    );
+
+    // Fused trace view: pool order, RRF scores, channel ranks not yet
+    // supplied at this wave (C04 adds rank evidence).
+    let fused_ids: Vec<u32> = trace.fused.iter().map(|t| t.chunk_idx).collect();
+    assert_eq!(fused_ids, vec![0, 1, 2]);
+    assert!((trace.fused[0].rrf_score - 0.030).abs() < 1e-6);
+    assert!(trace
+        .fused
+        .iter()
+        .all(|t| t.dense_rank.is_none() && t.lexical_rank.is_none()));
+}
