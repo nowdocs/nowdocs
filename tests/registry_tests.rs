@@ -1,11 +1,40 @@
+use std::sync::Mutex;
+
 use nowdocs::cache;
 use nowdocs::chunker::{Chunk, ChunkType};
 use nowdocs::manifest;
 use nowdocs::store::Store;
 
-// These tests set XDG_CACHE_HOME and must not run in parallel (dirs::cache_dir
-// reads the env var, but parallel set_var creates a race).
-// Run with: cargo test --test registry_tests -- --test-threads=1
+// These tests set XDG_CACHE_HOME. C3-R1 adds a poison-resistant EnvGuard for
+// the C3 lock integration tests so they are hermetic under explicit parallelism.
+// Legacy tests still use raw set_var; they are not refactored in this correction
+// (the R1 spec scope limits changes to C3 lock tests).
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct EnvGuard {
+    key: &'static str,
+    old: Option<String>,
+    _g: std::sync::MutexGuard<'static, ()>,
+}
+
+impl EnvGuard {
+    fn set(key: &'static str, val: &str) -> Self {
+        let g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let old = std::env::var(key).ok();
+        std::env::set_var(key, val);
+        Self { key, old, _g: g }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match &self.old {
+            Some(v) => std::env::set_var(self.key, v),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
 
 fn test_manifest_json() -> &'static str {
     r#"{
@@ -1820,16 +1849,26 @@ fn share_creates_clean_output_in_empty_dir() {
     assert!(share_path.join("chunks.jsonl").is_file());
 }
 
-// --- N6: per-docset install lock ---
+// --- N6/C3: per-docset install lock (OS advisory, conservative) ---
+//
+// C3 replaces the age-based lock ownership decision with a process-lifetime OS
+// advisory lock. A pre-seeded lock file with NO live owner is acquirable
+// regardless of its text/mtime (recovery comes from the OS lock being
+// released, not timestamp deletion). The live-owner-not-stolen guarantee is
+// covered by the in-module unit tests (Test 7) which can hold the private
+// InstallLock; integration tests verify the no-owner recovery path and that
+// the lock file is never removed by Drop.
 
 #[test]
-fn concurrent_install_same_docset_second_fails() {
+fn preseeded_lock_file_with_no_owner_does_not_block_install() {
     let dir = tempfile::tempdir().unwrap();
-    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+    let _g = EnvGuard::set("XDG_CACHE_HOME", dir.path().to_str().unwrap());
     cache::ensure_layout().unwrap();
 
     let docset = "test-docset";
-    // Fresh lock (current epoch) → not stale → busy.
+    // A lock file left behind by a previous (crashed) process. It even carries
+    // a current-epoch timestamp, but no process holds the OS lock. Recovery
+    // must come from the OS lock being free, NOT from the timestamp value.
     let lock_path = cache::staging_root().join(format!("{docset}.lock"));
     std::fs::write(&lock_path, format!("{}\n", epoch_secs())).unwrap();
 
@@ -1838,28 +1877,25 @@ fn concurrent_install_same_docset_second_fails() {
     std::fs::write(&tar_path, &archive).unwrap();
     let url = format!("file://{}", tar_path.display());
 
-    let result = nowdocs::registry::install(docset, &url);
-    assert!(result.is_err(), "concurrent install must be rejected");
-    let msg = format!("{}", result.unwrap_err());
-    assert!(
-        msg.contains("currently being installed"),
-        "error must explain the busy lock, got: {msg}"
-    );
+    // Install proceeds (the file alone, with no live owner, is not a lock).
+    nowdocs::registry::install(docset, &url)
+        .expect("install must proceed past a no-owner lock file");
 }
 
 #[test]
-fn stale_lockfile_older_than_1hr_is_ignored() {
+fn stale_text_lock_with_no_live_owner_is_acquired() {
     let dir = tempfile::tempdir().unwrap();
-    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+    let _g = EnvGuard::set("XDG_CACHE_HOME", dir.path().to_str().unwrap());
     cache::ensure_layout().unwrap();
 
     let docset = "test-docset";
-    // Epoch 0 → far older than 1 hour → stale → replaced, install proceeds.
+    // Epoch 0 -> very old text, but no process holds the OS lock. Acquisition
+    // must succeed because the OS lock is free, not because of the timestamp.
     let lock_path = cache::staging_root().join(format!("{docset}.lock"));
     std::fs::write(&lock_path, "0\n").unwrap();
 
-    // Manifest-only archive has no .lance → fails with ARCHIVE_MISSING_STORE,
-    // but crucially NOT with the busy-lock error.
+    // Manifest-only archive has no .lance -> fails with ARCHIVE_MISSING_STORE,
+    // but crucially NOT with the busy-lock error (the lock was acquired).
     let mut archive = Vec::new();
     archive.extend_from_slice(&make_tar_entry(
         "manifest.json",
@@ -1876,14 +1912,18 @@ fn stale_lockfile_older_than_1hr_is_ignored() {
     let msg = format!("{}", result.unwrap_err());
     assert!(
         !msg.contains("currently being installed"),
-        "stale lock must not trigger the busy error, got: {msg}"
+        "no-owner lock must not trigger the busy error, got: {msg}"
+    );
+    assert!(
+        msg.contains("ARCHIVE_MISSING_STORE"),
+        "install must proceed past the lock and fail on the archive, got: {msg}"
     );
 }
 
 #[test]
-fn lockfile_removed_after_install_success() {
+fn lockfile_persists_after_install_success() {
     let dir = tempfile::tempdir().unwrap();
-    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+    let _g = EnvGuard::set("XDG_CACHE_HOME", dir.path().to_str().unwrap());
 
     let docset = "test-docset";
     let archive = make_default_release(docset);
@@ -1891,20 +1931,21 @@ fn lockfile_removed_after_install_success() {
     std::fs::write(&tar_path, &archive).unwrap();
     nowdocs::registry::install(docset, &format!("file://{}", tar_path.display())).unwrap();
 
+    // C3: Drop unlocks without removing the lock pathname (avoids pathname races).
     let lock_path = cache::staging_root().join(format!("{docset}.lock"));
     assert!(
-        !lock_path.exists(),
-        "lockfile must be removed after a successful install"
+        lock_path.is_file(),
+        "lockfile must persist after a successful install (Drop does not remove it)"
     );
 }
 
 #[test]
-fn lockfile_removed_after_install_failure() {
+fn lockfile_persists_after_install_failure() {
     let dir = tempfile::tempdir().unwrap();
-    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+    let _g = EnvGuard::set("XDG_CACHE_HOME", dir.path().to_str().unwrap());
 
     let docset = "test-docset";
-    // Manifest-only archive → install fails (ARCHIVE_MISSING_STORE).
+    // Manifest-only archive -> install fails (ARCHIVE_MISSING_STORE).
     let mut archive = Vec::new();
     archive.extend_from_slice(&make_tar_entry(
         "manifest.json",
@@ -1918,9 +1959,39 @@ fn lockfile_removed_after_install_failure() {
 
     let lock_path = cache::staging_root().join(format!("{docset}.lock"));
     assert!(
-        !lock_path.exists(),
-        "lockfile must be removed after a failed install (Drop on the guard)"
+        lock_path.is_file(),
+        "lockfile must persist after a failed install (Drop unlocks without removing the pathname)"
     );
+}
+
+// --- C3-R1: install lock refuses a symlinked lock file (open-time O_NOFOLLOW) ---
+
+#[test]
+#[cfg(unix)]
+fn install_lock_refuses_symlinked_lock_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", dir.path().to_str().unwrap());
+    cache::ensure_layout().unwrap();
+
+    let docset = "symlink-lock-test";
+    // Create the staging dir and plant a symlink as the lock file.
+    let lock_path = cache::staging_root().join(format!("{docset}.lock"));
+    let external = dir.path().join("external-install-target");
+    std::fs::write(&external, b"external").unwrap();
+    std::os::unix::fs::symlink(&external, &lock_path).unwrap();
+
+    // Install must refuse the symlinked lock (O_NOFOLLOW at open time).
+    let result = nowdocs::registry::install(docset, "file:///nonexistent.tar");
+    assert!(result.is_err(), "install must refuse a symlinked lock file");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("symlink") || msg.contains("not a regular file"),
+        "symlinked install lock must be refused with a symlink/regular-file error, got: {msg}"
+    );
+
+    // The external target must be unchanged.
+    let after = std::fs::read_to_string(&external).unwrap();
+    assert_eq!(after, "external", "external target must be untouched");
 }
 
 // --- OQ6: URL gate hardening ---
