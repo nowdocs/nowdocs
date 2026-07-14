@@ -1394,15 +1394,36 @@ pub fn index_url() -> String {
 }
 
 /// Fetch and parse the registry catalog index from an explicit URL.
+///
+/// The temporary full-index bytes are removed on both success and failure so
+/// no complete catalog snapshot is retained on disk (C4 planning contract).
 pub fn fetch_index_from(url: &str) -> Result<RegistryIndex> {
-    let tmp = if is_test_file_url(url) {
-        PathBuf::from(url.strip_prefix("file://").unwrap_or(url))
+    let (tmp, is_temp) = if is_test_file_url(url) {
+        (
+            PathBuf::from(url.strip_prefix("file://").unwrap_or(url)),
+            false,
+        )
     } else {
-        download_to_temp(url, "index")?
+        (download_to_temp(url, "index")?, true)
     };
-    let text = std::fs::read_to_string(&tmp)
-        .with_context(|| format!("reading registry index at {tmp:?}"))?;
-    let idx: RegistryIndex = serde_json::from_str(&text).context("parsing registry index.json")?;
+    let result = (|| -> Result<RegistryIndex> {
+        let text = std::fs::read_to_string(&tmp)
+            .with_context(|| format!("reading registry index at {tmp:?}"))?;
+        let idx: RegistryIndex =
+            serde_json::from_str(&text).context("parsing registry index.json")?;
+        validate_registry_index(&idx)?;
+        Ok(idx)
+    })();
+    // C4: remove temporary full-index bytes on success and failure. Caller-owned
+    // file:// fixtures are never deleted.
+    if is_temp {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+/// Validate the catalog contract for every package in an index.
+fn validate_registry_index(idx: &RegistryIndex) -> Result<()> {
     // Security: every package must satisfy the catalog contract before it is
     // surfaced to users (plan §U3): allowed download host, allowed license,
     // and a valid 64-hex sha256 integrity value.
@@ -1410,8 +1431,12 @@ pub fn fetch_index_from(url: &str) -> Result<RegistryIndex> {
         // Package downloads must be a release-artifact shape (not an arbitrary
         // raw/branch repo path) so a catalog entry cannot bypass the
         // registry-release contract. The index itself is fetched under the
-        // broader is_allowed_registry_url (it legitimately lives at /raw/).
-        if !is_allowed_package_url(&p.download_url) {
+        // broader is_allowed_registry_url (it legitimately lives at /raw/). In
+        // test mode, file:// fixture URLs are accepted for the package download
+        // URL so unit tests can exercise the planning/apply flow without network.
+        if !(is_allowed_package_url(&p.download_url)
+            || (is_test_mode() && is_test_file_url(&p.download_url)))
+        {
             anyhow::bail!(
                 "registry package {} has disallowed download_url: {}",
                 p.docset,
@@ -1434,12 +1459,32 @@ pub fn fetch_index_from(url: &str) -> Result<RegistryIndex> {
             );
         }
     }
-    Ok(idx)
+    Ok(())
 }
 
 /// Fetch and parse the registry catalog index using the resolved/default URL.
 pub fn fetch_index() -> Result<RegistryIndex> {
     fetch_index_from(&index_url())
+}
+
+/// Fetch the registry catalog index and return only the selected package's
+/// validated metadata in memory. The full temporary index bytes are removed on
+/// both success and failure (C4 planning contract).
+pub fn fetch_selected_package(docset: &str) -> Result<RegistryPackage> {
+    fetch_selected_package_from(docset, &index_url())
+}
+
+/// Fetch the registry catalog from an explicit URL and return only the selected
+/// package's validated metadata in memory. The full temporary index bytes are
+/// removed on both success and failure.
+pub fn fetch_selected_package_from(docset: &str, index_url: &str) -> Result<RegistryPackage> {
+    let idx = fetch_index_from(index_url)?;
+    match idx.packages.into_iter().find(|p| p.docset == docset) {
+        Some(p) => Ok(p),
+        None => anyhow::bail!(
+            "docset {docset} not found in the registry index; run `nowdocs registry list` to see available docsets"
+        ),
+    }
 }
 
 /// Filter catalog packages by a case-insensitive substring match on name + description.

@@ -43,7 +43,7 @@ fn test_ingest_end_to_end() {
         .unwrap();
     assert!(
         hits.iter()
-            .any(|h| h.text.contains("zzzunique_ingest_token")),
+            .any(|h| h.hit.text.contains("zzzunique_ingest_token")),
         "unique-keyword chunk should be recalled"
     );
 }
@@ -93,7 +93,7 @@ fn test_ingest_idempotent() {
         .unwrap();
     assert!(
         hits.iter()
-            .any(|h| h.text.contains("zzzunique_idempotent_token")),
+            .any(|h| h.hit.text.contains("zzzunique_idempotent_token")),
         "unique-keyword chunk should still be recalled after re-ingest"
     );
 }

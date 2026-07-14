@@ -13,9 +13,8 @@
 pub mod lock;
 pub mod plan;
 
-// Future-slice boundaries (C4/C5/C7). `operation` is public so C5 integration
-// tests can exercise the journal/rollback contract directly; docset/setup remain
-// private until their owning slices land.
-mod docset;
+// C4 owns registry-aware ensure planning and C5 exposes its operation contract
+// for integration tests. C7's setup boundary remains private.
+pub mod docset;
 pub mod operation;
 mod setup;

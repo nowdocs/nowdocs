@@ -288,8 +288,8 @@ fn capabilities_data_is_deterministically_ordered() {
         ("setup.plan", false, false, true),
         ("setup.apply", false, false, true),
         ("setup.rollback", false, false, false),
-        ("ensure.plan", false, false, true),
-        ("ensure.apply", false, false, true),
+        ("ensure.plan", true, false, true),
+        ("ensure.apply", true, false, true),
         ("verify", false, true, false),
     ];
     assert_eq!(data.commands.len(), expected_commands.len());

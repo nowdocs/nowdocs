@@ -1,4 +1,34 @@
 use std::process::Command;
+use std::sync::Mutex;
+
+// Serialize env mutation in this test binary so parallel tests don't race on
+// XDG_CACHE_HOME (a pre-existing source of flakiness for install/update/share
+// helpers that call the library in-process).
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct EnvGuard {
+    key: &'static str,
+    old: Option<String>,
+    _g: std::sync::MutexGuard<'static, ()>,
+}
+
+impl EnvGuard {
+    fn set(key: &'static str, val: &str) -> Self {
+        let g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let old = std::env::var(key).ok();
+        std::env::set_var(key, val);
+        Self { key, old, _g: g }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match &self.old {
+            Some(v) => std::env::set_var(self.key, v),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
 
 // 1a test: keep verbatim (clap --help coverage).
 #[test]
@@ -20,6 +50,7 @@ fn test_cli_help_lists_all_subcommands() {
         "doctor",
         "cache",
         "capabilities",
+        "ensure",
     ] {
         assert!(stdout.contains(sub), "help must list `{}`", sub);
     }
@@ -151,8 +182,9 @@ fn cli_two_chunks() -> Vec<nowdocs::chunker::Chunk> {
 
 /// Build a registry-release tar (`manifest.json` + a real `<docset>.lance/`
 /// table with 2 rows matching chunk_count). The table is materialized under a
-/// scratch cache and `XDG_CACHE_HOME` is restored afterwards.
-fn make_release_archive(docset: &str, version: &str) -> Vec<u8> {
+/// scratch cache; `XDG_CACHE_HOME` is saved/restored manually. The caller must
+/// hold `ENV_LOCK`.
+fn make_release_archive_locked(docset: &str, version: &str) -> Vec<u8> {
     let saved = std::env::var("XDG_CACHE_HOME").ok();
     let src = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_CACHE_HOME", src.path()) };
@@ -180,7 +212,8 @@ fn make_release_archive(docset: &str, version: &str) -> Vec<u8> {
 }
 
 fn write_tarball(dir: &std::path::Path, docset: &str, version: &str) -> std::path::PathBuf {
-    let archive = make_release_archive(docset, version);
+    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let archive = make_release_archive_locked(docset, version);
     let tar_path = dir.join(format!("archive_{version}.tar"));
     std::fs::write(&tar_path, &archive).unwrap();
     tar_path
@@ -233,7 +266,7 @@ fn test_cli_list_installed_shows_state_column() {
     // install via the library (production binary rejects file://); write_tarball
     // ships a 2-row store + manifest chunk_count=2, so the unified state model
     // classifies it as Healthy -> label "ok".
-    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    let _g = EnvGuard::set("XDG_CACHE_HOME", cache.path().to_str().unwrap());
     nowdocs::registry::install("state-col-22", &url).expect("install should succeed");
 
     let out = run_nowdocs(cwd.path(), cache.path(), &["list-installed"]);
@@ -267,7 +300,7 @@ fn test_cli_install_uninstall_roundtrip() {
     // install — call the library directly: the production binary (built without
     // `cfg(test)`) no longer honors `file://` / NOWDOCS_TEST_URL, so the test
     // fixture path must go through `install` (which IS compiled in cfg(test)).
-    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    let _g = EnvGuard::set("XDG_CACHE_HOME", cache.path().to_str().unwrap());
     nowdocs::registry::install("rnd-foo-7711", &url).expect("install should succeed");
 
     // list-installed shows it
@@ -308,7 +341,7 @@ fn test_cli_share_creates_out_dir() {
 
     // install — library path honors `file://` in cfg(test); the production
     // binary does not, so install must go through the library here.
-    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    let _g = EnvGuard::set("XDG_CACHE_HOME", cache.path().to_str().unwrap());
     nowdocs::registry::install("rnd-share-9912", &url).expect("install should succeed");
 
     // share — default out_dir is ./{docset}-share relative to cwd
@@ -344,9 +377,13 @@ fn test_cli_update_refreshes_manifest() {
     let cache = tempfile::tempdir().unwrap();
     let v1 = write_tarball(cache.path(), "rnd-upd-3344", "1.0.0");
     let v1_url = format!("file://{}", v1.display());
+    // Build v2 tarball before acquiring the env guard; write_tarball acquires
+    // ENV_LOCK and must not be called while the guard is held on this thread.
+    let v2 = write_tarball(cache.path(), "rnd-upd-3344", "2.0.0");
+    let v2_url = format!("file://{}", v2.display());
 
     // install v1 — library path honors `file://` in cfg(test)
-    unsafe { std::env::set_var("XDG_CACHE_HOME", cache.path()) };
+    let _g = EnvGuard::set("XDG_CACHE_HOME", cache.path().to_str().unwrap());
     nowdocs::registry::install("rnd-upd-3344", &v1_url).expect("install v1 should succeed");
 
     // confirm v1 on disk (manifest path is known from cache layout; the test
@@ -360,10 +397,6 @@ fn test_cli_update_refreshes_manifest() {
     let m1 = nowdocs::manifest::parse_manifest(&std::fs::read_to_string(&manifest_path).unwrap())
         .unwrap();
     assert_eq!(m1.doc_version, "1.0.0");
-
-    // write v2 tarball
-    let v2 = write_tarball(cache.path(), "rnd-upd-3344", "2.0.0");
-    let v2_url = format!("file://{}", v2.display());
 
     // update with v2 — library path honors NOWDOCS_TEST_URL in cfg(test); the
     // production binary does not, so update must go through the library here.
@@ -428,6 +461,7 @@ fn run_nowdocs_isolated(root: &std::path::Path, args: &[&str]) -> std::process::
         .env("XDG_CACHE_HOME", root)
         .env("XDG_CONFIG_HOME", root)
         .env("XDG_DATA_HOME", root)
+        .env("TMPDIR", root)
         .env("NOWDOCS_TEST_URL", "") // reset for tests that don't use it
         .env("http_proxy", "http://127.0.0.1:9")
         .env("https_proxy", "http://127.0.0.1:9")
@@ -776,4 +810,132 @@ fn test_status_updates_capabilities_implementation_state() {
     );
     assert_eq!(status["read_only"], true);
     assert_eq!(status["network_access"], false);
+}
+
+// ---- C4: agent contract — ensure command ----
+
+#[test]
+fn test_capabilities_reports_ensure_implemented() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["capabilities", "--json"]);
+    assert!(
+        out.status.success(),
+        "capabilities --json should exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("capabilities emits one JSON document");
+    let commands = v["data"]["commands"]
+        .as_array()
+        .expect("commands must be an array");
+    for id in ["ensure.plan", "ensure.apply"] {
+        let cmd = commands
+            .iter()
+            .find(|c| c["id"] == id)
+            .unwrap_or_else(|| panic!("{id} command declaration must exist"));
+        assert_eq!(
+            cmd["implemented"], true,
+            "C4 implements {id}: capabilities must say so"
+        );
+        assert_eq!(cmd["read_only"], false, "{id} must not be read_only");
+        assert_eq!(cmd["network_access"], true, "{id} may access network");
+    }
+}
+
+#[test]
+fn test_ensure_offline_missing_docset_returns_registry_metadata_required() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["ensure", "nextjs", "--json"]);
+    assert!(
+        out.status.success(),
+        "ensure missing docset must exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("ensure emits one JSON document");
+    assert_eq!(v["schema_version"], 1);
+    assert_eq!(v["command"], "ensure");
+    assert_eq!(v["status"], "action_required");
+    assert_eq!(v["code"], "registry_metadata_required");
+    assert_eq!(v["data"]["docset"], "nextjs");
+    assert!(
+        v["next_actions"].as_array().is_some_and(|a| !a.is_empty()),
+        "ensure must include a next action"
+    );
+}
+
+#[test]
+fn test_ensure_offline_installed_docset_returns_already_satisfied() {
+    let root = tempfile::tempdir().unwrap();
+    // Build the fixture tarball before acquiring the env guard; write_tarball
+    // acquires ENV_LOCK and must not be called while the guard is held.
+    let tar = write_tarball(root.path(), "react", "18.3.1");
+    let url = format!("file://{}", tar.display());
+
+    // Install a docset via the library (test-mode file:// is allowed in cfg(test)).
+    let _g = EnvGuard::set("XDG_CACHE_HOME", root.path().to_str().unwrap());
+    nowdocs::registry::install("react", &url).expect("install fixture docset");
+
+    let out = run_nowdocs_isolated(root.path(), &["ensure", "react", "--json"]);
+    assert!(
+        out.status.success(),
+        "ensure installed docset must exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("ensure emits one JSON document");
+    assert_eq!(v["status"], "ok");
+    assert_eq!(v["code"], "already_satisfied");
+    assert_eq!(v["data"]["docset"], "react");
+}
+
+#[test]
+fn test_ensure_online_creates_plan_with_hash() {
+    let root = tempfile::tempdir().unwrap();
+
+    // Build an index fixture pointing at a syntactically valid release URL.
+    // Planning only validates the URL shape; no network download occurs.
+    let index_json = serde_json::json!({
+        "schema_version": 1,
+        "generated_at": "2026-07-07T00:00:00Z",
+        "packages": [{
+            "docset": "nextjs",
+            "version": "14.2.5",
+            "license": "MIT",
+            "chunk_count": 7480,
+            "freshness": "2026-07-01",
+            "download_url": "https://github.com/nowdocs-registry/nextjs/releases/download/nextjs-14.2.5/nextjs-14.2.5.lance.tar",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "description": "React framework"
+        }]
+    });
+    let index_path = root.path().join("index.json");
+    std::fs::write(&index_path, index_json.to_string()).unwrap();
+
+    // Point ensure at the local fixture index so the test is fully offline.
+    let index_url = format!("file://{}", index_path.display());
+    let _g = EnvGuard::set("NOWDOCS_REGISTRY_INDEX_URL", &index_url);
+
+    let out = run_nowdocs_isolated(root.path(), &["ensure", "nextjs", "--online", "--json"]);
+    assert!(
+        out.status.success(),
+        "ensure --online should exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("ensure emits one JSON document");
+    assert_eq!(v["status"], "action_required");
+    assert_eq!(v["code"], "action_required");
+    assert!(
+        v["data"]["plan_hash"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty()),
+        "online planning must expose a plan_hash, got: {}",
+        v["data"]
+    );
+    assert_eq!(v["data"]["docset"], "nextjs");
+    assert!(
+        v["next_actions"].as_array().is_some_and(|a| !a.is_empty()),
+        "online planning must include an apply next action"
+    );
 }

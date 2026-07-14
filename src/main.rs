@@ -124,6 +124,185 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             print_update_success(&docset);
             Ok(())
         }
+        Commands::Ensure {
+            docset,
+            online,
+            apply,
+            json,
+        } => {
+            let now_unix_secs = now_unix_secs()?;
+            if let Some(plan_hash) = apply {
+                match nowdocs::automation::docset::ensure_apply(&docset, &plan_hash, now_unix_secs)
+                {
+                    Ok(nowdocs::automation::docset::EnsureApplyResult::AlreadySatisfied) => {
+                        if json {
+                            print_ensure_json(
+                                &docset,
+                                nowdocs::agent_contract::AgentStatus::Ok,
+                                nowdocs::agent_contract::ResultCode::AlreadySatisfied,
+                                &format!("{docset} is already satisfied"),
+                                serde_json::json!({"docset": docset}),
+                                Vec::new(),
+                            );
+                        } else {
+                            println!("{docset} is already satisfied");
+                        }
+                        Ok(())
+                    }
+                    Ok(nowdocs::automation::docset::EnsureApplyResult::Applied) => {
+                        if json {
+                            print_ensure_json(
+                                &docset,
+                                nowdocs::agent_contract::AgentStatus::Ok,
+                                nowdocs::agent_contract::ResultCode::SetupComplete,
+                                &format!("{docset} ensured"),
+                                serde_json::json!({"docset": docset}),
+                                Vec::new(),
+                            );
+                        } else {
+                            println!("ensured {docset}");
+                        }
+                        Ok(())
+                    }
+                    Err(e) => {
+                        let (status, code, summary) = ensure_error_mapping(&e);
+                        if json {
+                            print_ensure_json(
+                                &docset,
+                                status,
+                                code,
+                                &summary,
+                                serde_json::json!({"docset": docset, "error": format!("{e:#}")}),
+                                Vec::new(),
+                            );
+                            // Plan/concurrency conflicts exit 10 per the agent contract.
+                            if matches!(
+                                code,
+                                nowdocs::agent_contract::ResultCode::PlanNotFound
+                                    | nowdocs::agent_contract::ResultCode::PlanExpired
+                                    | nowdocs::agent_contract::ResultCode::PlanStale
+                                    | nowdocs::agent_contract::ResultCode::PlanTampered
+                                    | nowdocs::agent_contract::ResultCode::OperationInProgress
+                            ) {
+                                std::process::exit(code.exit_code().into());
+                            }
+                            Ok(())
+                        } else {
+                            Err(e)
+                        }
+                    }
+                }
+            } else {
+                match nowdocs::automation::docset::ensure_plan(&docset, online, now_unix_secs) {
+                    Ok(nowdocs::automation::docset::EnsurePlanResult::AlreadySatisfied {
+                        ..
+                    }) => {
+                        if json {
+                            print_ensure_json(
+                                &docset,
+                                nowdocs::agent_contract::AgentStatus::Ok,
+                                nowdocs::agent_contract::ResultCode::AlreadySatisfied,
+                                &format!("{docset} is already satisfied"),
+                                serde_json::json!({"docset": docset}),
+                                Vec::new(),
+                            );
+                        } else {
+                            println!("{docset} is already satisfied");
+                        }
+                        Ok(())
+                    }
+                    Ok(nowdocs::automation::docset::EnsurePlanResult::PlanCreated {
+                        plan_id,
+                        ..
+                    }) => {
+                        let next_actions = vec![nowdocs::agent_contract::NextAction {
+                            id: "ensure-apply".to_string(),
+                            kind: "ensure_apply".to_string(),
+                            risk: nowdocs::agent_contract::RiskLevel::Additive,
+                            summary: format!("Apply the ensure plan for {docset}"),
+                            changes_state: true,
+                            network_access: false,
+                            requires_confirmation: true,
+                            reversible: true,
+                            argv: Some(vec![
+                                "ensure".to_string(),
+                                docset.clone(),
+                                "--apply".to_string(),
+                                plan_id.clone(),
+                            ]),
+                            target_paths: vec![],
+                            estimated_download_bytes: None,
+                        }];
+                        if json {
+                            print_ensure_json(
+                                &docset,
+                                nowdocs::agent_contract::AgentStatus::ActionRequired,
+                                nowdocs::agent_contract::ResultCode::ActionRequired,
+                                &format!("run `nowdocs ensure {docset} --apply {plan_id}`"),
+                                serde_json::json!({"docset": docset, "plan_hash": plan_id}),
+                                next_actions,
+                            );
+                        } else {
+                            println!("plan created: {plan_id}");
+                            println!("run: nowdocs ensure {docset} --apply {plan_id}");
+                        }
+                        Ok(())
+                    }
+                    Ok(
+                        nowdocs::automation::docset::EnsurePlanResult::RegistryMetadataRequired {
+                            ..
+                        },
+                    ) => {
+                        let next_actions = vec![nowdocs::agent_contract::NextAction {
+                            id: "ensure-online".to_string(),
+                            kind: "ensure_plan".to_string(),
+                            risk: nowdocs::agent_contract::RiskLevel::ReadOnly,
+                            summary: format!("Fetch registry metadata for {docset}"),
+                            changes_state: false,
+                            network_access: true,
+                            requires_confirmation: false,
+                            reversible: true,
+                            argv: Some(vec![
+                                "ensure".to_string(),
+                                docset.clone(),
+                                "--online".to_string(),
+                            ]),
+                            target_paths: vec![],
+                            estimated_download_bytes: None,
+                        }];
+                        if json {
+                            print_ensure_json(
+                                &docset,
+                                nowdocs::agent_contract::AgentStatus::ActionRequired,
+                                nowdocs::agent_contract::ResultCode::RegistryMetadataRequired,
+                                &format!("registry metadata required for {docset}"),
+                                serde_json::json!({"docset": docset}),
+                                next_actions,
+                            );
+                        } else {
+                            println!("registry metadata required for {docset}");
+                            println!("run: nowdocs ensure {docset} --online");
+                        }
+                        Ok(())
+                    }
+                    Err(e) => {
+                        if json {
+                            print_ensure_json(
+                                &docset,
+                                nowdocs::agent_contract::AgentStatus::Error,
+                                nowdocs::agent_contract::ResultCode::InternalError,
+                                &format!("{e:#}"),
+                                serde_json::json!({"docset": docset, "error": format!("{e:#}")}),
+                                Vec::new(),
+                            );
+                            Ok(())
+                        } else {
+                            Err(e)
+                        }
+                    }
+                }
+            }
+        }
         Commands::Rebuild { docset } => {
             let stats = nowdocs::ingest::rebuild_docset(&docset)?;
             println!("rebuilt {docset}: {} chunks", stats.chunks);
@@ -361,5 +540,91 @@ fn catalog_lookup_for(docset: &str) -> anyhow::Result<(String, String)> {
         None => anyhow::bail!(
             "docset {docset} not found in the registry index; run `nowdocs registry list` to see available docsets"
         ),
+    }
+}
+
+/// Current wall-clock time as whole seconds since the Unix epoch.
+fn now_unix_secs() -> anyhow::Result<u64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .context("system time before Unix epoch")
+}
+
+/// Print one agent envelope for `ensure`.
+fn print_ensure_json(
+    _docset: &str,
+    status: nowdocs::agent_contract::AgentStatus,
+    code: nowdocs::agent_contract::ResultCode,
+    summary: &str,
+    data: serde_json::Value,
+    next_actions: Vec<nowdocs::agent_contract::NextAction>,
+) {
+    let envelope = nowdocs::agent_contract::AgentEnvelope {
+        schema_version: nowdocs::agent_contract::AGENT_CONTRACT_SCHEMA_VERSION,
+        nowdocs_version: env!("CARGO_PKG_VERSION").to_string(),
+        command: "ensure".to_string(),
+        status,
+        code,
+        summary: summary.to_string(),
+        data,
+        next_actions,
+        rollback: None,
+    };
+    // Unwrap is safe: the envelope is built from serializable types.
+    println!("{}", serde_json::to_string_pretty(&envelope).unwrap());
+}
+
+/// Map an `ensure_apply` error to an agent-contract status/code/summary.
+fn ensure_error_mapping(
+    e: &anyhow::Error,
+) -> (
+    nowdocs::agent_contract::AgentStatus,
+    nowdocs::agent_contract::ResultCode,
+    String,
+) {
+    let msg = format!("{e:#}");
+    if msg.contains("PLAN_NOT_FOUND") {
+        (
+            nowdocs::agent_contract::AgentStatus::Error,
+            nowdocs::agent_contract::ResultCode::PlanNotFound,
+            msg,
+        )
+    } else if msg.contains("PLAN_EXPIRED") {
+        (
+            nowdocs::agent_contract::AgentStatus::Error,
+            nowdocs::agent_contract::ResultCode::PlanExpired,
+            msg,
+        )
+    } else if msg.contains("PLAN_STALE") {
+        (
+            nowdocs::agent_contract::AgentStatus::Error,
+            nowdocs::agent_contract::ResultCode::PlanStale,
+            msg,
+        )
+    } else if msg.contains("PLAN_TAMPERED") {
+        (
+            nowdocs::agent_contract::AgentStatus::Error,
+            nowdocs::agent_contract::ResultCode::PlanTampered,
+            msg,
+        )
+    } else if msg.contains("OPERATION_IN_PROGRESS") {
+        (
+            nowdocs::agent_contract::AgentStatus::Error,
+            nowdocs::agent_contract::ResultCode::OperationInProgress,
+            msg,
+        )
+    } else if msg.contains("OPERATION_LOCK_UNSAFE") {
+        (
+            nowdocs::agent_contract::AgentStatus::Error,
+            nowdocs::agent_contract::ResultCode::PermissionDenied,
+            msg,
+        )
+    } else {
+        (
+            nowdocs::agent_contract::AgentStatus::Error,
+            nowdocs::agent_contract::ResultCode::InternalError,
+            msg,
+        )
     }
 }
