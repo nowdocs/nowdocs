@@ -9,3 +9,11 @@
 # Do NOT hardcode a machine-specific PROTOC path here: it breaks builds on any
 # machine that lacks that exact path (e.g. a local macOS dev box), even when
 # protoc is already installed elsewhere on PATH.
+#
+# Test execution policy: legacy tests mutate the process-global cache
+# environment (XDG_CACHE_HOME) without one shared lock, so the default test
+# process runs single-threaded until those tests are refactored to path
+# injection. An intentional diagnostic may still pass the test harness's
+# explicit `--test-threads` command-line option.
+[env]
+RUST_TEST_THREADS = { value = "1", force = true }
