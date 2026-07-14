@@ -111,13 +111,23 @@ impl Reranker for SignalPreservingRrf {
         let combined = self.merge_results(vector_results, fts_results)?;
 
         let combined_row_ids: UInt64Array =
-            downcast_array(combined.column_by_name(ROW_ID).unwrap());
+            downcast_array(combined.column_by_name(ROW_ID).ok_or_else(|| {
+                lancedb::error::Error::InvalidInput {
+                    message: format!("expected column {ROW_ID} not found in merged results"),
+                }
+            })?);
         let relevance_scores = Float32Array::from_iter_values(
             combined_row_ids
                 .values()
                 .iter()
-                .map(|row_id| rrf_score_map.get(row_id).unwrap())
-                .copied(),
+                .map(|row_id| {
+                    rrf_score_map.get(row_id).copied().ok_or_else(|| {
+                        lancedb::error::Error::InvalidInput {
+                            message: format!("row ID {row_id} missing from RRF score map"),
+                        }
+                    })
+                })
+                .collect::<lancedb::error::Result<Vec<_>>>()?,
         );
 
         // Append nullable rank columns.
@@ -143,18 +153,38 @@ impl Reranker for SignalPreservingRrf {
             }),
             None,
         )
-        .unwrap();
+        .map_err(|err| lancedb::error::Error::InvalidInput {
+            message: format!("sort RRF relevance scores: {err}"),
+        })?;
 
         let mut columns: Vec<Arc<dyn Array>> = combined
             .columns()
             .iter()
-            .map(|c| take(c, &sort_indices, None).unwrap())
-            .collect();
+            .map(|column| {
+                take(column, &sort_indices, None).map_err(|err| {
+                    lancedb::error::Error::InvalidInput {
+                        message: format!("reorder merged RRF column: {err}"),
+                    }
+                })
+            })
+            .collect::<lancedb::error::Result<_>>()?;
         columns.push(Arc::new(
-            take(&relevance_scores, &sort_indices, None).unwrap(),
+            take(&relevance_scores, &sort_indices, None).map_err(|err| {
+                lancedb::error::Error::InvalidInput {
+                    message: format!("reorder RRF relevance scores: {err}"),
+                }
+            })?,
         ));
-        columns.push(Arc::new(take(&dense_ranks, &sort_indices, None).unwrap()));
-        columns.push(Arc::new(take(&fts_ranks, &sort_indices, None).unwrap()));
+        columns.push(Arc::new(take(&dense_ranks, &sort_indices, None).map_err(
+            |err| lancedb::error::Error::InvalidInput {
+                message: format!("reorder dense ranks: {err}"),
+            },
+        )?));
+        columns.push(Arc::new(take(&fts_ranks, &sort_indices, None).map_err(
+            |err| lancedb::error::Error::InvalidInput {
+                message: format!("reorder FTS ranks: {err}"),
+            },
+        )?));
 
         let mut fields = combined.schema().fields().to_vec();
         fields.push(Arc::new(Field::new(
