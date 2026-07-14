@@ -1,4 +1,5 @@
 use nowdocs::chunker::ChunkType;
+use nowdocs::confidence::AnswerState;
 use nowdocs::retrieve::{reorder_to_window, window_ids_for, ResultChunk, SearchResult};
 use nowdocs::store::SearchHit;
 
@@ -44,6 +45,7 @@ fn test_search_smoke() {
             chunks: vec![],
             tokens_returned: 0,
             truncated: false,
+            answer_state: AnswerState::NoAnswer,
         },
     ));
 }
@@ -622,6 +624,25 @@ fn trace_does_not_change_rank_or_gate() {
     assert!(traced.trace.is_some());
     assert_eq!(plain, plain.clone());
     assert!(format!("{traced:?}").contains("RankedGateResult"));
+}
+
+#[test]
+fn gate_retains_pre_gate_selection_for_answer_decision() {
+    let candidates = vec![evidence(hit_url(0, "below-threshold.md", 0.016))];
+    let vectors = vecs(&[(0, vec_with_cosine(0.80))]);
+
+    let result = rank_and_gate_candidates(&qv(), candidates, &vectors, 1, true);
+
+    assert!(
+        result.hits.is_empty(),
+        "the legacy gate must reject 0.80 cosine"
+    );
+    assert_eq!(
+        result.pre_gate_hits.len(),
+        1,
+        "C05 must retain the selected hit so its decision is made before emptying the answer"
+    );
+    assert_eq!(result.pre_gate_hits[0].chunk_idx, 0);
 }
 
 #[test]
