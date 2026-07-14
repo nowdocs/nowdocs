@@ -67,6 +67,19 @@ pub enum Commands {
     ListInstalled,
     /// Update a docset to the latest registry version
     Update { docset: String },
+    /// Idempotently ensure a docset is installed from the registry
+    Ensure {
+        docset: String,
+        /// Fetch and validate registry metadata in memory (required to plan a new install/update)
+        #[arg(long)]
+        online: bool,
+        /// Apply a previously created ensure plan by hash
+        #[arg(long)]
+        apply: Option<String>,
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
     /// Browse the nowdocs registry catalog (list / search available docsets; may access the network)
     Registry {
         #[command(subcommand)]

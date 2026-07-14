@@ -13,7 +13,8 @@
 pub mod lock;
 pub mod plan;
 
-// Future-slice boundaries (C4/C5/C7). Declared private with no public API.
-mod docset;
+// C4 owns registry-aware ensure planning; expose its public API. C5 and C7
+// remain private future-slice boundaries.
+pub mod docset;
 mod operation;
 mod setup;
