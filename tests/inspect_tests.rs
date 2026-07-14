@@ -264,6 +264,27 @@ fn status_data_is_deterministic_and_contains_no_paths() {
 }
 
 #[test]
+fn status_omits_invalid_filesystem_docset_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+    cache::ensure_layout().unwrap();
+
+    // Filesystem entries are untrusted input: only names accepted by the
+    // established docset validator may reach agent-facing status output.
+    std::fs::create_dir_all(cache::db_path("safe-docset")).unwrap();
+    std::fs::create_dir_all(cache::cache_root().join("db/.lance")).unwrap();
+    std::fs::create_dir_all(cache::cache_root().join("db/unsafe\ninstruction.lance")).unwrap();
+
+    let data = collect_status();
+    let names: Vec<&str> = data
+        .docsets
+        .iter()
+        .map(|docset| docset.name.as_str())
+        .collect();
+    assert_eq!(names, ["safe-docset"]);
+}
+
+#[test]
 fn status_automation_observation_is_read_only_and_does_not_follow_symlinks() {
     let tmp = tempfile::tempdir().unwrap();
     let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());

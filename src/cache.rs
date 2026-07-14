@@ -394,7 +394,9 @@ pub fn installed_docset_names() -> Vec<String> {
             if is_dir {
                 if let Some(name) = entry.file_name().to_str() {
                     if let Some(stem) = name.strip_suffix(".lance") {
-                        names.push(stem.to_string());
+                        if crate::input::validate_docset(stem).is_ok() {
+                            names.push(stem.to_string());
+                        }
                     }
                 }
             }
