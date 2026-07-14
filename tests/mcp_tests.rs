@@ -83,7 +83,7 @@ fn initialize_returns_2025_11_25() {
     });
     let resp = s.round_trip(&req);
     let result = resp.get("result").expect("initialize must return result");
-    assert_eq!(result["protocolVersion"], "2025-11-25");
+    assert_eq!(result["protocolVersion"], nowdocs::mcp::PROTOCOL_VERSION);
     assert_eq!(result["capabilities"]["tools"]["listChanged"], false);
     assert_eq!(result["serverInfo"]["name"], "nowdocs");
 }

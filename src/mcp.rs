@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 
 use crate::{cache, embedder, tools};
 
-const PROTOCOL_VERSION: &str = "2025-11-25";
+pub const PROTOCOL_VERSION: &str = "2025-11-25";
 const SERVER_NAME: &str = "nowdocs";
 
 /// JSON-RPC error codes.

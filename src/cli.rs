@@ -15,6 +15,12 @@ pub struct Cli {
 pub enum Commands {
     /// Start the MCP stdio server (no host/port — stdio binds no port)
     Serve,
+    /// Report agent-automation capabilities (read-only, offline-safe)
+    Capabilities {
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
     /// Install a pre-built doc crate from the registry
     Install { docset: String },
     /// Import a Markdown directory as a local docset

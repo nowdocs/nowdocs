@@ -19,6 +19,7 @@ fn test_cli_help_lists_all_subcommands() {
         "smoke",
         "doctor",
         "cache",
+        "capabilities",
     ] {
         assert!(stdout.contains(sub), "help must list `{}`", sub);
     }
@@ -409,5 +410,198 @@ fn test_cli_ingest_then_list() {
     assert!(
         stdout.contains("rnd-ing-5566"),
         "list-installed must contain ingested docset name, got: {stdout}"
+    );
+}
+
+// ---- C1: agent contract — capabilities command ----
+//
+// These tests run the binary with per-test temporary HOME, XDG cache,
+// XDG config, and working directories so they never touch real user
+// configuration. Deliberately unusable proxy variables make any accidental
+// network attempt fail fast instead of reaching the network.
+
+fn run_nowdocs_isolated(root: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_nowdocs"))
+        .args(args)
+        .current_dir(root)
+        .env("HOME", root)
+        .env("XDG_CACHE_HOME", root)
+        .env("XDG_CONFIG_HOME", root)
+        .env("XDG_DATA_HOME", root)
+        .env("NOWDOCS_TEST_URL", "") // reset for tests that don't use it
+        .env("http_proxy", "http://127.0.0.1:9")
+        .env("https_proxy", "http://127.0.0.1:9")
+        .env("HTTP_PROXY", "http://127.0.0.1:9")
+        .env("HTTPS_PROXY", "http://127.0.0.1:9")
+        .env("ALL_PROXY", "http://127.0.0.1:9")
+        .env("no_proxy", "")
+        .env("NO_PROXY", "")
+        .output()
+        .expect("failed to execute nowdocs")
+}
+
+#[test]
+fn test_capabilities_json_uses_agent_envelope() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["capabilities", "--json"]);
+    assert!(
+        out.status.success(),
+        "capabilities --json should exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "stderr must be empty on success, got: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // stdout parses as exactly one JSON value (from_slice rejects trailing data).
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout must be one JSON document");
+    assert_eq!(v["schema_version"], 1);
+    assert_eq!(v["nowdocs_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(v["command"], "capabilities");
+    assert_eq!(v["status"], "ok");
+    assert_eq!(v["code"], "ready");
+    assert!(
+        v["summary"].as_str().is_some_and(|s| !s.is_empty()),
+        "summary must be a non-empty English string"
+    );
+    assert_eq!(v["next_actions"], serde_json::json!([]));
+    assert!(v["rollback"].is_null());
+
+    let data = &v["data"];
+    assert_eq!(data["agent_contract_schema_version"], 1);
+    assert_eq!(data["mcp_protocol_version"], "2025-11-25");
+    assert_eq!(data["transport"], "stdio_ndjson");
+    assert_eq!(
+        data["mcp_tools"],
+        serde_json::json!(["nowdocs_list", "nowdocs_search"])
+    );
+    assert_eq!(data["commands"][0]["id"], "capabilities");
+    assert_eq!(data["commands"][0]["implemented"], true);
+    assert_eq!(
+        data["commands"].as_array().map(Vec::len),
+        Some(8),
+        "eight command declarations in the locked order"
+    );
+    let client_ids: Vec<&str> = data["clients"]
+        .as_array()
+        .expect("clients must be an array")
+        .iter()
+        .map(|c| c["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        client_ids,
+        ["claude-code", "claude-desktop", "cursor", "generic"]
+    );
+    let boundaries = &data["security_boundaries"];
+    assert_eq!(boundaries["mcp_read_only"], true);
+    assert_eq!(boundaries["stdio_only"], true);
+    assert_eq!(boundaries["telemetry"], false);
+    assert_eq!(boundaries["writable_mcp_tools"], false);
+    assert_eq!(boundaries["search_requires_docset"], true);
+}
+
+#[test]
+fn test_capabilities_human_reports_security_boundaries() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["capabilities"]);
+    assert!(
+        out.status.success(),
+        "capabilities should exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("schema version: 1"), "got: {stdout}");
+    assert!(stdout.contains("2025-11-25"), "got: {stdout}");
+    assert!(stdout.contains("stdio"), "got: {stdout}");
+    assert!(stdout.contains("read-only"), "got: {stdout}");
+    assert!(
+        stdout.contains("capabilities: implemented"),
+        "got: {stdout}"
+    );
+    assert!(stdout.contains("status: not implemented"), "got: {stdout}");
+    for client in ["claude-code", "claude-desktop", "cursor", "generic"] {
+        assert!(
+            stdout.contains(client),
+            "human output must list {client}, got: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn test_capabilities_is_offline_and_creates_no_files() {
+    let root = tempfile::tempdir().unwrap();
+    for args in [&["capabilities"][..], &["capabilities", "--json"][..]] {
+        let out = run_nowdocs_isolated(root.path(), args);
+        assert!(
+            out.status.success(),
+            "capabilities {args:?} should exit 0 offline, stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let mut entries = std::fs::read_dir(root.path()).expect("read isolated root");
+    assert!(
+        entries.next().is_none(),
+        "capabilities must create no files or directories under isolated roots"
+    );
+}
+
+#[test]
+fn test_legacy_doctor_json_is_not_agent_enveloped() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["doctor", "--json"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("doctor --json must emit one JSON document: {e}; got: {stdout}")
+    });
+    assert!(
+        v.get("schema_version").is_none(),
+        "legacy doctor JSON must not gain schema_version"
+    );
+    assert!(
+        v.get("command").is_none(),
+        "legacy doctor JSON must not gain command"
+    );
+    assert!(
+        v.get("next_actions").is_none(),
+        "legacy doctor JSON must not gain next_actions"
+    );
+    assert!(
+        v.get("status").is_some(),
+        "legacy doctor status field must remain"
+    );
+    assert!(
+        v.get("checks").is_some(),
+        "legacy doctor checks field must remain"
+    );
+}
+
+#[test]
+fn test_legacy_cache_status_json_is_not_agent_enveloped() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["cache", "status", "--json"]);
+    assert!(
+        out.status.success(),
+        "cache status --json should exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .expect("cache status --json must emit one JSON document");
+    assert!(
+        v.get("schema_version").is_none(),
+        "legacy cache status JSON must not gain schema_version"
+    );
+    assert!(
+        v.get("command").is_none(),
+        "legacy cache status JSON must not gain command"
+    );
+    assert!(
+        v.get("next_actions").is_none(),
+        "legacy cache status JSON must not gain next_actions"
+    );
+    assert!(
+        v.get("cache_root").is_some(),
+        "legacy cache_root field must remain"
     );
 }
