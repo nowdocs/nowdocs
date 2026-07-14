@@ -171,10 +171,10 @@ pub fn ensure_apply(docset: &str, plan_id: &str, now_unix_secs: u64) -> Result<E
 
     // Verify the result.
     let final_state = cache::check_docset_state(&docset);
-    if final_state != InstalledDocsetState::Healthy {
+    if final_state != InstalledDocsetState::Healthy || !is_already_satisfied(&docset, &package) {
         anyhow::bail!(
-            "VERIFICATION_FAILED: docset {docset} is not healthy after apply: {}",
-            final_state.label()
+            "VERIFICATION_FAILED: docset {docset} does not match the planned package after apply: {}",
+            final_state.label(),
         );
     }
 

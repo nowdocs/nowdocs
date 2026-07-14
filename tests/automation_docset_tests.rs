@@ -456,6 +456,46 @@ fn apply_plan_installs_docset_exactly() {
     );
 }
 
+#[test]
+fn apply_refuses_archive_whose_installed_version_differs_from_the_plan() {
+    let root = tempfile::tempdir().unwrap();
+    let _guards = isolate(root.path());
+
+    // The trusted index says 14.2.5, but its SHA points at an archive whose
+    // manifest declares 15.0.0. Apply must not claim the requested version was
+    // ensured merely because the archive itself is structurally healthy.
+    let archive_path = root.path().join("nextjs-mismatched.lance.tar");
+    let archive = make_release_archive("nextjs", "15.0.0");
+    std::fs::write(&archive_path, &archive).unwrap();
+    let package = RegistryPackage {
+        docset: "nextjs".to_string(),
+        version: "14.2.5".to_string(),
+        license: "MIT".to_string(),
+        chunk_count: 2,
+        freshness: "2026-07-07".to_string(),
+        download_url: format!("file://{}", archive_path.display()),
+        sha256: archive_sha256(&archive),
+        description: None,
+    };
+    let index_path = root.path().join("index.json");
+    std::fs::write(&index_path, make_index_json(&package)).unwrap();
+    std::env::set_var(
+        "NOWDOCS_REGISTRY_INDEX_URL",
+        format!("file://{}", index_path.display()),
+    );
+
+    let plan_id = match ensure_plan("nextjs", true, 1_000_000_000).unwrap() {
+        EnsurePlanResult::PlanCreated { plan_id, .. } => plan_id,
+        other => panic!("expected PlanCreated, got: {other:?}"),
+    };
+
+    let err = ensure_apply("nextjs", &plan_id, 1_000_000_001).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("VERIFICATION_FAILED"),
+        "a manifest/index version mismatch must not report apply success: {err:#}"
+    );
+}
+
 // ---- RED tests: stale/tampered/expired plan refusal ----
 
 #[test]
