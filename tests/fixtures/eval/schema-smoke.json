@@ -1,0 +1,55 @@
+[
+  {
+    "id": "nextjs-dev-001",
+    "docset": "nextjs",
+    "query": "how do I configure proxy matcher rewrites",
+    "split": "development",
+    "intent_family": "proxy_config",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+        "heading_path_prefix": "Exports > Matcher",
+        "grade": 2
+      },
+      {
+        "source_url": "01-app/03-api-reference/05-config/01-next-config-js/rewrites.md",
+        "grade": 1
+      }
+    ]
+  },
+  {
+    "id": "nextjs-test-001",
+    "docset": "nextjs",
+    "query": "server components vs client components use client directive",
+    "split": "test",
+    "intent_family": "rsc_model",
+    "query_form": "keyword_heavy",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "01-app/01-getting-started/05-server-and-client-components.md",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "nextjs-dev-neg-001",
+    "docset": "nextjs",
+    "query": "react class component lifecycle methods getDerivedStateFromProps",
+    "split": "development",
+    "intent_family": "adjacent_react_legacy",
+    "query_form": "verbose",
+    "query_class": "near_domain_negative"
+  },
+  {
+    "id": "nextjs-dev-neg-002",
+    "docset": "nextjs",
+    "query": "vue composition api",
+    "split": "development",
+    "intent_family": "cross_framework",
+    "query_form": "short",
+    "query_class": "cross_domain_negative"
+  }
+]
