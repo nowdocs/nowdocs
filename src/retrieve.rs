@@ -536,8 +536,12 @@ pub fn rank_and_gate_candidates(
             .collect::<Vec<TraceHit>>()
     });
     let pre_mmr_top_cosines = fused_trace.as_ref().map(|fused| {
-        let mut cosines: Vec<f32> = fused.iter().filter_map(|t| t.cosine).collect();
-        cosines.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        let mut cosines: Vec<f32> = fused
+            .iter()
+            .filter_map(|t| t.cosine)
+            .filter(|cosine| cosine.is_finite())
+            .collect();
+        cosines.sort_by(|a, b| b.total_cmp(a));
         cosines
     });
 

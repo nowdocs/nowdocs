@@ -666,3 +666,22 @@ fn trace_pre_mmr_cosines_come_from_fused_pool_not_mmr_order() {
         .iter()
         .all(|t| t.dense_rank.is_none() && t.lexical_rank.is_none()));
 }
+
+#[test]
+fn trace_pre_mmr_cosines_omit_non_finite_values() {
+    let hits = vec![hit_url(0, "valid.md", 0.030), hit_url(1, "nan.md", 0.029)];
+    let vectors = vecs(&[(0, vec_with_cosine(0.90)), (1, vec![f32::NAN, 1.0])]);
+
+    let result = rank_and_gate_candidates(&qv(), hits, &vectors, 2, true);
+    let trace = result.trace.expect("trace enabled");
+
+    assert_eq!(trace.pre_mmr_top_cosines.len(), 1);
+    assert!(trace
+        .pre_mmr_top_cosines
+        .iter()
+        .all(|cosine| cosine.is_finite()));
+    assert!(trace
+        .pre_mmr_top_cosines
+        .windows(2)
+        .all(|pair| pair[0].total_cmp(&pair[1]).is_ge()));
+}
