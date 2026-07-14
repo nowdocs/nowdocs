@@ -1,0 +1,945 @@
+[
+  {
+    "id": "vue.ref.test",
+    "docset": "vue",
+    "query": "create a Vue ref",
+    "split": "test",
+    "intent_family": "ref",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/reactivity-core.md",
+        "heading_path_prefix": "Reactivity API: Core > ref()",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.reactive.test",
+    "docset": "vue",
+    "query": "create a Vue reactive object",
+    "split": "test",
+    "intent_family": "reactive",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/reactivity-core.md",
+        "heading_path_prefix": "Reactivity API: Core > reactive()",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.computed.test",
+    "docset": "vue",
+    "query": "create a Vue computed value",
+    "split": "test",
+    "intent_family": "computed",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/reactivity-core.md",
+        "heading_path_prefix": "Reactivity API: Core > computed()",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.watch.test",
+    "docset": "vue",
+    "query": "watch a Vue reactive source",
+    "split": "test",
+    "intent_family": "watch",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/reactivity-core.md",
+        "heading_path_prefix": "Reactivity API: Core > watch()",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.watch-effect.test",
+    "docset": "vue",
+    "query": "use watchEffect in Vue",
+    "split": "test",
+    "intent_family": "watch-effect",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/reactivity-core.md",
+        "heading_path_prefix": "Reactivity API: Core > watchEffect()",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.provide.test",
+    "docset": "vue",
+    "query": "provide a value with the Vue Composition API",
+    "split": "test",
+    "intent_family": "provide",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/composition-api-dependency-injection.md",
+        "heading_path_prefix": "Composition API: Dependency Injection > provide()",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.inject.test",
+    "docset": "vue",
+    "query": "inject a value with the Vue Composition API",
+    "split": "test",
+    "intent_family": "inject",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/composition-api-dependency-injection.md",
+        "heading_path_prefix": "Composition API: Dependency Injection > inject()",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.on-mounted.test",
+    "docset": "vue",
+    "query": "run code when a Vue component mounts",
+    "split": "test",
+    "intent_family": "on-mounted",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/composition-api-lifecycle.md",
+        "heading_path_prefix": "Composition API: Lifecycle Hooks > onMounted()",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.setup-props.test",
+    "docset": "vue",
+    "query": "access props inside Vue setup",
+    "split": "test",
+    "intent_family": "setup-props",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/composition-api-setup.md",
+        "heading_path_prefix": "Composition API: setup() > Accessing Props {#accessing-props}",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.define-props-emits.test",
+    "docset": "vue",
+    "query": "define props and emits in script setup",
+    "split": "test",
+    "intent_family": "define-props-emits",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/sfc-script-setup.md",
+        "heading_path_prefix": "\\<script setup> {#script-setup} > defineProps() & defineEmits()",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.v-model.test",
+    "docset": "vue",
+    "query": "use v-model in a Vue template",
+    "split": "test",
+    "intent_family": "v-model",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/built-in-directives.md",
+        "heading_path_prefix": "Built-in Directives > v-model",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.v-for.test",
+    "docset": "vue",
+    "query": "render a Vue list with v-for",
+    "split": "test",
+    "intent_family": "v-for",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/built-in-directives.md",
+        "heading_path_prefix": "Built-in Directives > v-for",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.v-if.test",
+    "docset": "vue",
+    "query": "conditionally render with v-if",
+    "split": "test",
+    "intent_family": "v-if",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/built-in-directives.md",
+        "heading_path_prefix": "Built-in Directives > v-if",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.teleport.test",
+    "docset": "vue",
+    "query": "render Vue content with Teleport",
+    "split": "test",
+    "intent_family": "teleport",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/built-in-components.md",
+        "heading_path_prefix": "Built-in Components > `<Teleport>`",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.keep-alive.test",
+    "docset": "vue",
+    "query": "cache a Vue component with KeepAlive",
+    "split": "test",
+    "intent_family": "keep-alive",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/built-in-components.md",
+        "heading_path_prefix": "Built-in Components > `<KeepAlive>`",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.transition.test",
+    "docset": "vue",
+    "query": "animate a Vue component with Transition",
+    "split": "test",
+    "intent_family": "transition",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/built-in-components.md",
+        "heading_path_prefix": "Built-in Components > `<Transition>`",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.component-emit.test",
+    "docset": "vue",
+    "query": "emit an event from a Vue component",
+    "split": "test",
+    "intent_family": "component-emit",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/component-instance.md",
+        "heading_path_prefix": "Component Instance > $emit()",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.component-next-tick.test",
+    "docset": "vue",
+    "query": "wait for DOM updates with Vue nextTick",
+    "split": "test",
+    "intent_family": "component-next-tick",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/component-instance.md",
+        "heading_path_prefix": "Component Instance > $nextTick()",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.define-component.test",
+    "docset": "vue",
+    "query": "define a Vue component",
+    "split": "test",
+    "intent_family": "define-component",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/general.md",
+        "heading_path_prefix": "Global API: General > defineComponent()",
+        "grade": 2
+      }
+    ]
+  },
+  {
+    "id": "vue.custom-ref.test",
+    "docset": "vue",
+    "query": "create a custom Vue ref",
+    "split": "test",
+    "intent_family": "custom-ref",
+    "query_form": "natural_language",
+    "query_class": "positive",
+    "targets": [
+      {
+        "source_url": "api/reactivity-advanced.md",
+        "heading_path_prefix": "Reactivity API: Advanced > customRef()",
+        "grade": 2
+      }
+    ]
+  }
+,
+{
+  "id": "vue.react-hooks.test",
+  "docset": "vue",
+  "query": "React useEffect cleanup",
+  "split": "test",
+  "intent_family": "react-hooks",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.next-routing.test",
+  "docset": "vue",
+  "query": "Next.js App Router dynamic segment",
+  "split": "test",
+  "intent_family": "next-routing",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.svelte-stores.test",
+  "docset": "vue",
+  "query": "Svelte writable store",
+  "split": "test",
+  "intent_family": "svelte-stores",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.angular-services.test",
+  "docset": "vue",
+  "query": "Angular injectable service",
+  "split": "test",
+  "intent_family": "angular-services",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.solid-effects.test",
+  "docset": "vue",
+  "query": "SolidJS createEffect",
+  "split": "test",
+  "intent_family": "solid-effects",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.nuxt-modules.test",
+  "docset": "vue",
+  "query": "Nuxt module configuration",
+  "split": "test",
+  "intent_family": "nuxt-modules",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.remix-actions.test",
+  "docset": "vue",
+  "query": "Remix action form submission",
+  "split": "test",
+  "intent_family": "remix-actions",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.astro-content.test",
+  "docset": "vue",
+  "query": "Astro content collection",
+  "split": "test",
+  "intent_family": "astro-content",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.postgres-json.test",
+  "docset": "vue",
+  "query": "PostgreSQL JSONB index operator",
+  "split": "test",
+  "intent_family": "postgres-json",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.kubernetes-pod.test",
+  "docset": "vue",
+  "query": "Kubernetes pod resource limits",
+  "split": "test",
+  "intent_family": "kubernetes-pod",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.terraform-module.test",
+  "docset": "vue",
+  "query": "Terraform module output variables",
+  "split": "test",
+  "intent_family": "terraform-module",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.python-typing.test",
+  "docset": "vue",
+  "query": "Python type hint protocol",
+  "split": "test",
+  "intent_family": "python-typing",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.aws-lambda.test",
+  "docset": "vue",
+  "query": "AWS Lambda cold start",
+  "split": "test",
+  "intent_family": "aws-lambda",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.docker-volume.test",
+  "docset": "vue",
+  "query": "Docker named volume mount",
+  "split": "test",
+  "intent_family": "docker-volume",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.excel-formula.test",
+  "docset": "vue",
+  "query": "Excel XLOOKUP formula",
+  "split": "test",
+  "intent_family": "excel-formula",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+}
+,
+{
+  "id": "vue.readonly.development",
+  "docset": "vue",
+  "query": "create a readonly Vue reactive value",
+  "split": "development",
+  "intent_family": "readonly",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/reactivity-core.md",
+      "heading_path_prefix": "Reactivity API: Core > readonly()",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.shallow-reactive.development",
+  "docset": "vue",
+  "query": "create a shallowReactive object",
+  "split": "development",
+  "intent_family": "shallow-reactive",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/reactivity-advanced.md",
+      "heading_path_prefix": "Reactivity API: Advanced > shallowReactive()",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.shallow-ref.development",
+  "docset": "vue",
+  "query": "create a shallowRef",
+  "split": "development",
+  "intent_family": "shallow-ref",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/reactivity-advanced.md",
+      "heading_path_prefix": "Reactivity API: Advanced > shallowRef()",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.to-refs.development",
+  "docset": "vue",
+  "query": "convert a Vue reactive object to refs",
+  "split": "development",
+  "intent_family": "to-refs",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/reactivity-utilities.md",
+      "heading_path_prefix": "Reactivity API: Utilities > toRefs()",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.effect-scope.development",
+  "docset": "vue",
+  "query": "create a Vue effect scope",
+  "split": "development",
+  "intent_family": "effect-scope",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/reactivity-advanced.md",
+      "heading_path_prefix": "Reactivity API: Advanced > effectScope()",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.scope-dispose.development",
+  "docset": "vue",
+  "query": "dispose a Vue effect scope",
+  "split": "development",
+  "intent_family": "scope-dispose",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/reactivity-advanced.md",
+      "heading_path_prefix": "Reactivity API: Advanced > onScopeDispose()",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.use-template-ref.development",
+  "docset": "vue",
+  "query": "get a template ref with useTemplateRef",
+  "split": "development",
+  "intent_family": "use-template-ref",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/composition-api-helpers.md",
+      "heading_path_prefix": "Composition API: Helpers > useTemplateRef() <sup class=\"vt-badge\" data-text=\"3.5+\" /> {#usetemplateref}",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.use-slots.development",
+  "docset": "vue",
+  "query": "access slots with useSlots",
+  "split": "development",
+  "intent_family": "use-slots",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/composition-api-helpers.md",
+        "heading_path_prefix": "Composition API: Helpers > useSlots() {#useslots}",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.define-model.development",
+  "docset": "vue",
+  "query": "define a model in Vue script setup",
+  "split": "development",
+  "intent_family": "define-model",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/sfc-script-setup.md",
+      "heading_path_prefix": "\\<script setup> {#script-setup} > defineModel() {#definemodel} > Modifiers and Transformers",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.v-show.development",
+  "docset": "vue",
+  "query": "toggle Vue visibility with v-show",
+  "split": "development",
+  "intent_family": "v-show",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/built-in-directives.md",
+      "heading_path_prefix": "Built-in Directives > v-show",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.v-bind.development",
+  "docset": "vue",
+  "query": "bind an attribute in Vue",
+  "split": "development",
+  "intent_family": "v-bind",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/built-in-directives.md",
+      "heading_path_prefix": "Built-in Directives > v-bind",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.v-on.development",
+  "docset": "vue",
+  "query": "listen for an event in Vue",
+  "split": "development",
+  "intent_family": "v-on",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/built-in-directives.md",
+      "heading_path_prefix": "Built-in Directives > v-on",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.v-html.development",
+  "docset": "vue",
+  "query": "render raw HTML with v-html",
+  "split": "development",
+  "intent_family": "v-html",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/built-in-directives.md",
+      "heading_path_prefix": "Built-in Directives > v-html",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.suspense.development",
+  "docset": "vue",
+  "query": "use Vue Suspense",
+  "split": "development",
+  "intent_family": "suspense",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/built-in-components.md",
+      "heading_path_prefix": "Built-in Components > `<Suspense>`",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.transition-group.development",
+  "docset": "vue",
+  "query": "animate a Vue list with TransitionGroup",
+  "split": "development",
+  "intent_family": "transition-group",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/built-in-components.md",
+      "heading_path_prefix": "Built-in Components > `<TransitionGroup>`",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.app-provide.development",
+  "docset": "vue",
+  "query": "provide a value from a Vue app",
+  "split": "development",
+  "intent_family": "app-provide",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/application.md",
+      "heading_path_prefix": "Application API > app.provide()",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.app-directive.development",
+  "docset": "vue",
+  "query": "register a Vue custom directive",
+  "split": "development",
+  "intent_family": "app-directive",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/application.md",
+      "heading_path_prefix": "Application API > app.directive()",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.options-data.development",
+  "docset": "vue",
+  "query": "define data in the Vue Options API",
+  "split": "development",
+  "intent_family": "options-data",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/options-state.md",
+      "heading_path_prefix": "Options: State > data",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.options-computed.development",
+  "docset": "vue",
+  "query": "define a computed option in Vue",
+  "split": "development",
+  "intent_family": "options-computed",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/options-state.md",
+      "heading_path_prefix": "Options: State > computed",
+      "grade": 2
+    }
+  ]
+},
+{
+  "id": "vue.async-component.development",
+  "docset": "vue",
+  "query": "define an async Vue component",
+  "split": "development",
+  "intent_family": "async-component",
+  "query_form": "natural_language",
+  "query_class": "positive",
+  "targets": [
+    {
+      "source_url": "api/general.md",
+      "heading_path_prefix": "Global API: General > defineAsyncComponent()",
+      "grade": 2
+    }
+  ]
+}
+,
+{
+  "id": "vue.react-context.development",
+  "docset": "vue",
+  "query": "React context provider consumer",
+  "split": "development",
+  "intent_family": "react-context",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.next-metadata.development",
+  "docset": "vue",
+  "query": "Next.js generateMetadata API",
+  "split": "development",
+  "intent_family": "next-metadata",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.svelte-transitions.development",
+  "docset": "vue",
+  "query": "Svelte transition directive",
+  "split": "development",
+  "intent_family": "svelte-transitions",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.angular-forms.development",
+  "docset": "vue",
+  "query": "Angular reactive form control",
+  "split": "development",
+  "intent_family": "angular-forms",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.solid-store.development",
+  "docset": "vue",
+  "query": "SolidJS createStore",
+  "split": "development",
+  "intent_family": "solid-store",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.nuxt-pages.development",
+  "docset": "vue",
+  "query": "Nuxt file-based pages",
+  "split": "development",
+  "intent_family": "nuxt-pages",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.remix-loader.development",
+  "docset": "vue",
+  "query": "Remix route loader",
+  "split": "development",
+  "intent_family": "remix-loader",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.astro-view-transitions.development",
+  "docset": "vue",
+  "query": "Astro view transitions",
+  "split": "development",
+  "intent_family": "astro-view-transitions",
+  "query_form": "short",
+  "query_class": "near_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.postgres-window.development",
+  "docset": "vue",
+  "query": "PostgreSQL window function rank",
+  "split": "development",
+  "intent_family": "postgres-window",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.kubernetes-service.development",
+  "docset": "vue",
+  "query": "Kubernetes Service cluster IP",
+  "split": "development",
+  "intent_family": "kubernetes-service",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.terraform-workspace.development",
+  "docset": "vue",
+  "query": "Terraform workspace selection",
+  "split": "development",
+  "intent_family": "terraform-workspace",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.python-generator.development",
+  "docset": "vue",
+  "query": "Python generator yield from",
+  "split": "development",
+  "intent_family": "python-generator",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.aws-cloudwatch.development",
+  "docset": "vue",
+  "query": "AWS CloudWatch metric alarm",
+  "split": "development",
+  "intent_family": "aws-cloudwatch",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.docker-build.development",
+  "docset": "vue",
+  "query": "Docker multi-stage build",
+  "split": "development",
+  "intent_family": "docker-build",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+},
+{
+  "id": "vue.excel-conditional.development",
+  "docset": "vue",
+  "query": "Excel conditional formatting rule",
+  "split": "development",
+  "intent_family": "excel-conditional",
+  "query_form": "short",
+  "query_class": "cross_domain_negative",
+  "targets": []
+}
+]

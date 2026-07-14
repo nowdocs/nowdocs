@@ -520,6 +520,11 @@ pub const BINARY_GATE_POLICY_ID: &str = "binary-current-gate-v1";
 const STAGE_K_40: usize = 40;
 /// MMR-selection and final-output stage cutoff, matching production `top_k`.
 const STAGE_K_5: usize = 5;
+/// Largest supported number of measured retrieval repetitions per query.
+///
+/// This keeps the evaluator from allocating an attacker-controlled amount of
+/// memory or accidentally scheduling an impractical number of full searches.
+const MAX_BENCHMARK_RUNS: u32 = 1_000;
 
 /// RRF fusion constant used by `Store::hybrid_search` (its default). Restated
 /// here only to record the evaluated retrieval parameters in the report.
@@ -608,7 +613,8 @@ pub struct RetrievalParameters {
 pub struct CorpusIdentity {
     pub docset: String,
     pub code_commit: String,
-    /// Reproducible evaluator invocation metadata, without query or chunk text.
+    /// Evaluator invocation summary, without query or chunk text. Full
+    /// retrieval settings are recorded separately in [`RetrievalParameters`].
     pub command: String,
     pub parameters: RetrievalParameters,
     pub os: String,
@@ -759,6 +765,11 @@ fn parse_benchmark_runs(raw: &str) -> Result<u32, String> {
     if runs == 0 {
         return Err("--benchmark-runs must be a positive integer, got 0".to_string());
     }
+    if runs > MAX_BENCHMARK_RUNS {
+        return Err(format!(
+            "--benchmark-runs must be at most {MAX_BENCHMARK_RUNS}, got {runs}"
+        ));
+    }
     Ok(runs)
 }
 
@@ -792,6 +803,23 @@ pub struct EvalRunOutcome {
     pub latency: Option<LatencySummary>,
 }
 
+/// Load a single JSON file as an array of [`EvalQuery`] records and validate
+/// it with [`validate_suite`]. Returns contextual errors that name the path.
+pub fn load_eval_file(path: impl AsRef<Path>) -> Result<Vec<EvalQuery>> {
+    let path = path.as_ref();
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read eval file {}", path.display()))?;
+    let records: Vec<EvalQuery> = serde_json::from_str(&raw).with_context(|| {
+        format!(
+            "{} is not a JSON array of EvalQuery records",
+            path.display()
+        )
+    })?;
+    validate_suite(&records)
+        .with_context(|| format!("eval suite validation failed for {}", path.display()))?;
+    Ok(records)
+}
+
 /// Load every `*.json` file in `dir` as an array of [`EvalQuery`] records,
 /// concatenate them in sorted file order, and validate the combined suite.
 /// Callers must run this before opening any embedder or store.
@@ -816,14 +844,7 @@ pub fn load_fixture_suite(dir: &Path) -> Result<Vec<EvalQuery>> {
 
     let mut suite = Vec::new();
     for file in files {
-        let raw = std::fs::read_to_string(&file)
-            .with_context(|| format!("failed to read fixture file {}", file.display()))?;
-        let mut records: Vec<EvalQuery> = serde_json::from_str(&raw).with_context(|| {
-            format!(
-                "{} is not a JSON array of EvalQuery records",
-                file.display()
-            )
-        })?;
+        let mut records = load_eval_file(&file)?;
         suite.append(&mut records);
     }
     validate_suite(&suite).context("eval fixture suite validation failed")?;
