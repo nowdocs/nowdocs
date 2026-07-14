@@ -189,9 +189,11 @@ pub fn acquire_operation_lock(operation_id: &str) -> Result<OperationLock> {
 /// Truncate and write non-sensitive advisory metadata (operation id + PID)
 /// to the lock file. Advisory only; never secrets or full configuration.
 fn write_metadata(file: &File, operation_id: &str) -> Result<()> {
-    use std::io::Write;
+    use std::io::{Seek, Write};
     // Set length to 0 (truncate) then write the new metadata.
     file.set_len(0).with_context(|| "truncate operation lock")?;
+    let mut handle: &File = file;
+    handle.rewind().with_context(|| "rewind operation lock")?;
     let pid = std::process::id();
     let mut buf = String::new();
     buf.push_str("operation_id=");
@@ -202,7 +204,6 @@ fn write_metadata(file: &File, operation_id: &str) -> Result<()> {
     buf.push('\n');
     // `Write` is implemented for `&File`; bind mutably so the trait method
     // can take `&mut self` (`&mut &File`).
-    let mut handle: &File = file;
     handle
         .write_all(buf.as_bytes())
         .with_context(|| "write operation lock metadata")?;

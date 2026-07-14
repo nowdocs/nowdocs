@@ -37,6 +37,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - name: Test DCO merge-commit handling
+        run: bash tests/ci-check-dco-tests.sh
       - name: Check DCO sign-off on all PR commits
         run: bash scripts/ci-check-dco.sh ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
 

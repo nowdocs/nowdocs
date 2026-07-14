@@ -452,7 +452,7 @@ pub fn ensure_automation_root() -> Result<()> {
 /// component (C3-R1).
 #[cfg(unix)]
 fn ensure_private_dir(dir: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::DirBuilderExt;
 
     // Collect the chain of ancestors that need to exist, from the highest
     // (closest to root) to the target itself.
@@ -496,12 +496,10 @@ fn ensure_private_dir(dir: &Path) -> Result<()> {
     // next ensure_private_dir call's stat check. The final file-level I/O uses
     // O_NOFOLLOW to close the residual TOCTOU window for files.
     for component in chain.into_iter().rev() {
-        std::fs::create_dir(&component)
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&component)
             .with_context(|| format!("create automation directory {}", component.display()))?;
-        // Repair only newly created directories to 0700. Existing directories
-        // (verified above) are never chmoded.
-        std::fs::set_permissions(&component, std::fs::Permissions::from_mode(0o700))
-            .with_context(|| format!("chmod 0700 {}", component.display()))?;
     }
 
     Ok(())
@@ -605,6 +603,21 @@ fn open_nofollow_create_new(path: &Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
+/// Restrict a newly created plan through its already-open descriptor. Using
+/// `fchmod` avoids a path-based chmod race if the pathname is replaced after
+/// `create_new` succeeds.
+#[cfg(unix)]
+fn set_owner_only(file: &std::fs::File, path: &Path) -> Result<()> {
+    use std::os::unix::io::AsRawFd;
+
+    let rc = unsafe { libc::fchmod(file.as_raw_fd(), 0o600) };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("fchmod 0600 {}", path.display()));
+    }
+    Ok(())
+}
+
 #[cfg(not(unix))]
 fn open_nofollow_create_new(path: &Path) -> std::io::Result<std::fs::File> {
     Err(std::io::Error::other(format!(
@@ -635,9 +648,7 @@ pub fn store_plan(plan: &AutomationPlan) -> Result<String> {
                 .with_context(|| format!("flush {}", path.display()))?;
             #[cfg(unix)]
             {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-                    .with_context(|| format!("chmod 0600 {}", path.display()))?;
+                set_owner_only(&f, &path)?;
             }
             Ok(id)
         }
@@ -741,6 +752,57 @@ pub fn load_plan(plan_id_str: &str, now_unix_secs: u64) -> Result<AutomationPlan
     }
 
     Ok(normalized)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::set_owner_only;
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// Regression for C3-R2: plan-file permissions must be applied through the
+    /// already-open descriptor, not through a pathname an attacker can replace.
+    #[test]
+    fn owner_only_permissions_target_open_file_not_replaced_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("plan.json");
+        let moved = dir.path().join("opened-plan.json");
+
+        std::fs::write(&path, b"original").expect("write original");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("set original mode");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open original");
+
+        std::fs::rename(&path, &moved).expect("move opened file");
+        std::fs::write(&path, b"replacement").expect("write replacement");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("set replacement mode");
+
+        set_owner_only(&file, &path).expect("chmod opened descriptor");
+
+        assert_eq!(
+            std::fs::metadata(&moved)
+                .expect("opened metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600,
+            "the opened file must become owner-only"
+        );
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("replacement metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o644,
+            "a replacement at the old pathname must not be chmoded"
+        );
+    }
 }
 
 // Keep agent_contract import for potential future use by C4+.

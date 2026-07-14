@@ -1,7 +1,7 @@
 //! Registry lifecycle: install / share / update / uninstall docsets.
 
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -818,6 +818,8 @@ fn acquire_install_lock(docset: &str) -> Result<InstallLock> {
             // Advisory only; never secrets or full configuration. Truncate then
             // rewrite while the OS lock is held.
             let _ = file.set_len(0);
+            let mut handle: &File = &file;
+            let _ = handle.rewind();
             let pid = std::process::id();
             let mut buf = String::new();
             buf.push_str("docset=");
@@ -826,8 +828,8 @@ fn acquire_install_lock(docset: &str) -> Result<InstallLock> {
             buf.push_str("pid=");
             buf.push_str(&pid.to_string());
             buf.push('\n');
-            let _ = (&file).write_all(buf.as_bytes());
-            let _ = (&file).flush();
+            let _ = handle.write_all(buf.as_bytes());
+            let _ = handle.flush();
             Ok(InstallLock { _file: file })
         }
         Err(_contended) => {
