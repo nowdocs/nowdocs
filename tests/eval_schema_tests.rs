@@ -209,7 +209,10 @@ fn validate_suite_rejects_empty_fields() {
         },
     ];
     for q in cases {
-        assert!(validate_suite(&[q.clone()]).is_err(), "rejected: {q:?}");
+        assert!(
+            validate_suite(std::slice::from_ref(&q)).is_err(),
+            "rejected: {q:?}"
+        );
     }
 }
 
