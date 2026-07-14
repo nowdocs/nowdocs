@@ -120,6 +120,36 @@ fn config_io_refuses_symlinked_target() {
 }
 
 #[test]
+fn config_io_refuses_symlinked_parent_component_for_reads_and_writes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = tmp_cache_guard(&tmp);
+    let root = approved_root(tmp.path()).unwrap();
+
+    let external = tempfile::tempdir().unwrap();
+    let external_target = external.path().join("config.json");
+    std::fs::write(&external_target, b"outside").unwrap();
+
+    let linked_parent = tmp.path().join("linked");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(external.path(), &linked_parent).unwrap();
+    #[cfg(not(unix))]
+    {
+        return;
+    }
+
+    let target = safe_target(&root, "linked/config.json").unwrap();
+    assert!(
+        read_target(&target).is_err(),
+        "a symlinked parent directory must not be traversed for reads"
+    );
+    assert!(
+        atomic_replace(&target, b"must not escape").is_err(),
+        "a symlinked parent directory must not be traversed for writes"
+    );
+    assert_eq!(std::fs::read(&external_target).unwrap(), b"outside");
+}
+
+#[test]
 fn config_io_refuses_nonregular_file() {
     let tmp = tempfile::tempdir().unwrap();
     let _g = tmp_cache_guard(&tmp);

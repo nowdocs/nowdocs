@@ -173,6 +173,7 @@ pub fn compute_digest(bytes: &[u8]) -> String {
 
 /// Read the contents of a safe target via a no-follow open.
 pub fn read_target(target: &SafeTarget) -> Result<Vec<u8>> {
+    ensure_real_parent_components(target)?;
     let path = target.path();
     let mut file = open_nofollow_read(&path).with_context(|| {
         format!(
@@ -190,6 +191,7 @@ pub fn read_target(target: &SafeTarget) -> Result<Vec<u8>> {
 /// Atomically replace a safe target with `content`, verifying the digest after
 /// rename. Returns the SHA-256 hex digest of the written content.
 pub fn atomic_replace(target: &SafeTarget, content: &[u8]) -> Result<String> {
+    ensure_real_parent_components(target)?;
     let path = target.path();
     let expected = compute_digest(content);
 
@@ -213,8 +215,7 @@ pub fn atomic_replace(target: &SafeTarget, content: &[u8]) -> Result<String> {
 
     // Write temp file with restrictive permissions.
     {
-        let mut file = std::fs::File::create(&tmp_path)
-            .with_context(|| format!("create temp file {}", tmp_path.display()))?;
+        let mut file = open_private_temp(&tmp_path)?;
         use std::io::Write;
         file.write_all(content)
             .with_context(|| format!("write temp file {}", tmp_path.display()))?;
@@ -263,6 +264,56 @@ fn timestamp_nanos() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
+}
+
+/// Verify that the approved root and every existing parent component of a
+/// target are real directories. `O_NOFOLLOW` protects only the final component
+/// of an `open(2)` call, so this explicit walk is required before opening a
+/// nested target such as `root/config/file.json`.
+fn ensure_real_parent_components(target: &SafeTarget) -> Result<()> {
+    let mut current = target.approved.root.clone();
+    ensure_real_dir(&current)?;
+
+    let components: Vec<_> = target.relative.components().collect();
+    for component in components.iter().take(components.len().saturating_sub(1)) {
+        current.push(component.as_os_str());
+        ensure_real_dir(&current)?;
+    }
+    Ok(())
+}
+
+fn ensure_real_dir(path: &Path) -> Result<()> {
+    let meta = std::fs::symlink_metadata(path)
+        .with_context(|| format!("stat target parent {}", path.display()))?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        anyhow::bail!(
+            "target parent {} is not a real directory (symlink refused)",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Create a temporary replacement file without following or truncating an
+/// existing path. A collision is refused rather than risking a write through a
+/// pre-created symlink; callers can safely retry the whole operation.
+#[cfg(unix)]
+fn open_private_temp(path: &Path) -> Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .with_context(|| format!("create private temp file {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn open_private_temp(path: &Path) -> Result<std::fs::File> {
+    anyhow::bail!(
+        "unsupported platform for no-follow I/O at {}",
+        path.display()
+    );
 }
 
 /// Open a file for reading with `O_NOFOLLOW` on Unix. On Windows, fail closed.
