@@ -280,11 +280,11 @@ fn capabilities_data_is_deterministically_ordered() {
     assert_eq!(mcp_tools, ["nowdocs_list", "nowdocs_search"]);
 
     // Commands appear in the explicit locked order with per-command
-    // (implemented, read_only, network_access) declarations. Only
-    // `capabilities` is implemented in C1.
+    // (implemented, read_only, network_access) declarations. `capabilities`
+    // (C1) and `status` (C2) are implemented.
     let expected_commands: [(&str, bool, bool, bool); 8] = [
         ("capabilities", true, true, false),
-        ("status", false, true, false),
+        ("status", true, true, false),
         ("setup.plan", false, false, true),
         ("setup.apply", false, false, true),
         ("setup.rollback", false, false, false),
@@ -371,6 +371,19 @@ fn capabilities_matrix_matches_researched_clients() {
     assert!(
         data.clients.iter().all(|c| c.id != "aider"),
         "Aider must not appear as a supported client"
+    );
+}
+
+#[test]
+fn capabilities_mcp_tools_derive_from_single_tool_name_source() {
+    let data = capabilities_data();
+    let expected: Vec<String> = nowdocs::mcp::MCP_TOOL_NAMES
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    assert_eq!(
+        data.mcp_tools, expected,
+        "capabilities mcp_tools must derive from mcp::MCP_TOOL_NAMES (P2 single source)"
     );
 }
 

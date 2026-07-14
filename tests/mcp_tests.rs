@@ -188,6 +188,34 @@ fn tools_call_rejects_invalid_docset() {
     let _ = child.kill();
 }
 
+// C2 (P2 repair): the tools/list handler must emit exactly the tool names
+// from the single mcp::MCP_TOOL_NAMES source of truth.
+#[test]
+fn tools_list_names_equal_mcp_tool_names_constant() {
+    assert_eq!(
+        nowdocs::mcp::MCP_TOOL_NAMES,
+        ["nowdocs_list", "nowdocs_search"],
+        "MCP_TOOL_NAMES must be exactly the two read-only tools in lexical order"
+    );
+    let tools = nowdocs::mcp::handle_tools_list();
+    let mut names: Vec<String> = tools
+        .get("tools")
+        .and_then(|t| t.as_array())
+        .expect("tools array")
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    names.sort();
+    let expected: Vec<String> = nowdocs::mcp::MCP_TOOL_NAMES
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    assert_eq!(
+        names, expected,
+        "tools/list emitted name set must equal MCP_TOOL_NAMES"
+    );
+}
+
 // M4: malformed JSON sent to the MCP server must return JSON-RPC parse error
 // code -32700 (not -32602 / ERR_INVALID_PARAMS).
 #[test]
