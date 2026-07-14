@@ -81,6 +81,7 @@ fn sample_report() -> EvalReportV1 {
         corpora: vec![CorpusIdentity {
             docset: "nextjs".to_string(),
             code_commit: "2539729d317def57fee4e30cb6cea8172f1d02aa".to_string(),
+            command: "retrieval_eval --split development".to_string(),
             parameters: RetrievalParameters {
                 answer_policy: nowdocs::eval::BINARY_GATE_POLICY_ID.to_string(),
                 max_tokens: 4000,
@@ -176,6 +177,11 @@ fn report_v1_serializes_machine_readable_contract() {
     assert!(
         value["answer_states"]["false_reject"].is_object(),
         "answer_states.false_reject must be an object"
+    );
+    assert_eq!(
+        value["corpora"][0]["command"],
+        serde_json::json!("retrieval_eval --split development"),
+        "corpus identity must record the evaluator command"
     );
 
     // The same stage/state structure is emitted per docset, form, and class.

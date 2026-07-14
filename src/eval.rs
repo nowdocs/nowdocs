@@ -608,6 +608,8 @@ pub struct RetrievalParameters {
 pub struct CorpusIdentity {
     pub docset: String,
     pub code_commit: String,
+    /// Reproducible evaluator invocation metadata, without query or chunk text.
+    pub command: String,
     pub parameters: RetrievalParameters,
     pub os: String,
     pub arch: String,
@@ -1160,6 +1162,7 @@ fn corpus_identity(
     Ok(CorpusIdentity {
         docset: docset.to_string(),
         code_commit: config.code_commit.clone(),
+        command: evaluator_command(config),
         parameters: parameters.clone(),
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
@@ -1169,6 +1172,16 @@ fn corpus_identity(
         model_revision: manifest.embedder.model_revision.clone(),
         model_hash: manifest.embedder.model_sha256.clone(),
     })
+}
+
+fn evaluator_command(config: &EvalRunConfig) -> String {
+    format!(
+        "retrieval_eval --fixtures-dir {:?} --split {} --code-commit {} --benchmark-runs {}",
+        config.fixtures_dir,
+        enum_key(&config.split),
+        config.code_commit,
+        config.benchmark_runs,
+    )
 }
 
 fn retrieval_parameters(config: &EvalRunConfig) -> RetrievalParameters {
