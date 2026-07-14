@@ -68,6 +68,16 @@ pub fn staging_root() -> PathBuf {
     cache_root().join("staging")
 }
 
+/// `<cache>/nowdocs/automation` - private root for the agent-automation
+/// subtree (plans, operation lock, journals). Returns the path even if it does
+/// not yet exist; C3's `automation::plan::ensure_automation_root` is the only
+/// initializer and creates `automation/`, `plans/`, and `operations/` only when
+/// a caller explicitly creates or acquires C3 state. This additive subtree
+/// does not change the existing cache layout version (1).
+pub fn automation_root() -> PathBuf {
+    cache_root().join("automation")
+}
+
 /// Check if a path is under the cache root (for security validation).
 pub fn is_under_cache_root(path: &std::path::Path) -> bool {
     let root = cache_root();

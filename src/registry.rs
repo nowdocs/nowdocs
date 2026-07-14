@@ -1,9 +1,11 @@
 //! Registry lifecycle: install / share / update / uninstall docsets.
 
-use std::io::{BufRead, BufReader, Read};
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -765,74 +767,119 @@ fn install_inner(docset: &str, url: &str, expected_sha256: Option<&str>) -> Resu
     Ok(())
 }
 
-/// N6: an exclusive per-docset install lock. Removed on drop.
+/// N6/C3: an exclusive per-docset install lock backed by a process-lifetime
+/// OS advisory lock (`fs2::FileExt::try_lock_exclusive`) on
+/// `staging/<docset>.lock`. The `File` (and its OS lock) is held until `Drop`,
+/// which unlocks WITHOUT removing the lock pathname (avoids pathname races).
+///
+/// Ownership is the OS lock, never a timestamp/mtime: a crashed process
+/// releases its OS lock and a later process can acquire it regardless of the
+/// stale text/mtime left behind; a live process keeps its OS lock despite any
+/// old or tampered on-disk text/mtime.
 struct InstallLock {
-    path: PathBuf,
+    _file: File,
+}
+
+impl std::fmt::Debug for InstallLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InstallLock").finish_non_exhaustive()
+    }
 }
 
 impl Drop for InstallLock {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        // Unlock only; never remove the lock pathname (pathname races).
+        let _ = self._file.unlock();
     }
 }
 
-/// Acquire the per-docset install lock using `O_EXCL` (`create_new`). The lock
-/// file content is the epoch-seconds of creation; a lock older than one hour is
-/// treated as stale and replaced. A fresh lock yields the spec-mandated busy
-/// error: "docset {docset} is currently being installed by another process".
+/// Acquire the per-docset install lock using a process-lifetime OS advisory
+/// exclusive lock (`try_lock_exclusive`) on `staging/<docset>.lock`. The docset
+/// is validated by the caller (`install_inner`) before path construction. A
+/// symlink or non-regular lock path is refused at open time via `O_NOFOLLOW`
+/// (C3-R1), closing the TOCTOU hole left by `symlink_metadata`-then-open. On
+/// contention this returns the spec-mandated busy message: "docset {docset} is
+/// currently being installed by another process". Elapsed time/mtime is never
+/// used to decide ownership. On Windows, the lock path fails closed.
 fn acquire_install_lock(docset: &str) -> Result<InstallLock> {
     std::fs::create_dir_all(cache::staging_root())?;
     let path = cache::staging_root().join(format!("{docset}.lock"));
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
 
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-    {
-        Ok(mut f) => {
-            use std::io::Write;
-            let _ = writeln!(f, "{now}");
-            Ok(InstallLock { path })
+    // Open or create the lock file with O_NOFOLLOW on Unix (C3-R1). The kernel
+    // refuses a symlink at the final component at open(2) time (ELOOP), closing
+    // the TOCTOU hole. After opening, verify the handle is a regular file.
+    let file = open_install_lock_nofollow(&path)?;
+
+    // Take the OS advisory exclusive lock without blocking. A live owner keeps
+    // it; a crashed owner's lock is released by the OS.
+    match file.try_lock_exclusive() {
+        Ok(()) => {
+            // Lock held: write non-sensitive advisory metadata (docset + PID).
+            // Advisory only; never secrets or full configuration. Truncate then
+            // rewrite while the OS lock is held.
+            let _ = file.set_len(0);
+            let pid = std::process::id();
+            let mut buf = String::new();
+            buf.push_str("docset=");
+            buf.push_str(docset);
+            buf.push('\n');
+            buf.push_str("pid=");
+            buf.push_str(&pid.to_string());
+            buf.push('\n');
+            let _ = (&file).write_all(buf.as_bytes());
+            let _ = (&file).flush();
+            Ok(InstallLock { _file: file })
         }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            let stale = match std::fs::read_to_string(&path)
-                .ok()
-                .and_then(|s| s.trim().parse::<u64>().ok())
-            {
-                Some(t) => now.saturating_sub(t) >= 3600,
-                None => {
-                    // Unreadable or truncated lock (e.g. a crash between
-                    // create_new and the timestamp write): fall back to the
-                    // file mtime, and if even that is unavailable treat the
-                    // lock as stale so a corrupt lockfile can never pin the
-                    // docset busy until manual cleanup.
-                    std::fs::metadata(&path)
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|mt| mt.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| now.saturating_sub(d.as_secs()) >= 3600)
-                        .unwrap_or(true)
-                }
-            };
-            if stale {
-                let _ = std::fs::remove_file(&path);
-                let mut f = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path)?;
-                use std::io::Write;
-                let _ = writeln!(f, "{now}");
-                Ok(InstallLock { path })
-            } else {
-                anyhow::bail!("docset {docset} is currently being installed by another process")
-            }
+        Err(_contended) => {
+            // Contention: another process holds the OS lock. Never inspect
+            // elapsed time, never delete the file, never retry.
+            anyhow::bail!("docset {docset} is currently being installed by another process")
         }
-        Err(e) => Err(e).with_context(|| format!("create install lock {}", path.display())),
     }
+}
+
+/// Open or create the install lock file with `O_NOFOLLOW` on Unix (C3-R1).
+/// The kernel refuses a symlink at the final component at open time (ELOOP),
+/// closing the TOCTOU hole. After opening, the handle is verified as a regular
+/// file. On Windows, fail closed with a stable error.
+#[cfg(unix)]
+fn open_install_lock_nofollow(path: &Path) -> Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|e| {
+            if e.raw_os_error() == Some(libc::ELOOP) {
+                anyhow::anyhow!(
+                    "docset install lock {} is a symlink (O_NOFOLLOW refused)",
+                    path.display()
+                )
+            } else {
+                anyhow::anyhow!("open install lock {}: {e}", path.display())
+            }
+        })?;
+    let meta = file
+        .metadata()
+        .with_context(|| format!("fstat install lock {}", path.display()))?;
+    if !meta.is_file() {
+        anyhow::bail!(
+            "docset install lock {} is not a regular file (symlink/non-regular refused)",
+            path.display()
+        );
+    }
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn open_install_lock_nofollow(path: &Path) -> Result<File> {
+    anyhow::bail!(
+        "docset install lock {} unsupported platform for no-follow I/O",
+        path.display()
+    );
 }
 
 /// Install a docset to a staging directory (not active paths).
@@ -1469,6 +1516,37 @@ pub fn search_index(query: &str, json: bool) -> Result<()> {
 mod tests {
     use super::*;
     use std::io::{Cursor, Write};
+    use std::sync::Mutex;
+
+    // C3-R1: env-mutation guard for in-module tests that set XDG_CACHE_HOME.
+    // A static mutex serializes env access; Drop restores the prior value.
+    // A poisoned mutex (from a panicked test) is recovered so subsequent tests
+    // can still run.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        key: &'static str,
+        old: Option<String>,
+        _g: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, val: &str) -> Self {
+            let g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let old = std::env::var(key).ok();
+            std::env::set_var(key, val);
+            Self { key, old, _g: g }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.old {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
 
     // --- S2: sha256 integrity verification ---
 
@@ -1695,38 +1773,66 @@ mod tests {
         ));
     }
 
-    // --- P2 (wave-4): a corrupt/truncated install lock must not pin a docset
-    // busy forever; unreadable content falls back to mtime age ---
+    // --- C3: conservative OS advisory install lock ---
+    //
+    // Ownership is a process-lifetime OS advisory lock, not a timestamp. A
+    // live owner keeps its lock despite any old/tampered text/mtime; a crashed
+    // process releases its OS lock and a later process can acquire it
+    // regardless of the stale text/mtime left behind. No sleeps are used:
+    // ownership/drop sequencing is deterministic.
 
+    /// Test 7: a live InstallLock is never stolen merely because its text/mtime
+    /// was backdated or altered. The second acquire stays busy until the first
+    /// drops; after the drop a fresh acquire succeeds.
     #[test]
-    fn acquire_lock_treats_fresh_corrupt_lock_as_busy() {
+    fn live_install_lock_is_not_stolen_when_aged_or_tampered() {
         let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
-        let docset = "lock-corrupt-fresh";
+        let _g = EnvGuard::set("XDG_CACHE_HOME", dir.path().to_str().unwrap());
+        let docset = "lock-live-owner";
         std::fs::create_dir_all(cache::staging_root()).unwrap();
+
+        // Hold the first lock (a live OS-lock owner).
+        let first = acquire_install_lock(docset).expect("first acquire");
+
+        // Backdate and corrupt the on-disk metadata while the lock is held.
         let lp = cache::staging_root().join(format!("{docset}.lock"));
-        // Non-numeric content but a fresh mtime → treated as busy (not stale).
-        std::fs::write(&lp, b"not-a-timestamp").unwrap();
-        let err = match acquire_install_lock(docset) {
-            Err(e) => e,
-            Ok(_) => panic!("fresh-mtime corrupt lock must be busy"),
-        };
+        std::fs::write(&lp, b"0\nancient-tampered").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        let ft = std::fs::FileTimes::new().set_modified(old);
+        // The metadata write is best-effort: the OS lock is what matters.
+        let _ = std::fs::File::options()
+            .write(true)
+            .open(&lp)
+            .and_then(|f| f.set_times(ft));
+
+        // Second acquire while the first is still held -> busy, not stolen.
+        let err = acquire_install_lock(docset).unwrap_err();
         assert!(
             format!("{err}").contains("currently being installed"),
-            "must surface the busy-lock error"
+            "live owner must not be stolen by aged/tampered metadata, got: {err}"
         );
-        let _ = std::fs::remove_file(&lp);
+
+        // After the live owner drops, a fresh acquire succeeds regardless of the
+        // stale text/mtime left on disk.
+        drop(first);
+        let _second = acquire_install_lock(docset).expect("acquire after live owner dropped");
     }
 
+    /// Test 8 (regression): a stale-text lock with NO live owner can be
+    /// acquired. Recovery comes from the OS lock being released (the owner is
+    /// gone), NOT from deleting the file based on its timestamp. The lock file
+    /// is left in place (Drop never removes the pathname).
     #[test]
-    fn acquire_lock_replaces_stale_corrupt_lock() {
+    fn stale_text_lock_with_no_live_owner_is_acquired() {
         let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
-        let docset = "lock-corrupt-stale";
+        let _g = EnvGuard::set("XDG_CACHE_HOME", dir.path().to_str().unwrap());
+        let docset = "lock-stale-text";
         std::fs::create_dir_all(cache::staging_root()).unwrap();
         let lp = cache::staging_root().join(format!("{docset}.lock"));
-        std::fs::write(&lp, b"not-a-timestamp").unwrap();
-        // Backdate mtime beyond the 1h staleness threshold.
+
+        // A previous owner crashed and left a very-old timestamp on disk, but
+        // no process currently holds the OS lock.
+        std::fs::write(&lp, "0\n").unwrap();
         let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
         let ft = std::fs::FileTimes::new().set_modified(old);
         std::fs::File::options()
@@ -1735,10 +1841,20 @@ mod tests {
             .unwrap()
             .set_times(ft)
             .unwrap();
-        let res = acquire_install_lock(docset);
+
+        // Acquisition must succeed (no live owner) and must NOT delete the file
+        // merely because of its age.
+        let guard =
+            acquire_install_lock(docset).expect("stale-text lock with no owner is acquired");
         assert!(
-            res.is_ok(),
-            "stale corrupt lock must be replaced and acquired"
+            lp.is_file(),
+            "lock file must remain (recovery is OS-lock release, not timestamp deletion)"
+        );
+        drop(guard);
+        // Drop does not remove the pathname either.
+        assert!(
+            lp.is_file(),
+            "lock file must remain after drop (no pathname removal)"
         );
     }
 }
