@@ -610,6 +610,8 @@ fn trace_does_not_change_rank_or_gate() {
         "tracing disabled must not allocate a trace"
     );
     assert!(traced.trace.is_some());
+    assert_eq!(plain, plain.clone());
+    assert!(format!("{traced:?}").contains("RankedGateResult"));
 }
 
 #[test]

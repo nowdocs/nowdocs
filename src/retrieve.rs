@@ -103,14 +103,40 @@ pub struct RetrievalTrace {
     pub gate_passed: bool,
 }
 
-/// Outcome of ranking plus the answer gate. Only `Clone` is derived because
-/// `SearchHit` implements `Clone` but not `Debug`/`PartialEq` (tests compare
-/// chunk IDs).
+/// Outcome of ranking plus the answer gate.
 #[derive(Clone)]
 pub struct RankedGateResult {
     pub hits: Vec<SearchHit>,
     pub gate_passed: bool,
     pub trace: Option<RetrievalTrace>,
+}
+
+impl std::fmt::Debug for RankedGateResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hit_ids: Vec<u32> = self.hits.iter().map(|hit| hit.chunk_idx).collect();
+        f.debug_struct("RankedGateResult")
+            .field("hit_ids", &hit_ids)
+            .field("gate_passed", &self.gate_passed)
+            .field("trace", &self.trace)
+            .finish()
+    }
+}
+
+impl PartialEq for RankedGateResult {
+    fn eq(&self, other: &Self) -> bool {
+        self.gate_passed == other.gate_passed
+            && self.trace == other.trace
+            && self.hits.len() == other.hits.len()
+            && self.hits.iter().zip(&other.hits).all(|(left, right)| {
+                left.score == right.score
+                    && left.chunk_idx == right.chunk_idx
+                    && left.heading_path == right.heading_path
+                    && left.source_url == right.source_url
+                    && left.api_version == right.api_version
+                    && left.chunk_type == right.chunk_type
+                    && left.text == right.text
+            })
+    }
 }
 
 // N2: downcastable sentinel error types. `retrieve::search` maps each failure
