@@ -15,5 +15,9 @@
 # process runs single-threaded until those tests are refactored to path
 # injection. An intentional diagnostic may still pass the test harness's
 # explicit `--test-threads` command-line option.
+
+[build]
+target-dir = "/Users/kg/Projects/nowdocs/target"
+
 [env]
 RUST_TEST_THREADS = { value = "1", force = true }
