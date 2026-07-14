@@ -9,7 +9,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/reactivity-core.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/reactivity-core.md",
         "heading_path_prefix": "Reactivity API: Core > ref()",
         "grade": 2
       }
@@ -25,7 +25,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/reactivity-core.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/reactivity-core.md",
         "heading_path_prefix": "Reactivity API: Core > reactive()",
         "grade": 2
       }
@@ -41,7 +41,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/reactivity-core.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/reactivity-core.md",
         "heading_path_prefix": "Reactivity API: Core > computed()",
         "grade": 2
       }
@@ -57,7 +57,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/reactivity-core.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/reactivity-core.md",
         "heading_path_prefix": "Reactivity API: Core > watch()",
         "grade": 2
       }
@@ -73,7 +73,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/reactivity-core.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/reactivity-core.md",
         "heading_path_prefix": "Reactivity API: Core > watchEffect()",
         "grade": 2
       }
@@ -89,7 +89,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/composition-api-dependency-injection.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/composition-api-dependency-injection.md",
         "heading_path_prefix": "Composition API: Dependency Injection > provide()",
         "grade": 2
       }
@@ -105,7 +105,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/composition-api-dependency-injection.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/composition-api-dependency-injection.md",
         "heading_path_prefix": "Composition API: Dependency Injection > inject()",
         "grade": 2
       }
@@ -121,7 +121,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/composition-api-lifecycle.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/composition-api-lifecycle.md",
         "heading_path_prefix": "Composition API: Lifecycle Hooks > onMounted()",
         "grade": 2
       }
@@ -137,7 +137,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/composition-api-setup.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/composition-api-setup.md",
         "heading_path_prefix": "Composition API: setup() > Accessing Props {#accessing-props}",
         "grade": 2
       }
@@ -153,7 +153,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/sfc-script-setup.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/sfc-script-setup.md",
         "heading_path_prefix": "\\<script setup> {#script-setup} > defineProps() & defineEmits()",
         "grade": 2
       }
@@ -169,7 +169,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/built-in-directives.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/built-in-directives.md",
         "heading_path_prefix": "Built-in Directives > v-model",
         "grade": 2
       }
@@ -185,7 +185,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/built-in-directives.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/built-in-directives.md",
         "heading_path_prefix": "Built-in Directives > v-for",
         "grade": 2
       }
@@ -201,7 +201,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/built-in-directives.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/built-in-directives.md",
         "heading_path_prefix": "Built-in Directives > v-if",
         "grade": 2
       }
@@ -217,7 +217,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/built-in-components.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/built-in-components.md",
         "heading_path_prefix": "Built-in Components > `<Teleport>`",
         "grade": 2
       }
@@ -233,7 +233,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/built-in-components.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/built-in-components.md",
         "heading_path_prefix": "Built-in Components > `<KeepAlive>`",
         "grade": 2
       }
@@ -249,7 +249,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/built-in-components.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/built-in-components.md",
         "heading_path_prefix": "Built-in Components > `<Transition>`",
         "grade": 2
       }
@@ -265,7 +265,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/component-instance.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/component-instance.md",
         "heading_path_prefix": "Component Instance > $emit()",
         "grade": 2
       }
@@ -281,7 +281,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/component-instance.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/component-instance.md",
         "heading_path_prefix": "Component Instance > $nextTick()",
         "grade": 2
       }
@@ -297,7 +297,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/general.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/general.md",
         "heading_path_prefix": "Global API: General > defineComponent()",
         "grade": 2
       }
@@ -313,7 +313,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "api/reactivity-advanced.md",
+        "source_url": "https://github.com/vuejs/docs/tree/main/src/api/reactivity-advanced.md",
         "heading_path_prefix": "Reactivity API: Advanced > customRef()",
         "grade": 2
       }
@@ -481,7 +481,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/reactivity-core.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/reactivity-core.md",
       "heading_path_prefix": "Reactivity API: Core > readonly()",
       "grade": 2
     }
@@ -497,7 +497,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/reactivity-advanced.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/reactivity-advanced.md",
       "heading_path_prefix": "Reactivity API: Advanced > shallowReactive()",
       "grade": 2
     }
@@ -513,7 +513,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/reactivity-advanced.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/reactivity-advanced.md",
       "heading_path_prefix": "Reactivity API: Advanced > shallowRef()",
       "grade": 2
     }
@@ -529,7 +529,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/reactivity-utilities.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/reactivity-utilities.md",
       "heading_path_prefix": "Reactivity API: Utilities > toRefs()",
       "grade": 2
     }
@@ -545,7 +545,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/reactivity-advanced.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/reactivity-advanced.md",
       "heading_path_prefix": "Reactivity API: Advanced > effectScope()",
       "grade": 2
     }
@@ -561,7 +561,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/reactivity-advanced.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/reactivity-advanced.md",
       "heading_path_prefix": "Reactivity API: Advanced > onScopeDispose()",
       "grade": 2
     }
@@ -577,7 +577,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/composition-api-helpers.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/composition-api-helpers.md",
       "heading_path_prefix": "Composition API: Helpers > useTemplateRef() <sup class=\"vt-badge\" data-text=\"3.5+\" /> {#usetemplateref}",
       "grade": 2
     }
@@ -593,7 +593,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/composition-api-helpers.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/composition-api-helpers.md",
         "heading_path_prefix": "Composition API: Helpers > useSlots() {#useslots}",
       "grade": 2
     }
@@ -609,7 +609,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/sfc-script-setup.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/sfc-script-setup.md",
       "heading_path_prefix": "\\<script setup> {#script-setup} > defineModel() {#definemodel} > Modifiers and Transformers",
       "grade": 2
     }
@@ -625,7 +625,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/built-in-directives.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/built-in-directives.md",
       "heading_path_prefix": "Built-in Directives > v-show",
       "grade": 2
     }
@@ -641,7 +641,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/built-in-directives.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/built-in-directives.md",
       "heading_path_prefix": "Built-in Directives > v-bind",
       "grade": 2
     }
@@ -657,7 +657,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/built-in-directives.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/built-in-directives.md",
       "heading_path_prefix": "Built-in Directives > v-on",
       "grade": 2
     }
@@ -673,7 +673,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/built-in-directives.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/built-in-directives.md",
       "heading_path_prefix": "Built-in Directives > v-html",
       "grade": 2
     }
@@ -689,7 +689,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/built-in-components.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/built-in-components.md",
       "heading_path_prefix": "Built-in Components > `<Suspense>`",
       "grade": 2
     }
@@ -705,7 +705,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/built-in-components.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/built-in-components.md",
       "heading_path_prefix": "Built-in Components > `<TransitionGroup>`",
       "grade": 2
     }
@@ -721,7 +721,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/application.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/application.md",
       "heading_path_prefix": "Application API > app.provide()",
       "grade": 2
     }
@@ -737,7 +737,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/application.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/application.md",
       "heading_path_prefix": "Application API > app.directive()",
       "grade": 2
     }
@@ -753,7 +753,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/options-state.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/options-state.md",
       "heading_path_prefix": "Options: State > data",
       "grade": 2
     }
@@ -769,7 +769,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/options-state.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/options-state.md",
       "heading_path_prefix": "Options: State > computed",
       "grade": 2
     }
@@ -785,7 +785,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "api/general.md",
+      "source_url": "https://github.com/vuejs/docs/tree/main/src/api/general.md",
       "heading_path_prefix": "Global API: General > defineAsyncComponent()",
       "grade": 2
     }

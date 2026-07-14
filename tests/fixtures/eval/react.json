@@ -9,7 +9,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/adding-interactivity.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/adding-interactivity.md",
         "heading_path_prefix": "Queueing a series of state updates",
         "grade": 2
       }
@@ -25,7 +25,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/adding-interactivity.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/adding-interactivity.md",
         "heading_path_prefix": "State as a snapshot",
         "grade": 2
       }
@@ -41,7 +41,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/adding-interactivity.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/adding-interactivity.md",
         "heading_path_prefix": "Updating arrays in state",
         "grade": 2
       }
@@ -57,7 +57,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/conditional-rendering.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/conditional-rendering.md",
         "heading_path_prefix": "Conditionally including JSX",
         "grade": 2
       }
@@ -73,7 +73,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/extracting-state-logic-into-a-reducer.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/extracting-state-logic-into-a-reducer.md",
         "heading_path_prefix": "Consolidate state logic with a reducer",
         "grade": 2
       }
@@ -89,7 +89,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/extracting-state-logic-into-a-reducer.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/extracting-state-logic-into-a-reducer.md",
         "heading_path_prefix": "Comparing `useState` and `useReducer`",
         "grade": 2
       }
@@ -105,7 +105,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/lifecycle-of-reactive-effects.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/lifecycle-of-reactive-effects.md",
         "heading_path_prefix": "Effects \"react\" to reactive values",
         "grade": 2
       }
@@ -121,7 +121,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/lifecycle-of-reactive-effects.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/lifecycle-of-reactive-effects.md",
         "heading_path_prefix": "The lifecycle of an Effect",
         "grade": 2
       }
@@ -137,7 +137,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/manipulating-the-dom-with-refs.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/manipulating-the-dom-with-refs.md",
         "heading_path_prefix": "Getting a ref to the node",
         "grade": 2
       }
@@ -153,7 +153,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/passing-data-deeply-with-context.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/passing-data-deeply-with-context.md",
         "heading_path_prefix": "Use cases for context",
         "grade": 2
       }
@@ -169,7 +169,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/preserving-and-resetting-state.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/preserving-and-resetting-state.md",
         "heading_path_prefix": "Resetting state at the same position > Option 2: Resetting state with a key",
         "grade": 2
       }
@@ -185,7 +185,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/rendering-lists.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/rendering-lists.md",
         "heading_path_prefix": "Keeping list items in order with `key` > Why does React need keys?",
         "grade": 2
       }
@@ -201,7 +201,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/reusing-logic-with-custom-hooks.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/reusing-logic-with-custom-hooks.md",
         "heading_path_prefix": "Custom Hooks: Sharing logic between components > Custom Hooks let you share stateful logic, not state itself",
         "grade": 2
       }
@@ -217,7 +217,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/separating-events-from-effects.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/separating-events-from-effects.md",
         "heading_path_prefix": "Choosing between event handlers and Effects",
         "grade": 2
       }
@@ -233,7 +233,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/scaling-up-with-reducer-and-context.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/scaling-up-with-reducer-and-context.md",
         "heading_path_prefix": "Combining a reducer with context",
         "grade": 2
       }
@@ -249,7 +249,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/separating-events-from-effects.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/separating-events-from-effects.md",
         "heading_path_prefix": "Extracting non-reactive logic out of Effects > Declaring an Effect Event",
         "grade": 2
       }
@@ -265,7 +265,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/sharing-state-between-components.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/sharing-state-between-components.md",
         "heading_path_prefix": "Lifting state up by example",
         "grade": 2
       }
@@ -281,7 +281,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/render-and-commit.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/render-and-commit.md",
         "heading_path_prefix": "Step 1: Trigger a render > Re-renders when state updates",
         "grade": 2
       }
@@ -297,7 +297,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/keeping-components-pure.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/keeping-components-pure.md",
         "heading_path_prefix": "Where you _can_ cause side effects",
         "grade": 2
       }
@@ -313,7 +313,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "learn/state-a-components-memory.md",
+        "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/state-a-components-memory.md",
         "heading_path_prefix": "Adding a state variable",
         "grade": 2
       }
@@ -481,7 +481,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/choosing-the-state-structure.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/choosing-the-state-structure.md",
       "heading_path_prefix": "Principles for structuring state",
       "grade": 2
     }
@@ -497,7 +497,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/choosing-the-state-structure.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/choosing-the-state-structure.md",
       "heading_path_prefix": "Avoid redundant state",
       "grade": 2
     }
@@ -513,7 +513,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/choosing-the-state-structure.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/choosing-the-state-structure.md",
       "heading_path_prefix": "Avoid duplication in state",
       "grade": 2
     }
@@ -529,7 +529,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/choosing-the-state-structure.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/choosing-the-state-structure.md",
       "heading_path_prefix": "Avoid deeply nested state",
       "grade": 2
     }
@@ -545,7 +545,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/conditional-rendering.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/conditional-rendering.md",
       "heading_path_prefix": "Conditionally returning JSX > Conditionally returning nothing with `null`",
       "grade": 2
     }
@@ -561,7 +561,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/referencing-values-with-refs.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/referencing-values-with-refs.md",
       "heading_path_prefix": "Differences between refs and state",
       "grade": 2
     }
@@ -577,7 +577,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/referencing-values-with-refs.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/referencing-values-with-refs.md",
       "heading_path_prefix": "Example: building a stopwatch",
       "grade": 2
     }
@@ -593,7 +593,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/reacting-to-input-with-state.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/reacting-to-input-with-state.md",
       "heading_path_prefix": "Thinking about UI declaratively",
       "grade": 2
     }
@@ -609,7 +609,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/reacting-to-input-with-state.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/reacting-to-input-with-state.md",
       "heading_path_prefix": "Thinking about UI declaratively > Step 3: Represent the state in memory with `useState`",
       "grade": 2
     }
@@ -625,7 +625,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/rendering-lists.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/rendering-lists.md",
       "heading_path_prefix": "Filtering arrays of items",
       "grade": 2
     }
@@ -641,7 +641,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/preserving-and-resetting-state.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/preserving-and-resetting-state.md",
       "heading_path_prefix": "State is tied to a position in the render tree",
       "grade": 2
     }
@@ -657,7 +657,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/passing-data-deeply-with-context.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/passing-data-deeply-with-context.md",
       "heading_path_prefix": "Context passes through intermediate components",
       "grade": 2
     }
@@ -673,7 +673,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/extracting-state-logic-into-a-reducer.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/extracting-state-logic-into-a-reducer.md",
       "heading_path_prefix": "Writing concise reducers with Immer",
       "grade": 2
     }
@@ -689,7 +689,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/lifecycle-of-reactive-effects.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/lifecycle-of-reactive-effects.md",
       "heading_path_prefix": "Effects \"react\" to reactive values > What an Effect with empty dependencies means",
       "grade": 2
     }
@@ -705,7 +705,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/lifecycle-of-reactive-effects.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/lifecycle-of-reactive-effects.md",
       "heading_path_prefix": "The lifecycle of an Effect > Each Effect represents a separate synchronization process",
       "grade": 2
     }
@@ -721,7 +721,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/state-as-a-snapshot.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/state-as-a-snapshot.md",
       "heading_path_prefix": "Setting state triggers renders",
       "grade": 2
     }
@@ -737,7 +737,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/keeping-components-pure.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/keeping-components-pure.md",
       "heading_path_prefix": "Side Effects: (un)intended consequences",
       "grade": 2
     }
@@ -753,7 +753,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/reusing-logic-with-custom-hooks.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/reusing-logic-with-custom-hooks.md",
       "heading_path_prefix": "Custom Hooks: Sharing logic between components > Hook names always start with `use`",
       "grade": 2
     }
@@ -769,7 +769,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/responding-to-events.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/responding-to-events.md",
       "heading_path_prefix": "Can event handlers have side effects?",
       "grade": 2
     }
@@ -785,7 +785,7 @@
   "query_class": "positive",
   "targets": [
     {
-      "source_url": "learn/state-a-components-memory.md",
+      "source_url": "https://github.com/reactjs/react.dev/tree/main/src/content/learn/state-a-components-memory.md",
       "heading_path_prefix": "State is isolated and private",
       "grade": 2
     }

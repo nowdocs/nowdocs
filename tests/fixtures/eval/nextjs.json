@@ -9,7 +9,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/03-file-conventions/proxy.md",
         "heading_path_prefix": "Exports > Matcher",
         "grade": 2
       }
@@ -25,7 +25,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/01-getting-started/15-route-handlers.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/15-route-handlers.md",
         "heading_path_prefix": "Route Handlers > Supported HTTP Methods",
         "grade": 2
       }
@@ -41,7 +41,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/01-getting-started/15-route-handlers.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/15-route-handlers.md",
         "heading_path_prefix": "Route Handlers > Caching",
         "grade": 2
       }
@@ -57,7 +57,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/01-getting-started/14-metadata-and-og-images.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/14-metadata-and-og-images.md",
         "heading_path_prefix": "Generated metadata",
         "grade": 2
       }
@@ -73,7 +73,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/02-guides/self-hosting.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/02-guides/self-hosting.md",
         "heading_path_prefix": "Environment Variables",
         "grade": 2
       }
@@ -89,7 +89,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/01-getting-started/07-mutating-data.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/07-mutating-data.md",
         "heading_path_prefix": "Examples > Redirect after a mutation",
         "grade": 2
       }
@@ -105,7 +105,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/01-getting-started/08-caching.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/08-caching.md",
         "heading_path_prefix": "Usage > Data-level caching",
         "grade": 2
       }
@@ -121,7 +121,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/01-getting-started/08-caching.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/08-caching.md",
         "heading_path_prefix": "Usage > UI-level caching",
         "grade": 2
       }
@@ -137,7 +137,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/01-getting-started/14-metadata-and-og-images.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/14-metadata-and-og-images.md",
         "heading_path_prefix": "Generated metadata > Streaming metadata",
         "grade": 2
       }
@@ -153,7 +153,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/03-file-conventions/proxy.md",
         "heading_path_prefix": "Examples > Negative matching",
         "grade": 2
       }
@@ -169,7 +169,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/03-file-conventions/proxy.md",
         "heading_path_prefix": "Exports > Proxy function",
         "grade": 2
       }
@@ -185,7 +185,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/03-file-conventions/proxy.md",
         "heading_path_prefix": "Examples > Setting Headers",
         "grade": 2
       }
@@ -201,7 +201,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/03-api-reference/05-config/01-next-config-js/rewrites.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/05-config/01-next-config-js/rewrites.md",
         "heading_path_prefix": "Rewriting to an external URL",
         "grade": 2
       }
@@ -217,7 +217,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/03-api-reference/04-functions/generate-static-params.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/04-functions/generate-static-params.md",
         "heading_path_prefix": "Multiple Dynamic Segments",
         "grade": 2
       }
@@ -233,7 +233,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/02-guides/self-hosting.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/02-guides/self-hosting.md",
         "heading_path_prefix": "Image Optimization",
         "grade": 2
       }
@@ -249,7 +249,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/01-getting-started/15-route-handlers.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/15-route-handlers.md",
         "heading_path_prefix": "Route Handlers > Route Context Helper",
         "grade": 2
       }
@@ -265,7 +265,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/01-getting-started/14-metadata-and-og-images.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/14-metadata-and-og-images.md",
         "heading_path_prefix": "Generated metadata > Memoizing data requests",
         "grade": 2
       }
@@ -281,7 +281,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/02-guides/data-security.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/02-guides/data-security.md",
         "heading_path_prefix": "Mutating Data > Built-in Server Actions Security features",
         "grade": 2
       }
@@ -297,7 +297,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/03-api-reference/02-components/form.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/02-components/form.md",
         "heading_path_prefix": "Examples > Mutations with Server Actions",
         "grade": 2
       }
@@ -313,7 +313,7 @@
     "query_class": "positive",
     "targets": [
       {
-        "source_url": "01-app/03-api-reference/05-config/01-next-config-js/rewrites.md",
+        "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/05-config/01-next-config-js/rewrites.md",
         "heading_path_prefix": "Path Matching",
         "grade": 2
       }
@@ -480,7 +480,7 @@
   "query": "enable Cache Components in Next.js",
   "targets": [
     {
-      "source_url": "01-app/01-getting-started/08-caching.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/08-caching.md",
       "heading_path_prefix": "Enabling Cache Components",
       "grade": 2
     }
@@ -496,7 +496,7 @@
   "query": "stream uncached data in Next.js",
   "targets": [
     {
-      "source_url": "01-app/01-getting-started/08-caching.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/08-caching.md",
       "heading_path_prefix": "Usage > Streaming uncached data",
       "grade": 2
     }
@@ -512,7 +512,7 @@
   "query": "pass runtime values to cached functions",
   "targets": [
     {
-      "source_url": "01-app/01-getting-started/08-caching.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/08-caching.md",
       "heading_path_prefix": "Working with runtime APIs > Passing runtime values to cached functions",
       "grade": 2
     }
@@ -528,7 +528,7 @@
   "query": "configure static metadata in Next.js",
   "targets": [
     {
-      "source_url": "01-app/01-getting-started/14-metadata-and-og-images.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/14-metadata-and-og-images.md",
       "heading_path_prefix": "Static metadata",
       "grade": 2
     }
@@ -544,7 +544,7 @@
   "query": "generate an Open Graph image in Next.js",
   "targets": [
     {
-      "source_url": "01-app/01-getting-started/14-metadata-and-og-images.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/14-metadata-and-og-images.md",
       "heading_path_prefix": "Generated Open Graph images",
       "grade": 2
     }
@@ -560,7 +560,7 @@
   "query": "create a route handler file",
   "targets": [
     {
-      "source_url": "01-app/01-getting-started/15-route-handlers.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/15-route-handlers.md",
       "heading_path_prefix": "Route Handlers > Convention",
       "grade": 2
     }
@@ -576,7 +576,7 @@
   "query": "use NextRequest and NextResponse in a route handler",
   "targets": [
     {
-      "source_url": "01-app/01-getting-started/15-route-handlers.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/01-getting-started/15-route-handlers.md",
       "heading_path_prefix": "Route Handlers > Extended `NextRequest` and `NextResponse` APIs",
       "grade": 2
     }
@@ -592,7 +592,7 @@
   "query": "read cookies in a Next.js proxy",
   "targets": [
     {
-      "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/03-file-conventions/proxy.md",
       "heading_path_prefix": "Examples > Using Cookies",
       "grade": 2
     }
@@ -608,7 +608,7 @@
   "query": "return CORS headers from a Next.js proxy",
   "targets": [
     {
-      "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/03-file-conventions/proxy.md",
       "heading_path_prefix": "Examples > CORS",
       "grade": 2
     }
@@ -624,7 +624,7 @@
   "query": "use waitUntil in a Next.js proxy",
   "targets": [
     {
-      "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/03-file-conventions/proxy.md",
       "heading_path_prefix": "Examples > `waitUntil` and `NextFetchEvent`",
       "grade": 2
     }
@@ -640,7 +640,7 @@
   "query": "understand Next.js proxy execution order",
   "targets": [
     {
-      "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/03-file-conventions/proxy.md",
       "heading_path_prefix": "Execution order",
       "grade": 2
     }
@@ -656,7 +656,7 @@
   "query": "which runtime does a Next.js proxy use",
   "targets": [
     {
-      "source_url": "01-app/03-api-reference/03-file-conventions/proxy.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/03-file-conventions/proxy.md",
       "heading_path_prefix": "Runtime",
       "grade": 2
     }
@@ -672,7 +672,7 @@
   "query": "add CORS to a route handler",
   "targets": [
     {
-      "source_url": "01-app/03-api-reference/03-file-conventions/route.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/03-file-conventions/route.md",
       "heading_path_prefix": "Examples > CORS",
       "grade": 2
     }
@@ -688,7 +688,7 @@
   "query": "set headers in a route handler",
   "targets": [
     {
-      "source_url": "01-app/03-api-reference/03-file-conventions/route.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/03-file-conventions/route.md",
       "heading_path_prefix": "Examples > Headers",
       "grade": 2
     }
@@ -704,7 +704,7 @@
   "query": "redirect from a route handler",
   "targets": [
     {
-      "source_url": "01-app/03-api-reference/03-file-conventions/route.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/03-file-conventions/route.md",
       "heading_path_prefix": "Examples > Redirects",
       "grade": 2
     }
@@ -720,7 +720,7 @@
   "query": "revalidate a page path in Next.js",
   "targets": [
     {
-      "source_url": "01-app/03-api-reference/04-functions/revalidatePath.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/04-functions/revalidatePath.md",
       "heading_path_prefix": "Examples > Revalidating a Page path",
       "grade": 2
     }
@@ -736,7 +736,7 @@
   "query": "revalidate a layout path in Next.js",
   "targets": [
     {
-      "source_url": "01-app/03-api-reference/04-functions/revalidatePath.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/04-functions/revalidatePath.md",
       "heading_path_prefix": "Examples > Revalidating a Layout path",
       "grade": 2
     }
@@ -752,7 +752,7 @@
   "query": "generate static params from the bottom up",
   "targets": [
     {
-      "source_url": "01-app/03-api-reference/04-functions/generate-static-params.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/03-api-reference/04-functions/generate-static-params.md",
       "heading_path_prefix": "Examples > Multiple Dynamic Segments in a Route > Generate params from the bottom up",
       "grade": 2
     }
@@ -768,7 +768,7 @@
   "query": "stream data with a Suspense boundary in Next.js",
   "targets": [
     {
-      "source_url": "01-app/02-guides/streaming.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/02-guides/streaming.md",
       "heading_path_prefix": "Granular streaming with `<Suspense>`",
       "grade": 2
     }
@@ -784,7 +784,7 @@
   "query": "when should Next.js use loading.js versus Suspense",
   "targets": [
     {
-      "source_url": "01-app/02-guides/streaming.md",
+      "source_url": "https://github.com/vercel/next.js/tree/canary/docs/01-app/02-guides/streaming.md",
       "heading_path_prefix": "Granular streaming with `<Suspense>` > When to use `loading.js` vs `<Suspense>`",
       "grade": 2
     }
