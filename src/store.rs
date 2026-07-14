@@ -13,20 +13,28 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use arrow_array::{Array, FixedSizeListArray, Float16Array, RecordBatch, StringArray, UInt32Array};
-use arrow_schema::{DataType, Field, Schema};
+use arrow::array::downcast_array;
+use arrow::compute::{sort_to_indices, take};
+use arrow_array::{
+    Array, FixedSizeListArray, Float16Array, Float32Array, RecordBatch, StringArray, UInt32Array,
+    UInt64Array,
+};
+use arrow_schema::{DataType, Field, Schema, SortOptions};
+use async_trait::async_trait;
 use futures::TryStreamExt;
 use half::f16;
+use lance::dataset::ROW_ID;
 use lance_arrow::FixedSizeListArrayExt;
 use lancedb::index::scalar::{FtsIndexBuilder, FullTextSearchQuery};
 use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase, QueryExecutionOptions};
+use lancedb::rerankers::Reranker;
 use lancedb::{table::NewColumnTransform, Session};
 
 use crate::cache;
 use crate::chunker::{Chunk, ChunkType};
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SearchHit {
     pub score: f32,
     pub chunk_idx: u32,
@@ -35,6 +43,139 @@ pub struct SearchHit {
     pub api_version: Option<String>,
     pub chunk_type: ChunkType,
     pub text: String,
+}
+
+pub const DENSE_RANK_COLUMN: &str = "_dense_rank";
+pub const FTS_RANK_COLUMN: &str = "_fts_rank";
+
+#[derive(Debug, Clone)]
+pub struct CandidateEvidence {
+    pub hit: SearchHit,
+    pub dense_rank: Option<u32>,
+    pub lexical_rank: Option<u32>,
+}
+
+#[derive(Debug)]
+pub struct SignalPreservingRrf {
+    k: f32,
+}
+
+impl SignalPreservingRrf {
+    pub fn new(k: f32) -> Self {
+        Self { k }
+    }
+}
+
+#[async_trait]
+impl Reranker for SignalPreservingRrf {
+    async fn rerank_hybrid(
+        &self,
+        _query: &str,
+        vector_results: RecordBatch,
+        fts_results: RecordBatch,
+    ) -> lancedb::error::Result<RecordBatch> {
+        let vector_ids: UInt64Array = downcast_array(vector_results.column_by_name(ROW_ID).ok_or(
+            lancedb::error::Error::InvalidInput {
+                message: format!("expected column {ROW_ID} not found in vector_results"),
+            },
+        )?);
+        let fts_ids: UInt64Array = downcast_array(fts_results.column_by_name(ROW_ID).ok_or(
+            lancedb::error::Error::InvalidInput {
+                message: format!("expected column {ROW_ID} not found in fts_results"),
+            },
+        )?);
+
+        // Build row-ID → 1-based rank maps from batch order.
+        let mut dense_rank_map: HashMap<u64, u32> = HashMap::new();
+        for (i, id) in vector_ids.values().iter().enumerate() {
+            dense_rank_map.insert(*id, i as u32 + 1);
+        }
+        let mut fts_rank_map: HashMap<u64, u32> = HashMap::new();
+        for (i, id) in fts_ids.values().iter().enumerate() {
+            fts_rank_map.insert(*id, i as u32 + 1);
+        }
+
+        // Exactly reproduce built-in RRF contribution: 1/(index + k), 0-based.
+        let mut rrf_score_map: std::collections::BTreeMap<u64, f32> =
+            std::collections::BTreeMap::new();
+        let mut update = |(i, row_id): (usize, &u64)| {
+            let score = 1.0 / (i as f32 + self.k);
+            rrf_score_map
+                .entry(*row_id)
+                .and_modify(|e| *e += score)
+                .or_insert(score);
+        };
+        vector_ids.values().iter().enumerate().for_each(&mut update);
+        fts_ids.values().iter().enumerate().for_each(&mut update);
+
+        let combined = self.merge_results(vector_results, fts_results)?;
+
+        let combined_row_ids: UInt64Array =
+            downcast_array(combined.column_by_name(ROW_ID).unwrap());
+        let relevance_scores = Float32Array::from_iter_values(
+            combined_row_ids
+                .values()
+                .iter()
+                .map(|row_id| rrf_score_map.get(row_id).unwrap())
+                .copied(),
+        );
+
+        // Append nullable rank columns.
+        let dense_ranks = UInt32Array::from_iter(
+            combined_row_ids
+                .values()
+                .iter()
+                .map(|id| dense_rank_map.get(id).copied()),
+        );
+        let fts_ranks = UInt32Array::from_iter(
+            combined_row_ids
+                .values()
+                .iter()
+                .map(|id| fts_rank_map.get(id).copied()),
+        );
+
+        // Sort by relevance score descending, matching RRFReranker.
+        let sort_indices = sort_to_indices(
+            &relevance_scores,
+            Some(SortOptions {
+                descending: true,
+                ..Default::default()
+            }),
+            None,
+        )
+        .unwrap();
+
+        let mut columns: Vec<Arc<dyn Array>> = combined
+            .columns()
+            .iter()
+            .map(|c| take(c, &sort_indices, None).unwrap())
+            .collect();
+        columns.push(Arc::new(
+            take(&relevance_scores, &sort_indices, None).unwrap(),
+        ));
+        columns.push(Arc::new(take(&dense_ranks, &sort_indices, None).unwrap()));
+        columns.push(Arc::new(take(&fts_ranks, &sort_indices, None).unwrap()));
+
+        let mut fields = combined.schema().fields().to_vec();
+        fields.push(Arc::new(Field::new(
+            "_relevance_score",
+            DataType::Float32,
+            false,
+        )));
+        fields.push(Arc::new(Field::new(
+            DENSE_RANK_COLUMN,
+            DataType::UInt32,
+            true,
+        )));
+        fields.push(Arc::new(Field::new(
+            FTS_RANK_COLUMN,
+            DataType::UInt32,
+            true,
+        )));
+        let schema = Schema::new(fields);
+
+        Ok(RecordBatch::try_new(Arc::new(schema), columns)?)
+    }
 }
 
 pub struct Store {
@@ -284,7 +425,7 @@ impl Store {
         query_vector: &[f32],
         query_text: &str,
         top_k: usize,
-    ) -> Result<Vec<SearchHit>> {
+    ) -> Result<Vec<CandidateEvidence>> {
         self.hybrid_search_k(query_vector, query_text, top_k, 60.0)
     }
 
@@ -299,7 +440,7 @@ impl Store {
         query_text: &str,
         top_k: usize,
         rrf_k: f32,
-    ) -> Result<Vec<SearchHit>> {
+    ) -> Result<Vec<CandidateEvidence>> {
         let table = self
             .runtime
             .block_on(self.conn.open_table(&self.table_name).execute())
@@ -314,7 +455,7 @@ impl Store {
                 .full_text_search(fts_query)
                 .nearest_to(&*qv_f16)?
                 .limit(top_k)
-                .rerank(Arc::new(lancedb::rerankers::rrf::RRFReranker::new(rrf_k)))
+                .rerank(Arc::new(SignalPreservingRrf::new(rrf_k)))
                 .execute_hybrid(QueryExecutionOptions::default())
                 .await
                 .context("hybrid search execution failed")?;
@@ -324,14 +465,15 @@ impl Store {
                 .context("failed to collect hybrid search results")
         })?;
 
-        let mut hits = parse_search_hits_with_score(&batches)?;
-        hits.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
+        let mut candidates = parse_candidate_evidence(&batches)?;
+        candidates.sort_by(|a, b| {
+            b.hit
+                .score
+                .partial_cmp(&a.hit.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        hits.truncate(top_k);
-        Ok(hits)
+        candidates.truncate(top_k);
+        Ok(candidates)
     }
 
     /// Pure FTS (BM25) search, no vector, no reranker. For diagnostics: isolates
@@ -529,6 +671,112 @@ fn parse_search_hits_with_score(batches: &[RecordBatch]) -> Result<Vec<SearchHit
         }
     }
     Ok(hits)
+}
+
+/// Parse record batches into `CandidateEvidence` items, reading the
+/// `_relevance_score` column for the RRF score and the nullable `_dense_rank`
+/// / `_fts_rank` columns for per-channel rank evidence. Fails if a rank
+/// column is present but not UInt32.
+fn parse_candidate_evidence(batches: &[RecordBatch]) -> Result<Vec<CandidateEvidence>> {
+    let mut candidates = Vec::new();
+    for batch in batches {
+        if batch.column_by_name("chunk_idx").is_none() {
+            continue;
+        }
+        let rel_col = batch
+            .column_by_name("_relevance_score")
+            .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
+        let fts_score_col = batch
+            .column_by_name("_score")
+            .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
+        let dist_col = batch
+            .column_by_name("_distance")
+            .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
+        let idx_col = batch
+            .column_by_name("chunk_idx")
+            .and_then(|c| c.as_any().downcast_ref::<UInt32Array>())
+            .context("missing chunk_idx column")?;
+        let heading_col = batch
+            .column_by_name("heading_path")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing heading_path column")?;
+        let url_col = batch
+            .column_by_name("source_url")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing source_url column")?;
+        let api_col = batch
+            .column_by_name("api_version")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+        let ctype_col = batch
+            .column_by_name("chunk_type")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing chunk_type column")?;
+        let text_col = batch
+            .column_by_name("text")
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            .context("missing text column")?;
+
+        // Nullable rank columns: absent means no evidence; present must be UInt32.
+        let dense_rank_col = batch
+            .column_by_name(DENSE_RANK_COLUMN)
+            .map(|c| {
+                c.as_any()
+                    .downcast_ref::<UInt32Array>()
+                    .context("dense rank column is not UInt32")
+            })
+            .transpose()?;
+        let fts_rank_col = batch
+            .column_by_name(FTS_RANK_COLUMN)
+            .map(|c| {
+                c.as_any()
+                    .downcast_ref::<UInt32Array>()
+                    .context("fts rank column is not UInt32")
+            })
+            .transpose()?;
+
+        for row in 0..batch.num_rows() {
+            let chunk_type = match ctype_col.value(row) {
+                "Code" => ChunkType::Code,
+                _ => ChunkType::Info,
+            };
+            let score = match (rel_col, fts_score_col, dist_col) {
+                (Some(r), _, _) => r.value(row),
+                (None, Some(f), _) => f.value(row),
+                (None, None, Some(d)) => -d.value(row),
+                (None, None, None) => {
+                    bail!("missing _relevance_score/_score/_distance column")
+                }
+            };
+            let dense_rank = dense_rank_col.and_then(|col| {
+                if col.is_null(row) {
+                    None
+                } else {
+                    Some(col.value(row))
+                }
+            });
+            let lexical_rank = fts_rank_col.and_then(|col| {
+                if col.is_null(row) {
+                    None
+                } else {
+                    Some(col.value(row))
+                }
+            });
+            candidates.push(CandidateEvidence {
+                hit: SearchHit {
+                    score,
+                    chunk_idx: idx_col.value(row),
+                    heading_path: heading_col.value(row).to_string(),
+                    source_url: url_col.value(row).to_string(),
+                    api_version: string_value(api_col, row),
+                    chunk_type,
+                    text: text_col.value(row).to_string(),
+                },
+                dense_rank,
+                lexical_rank,
+            });
+        }
+    }
+    Ok(candidates)
 }
 
 /// Parse record batches into a `{chunk_idx -> f32 vector}` map (for `fetch_vectors`).
