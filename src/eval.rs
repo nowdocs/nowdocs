@@ -418,6 +418,7 @@ pub fn compute_ranking_metrics(
         .sum();
     let mut ideal_gains: Vec<f32> = targets.iter().map(|t| gain(t.grade)).collect();
     ideal_gains.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    ideal_gains.truncate(k);
     let idcg: f32 = ideal_gains
         .iter()
         .enumerate()
@@ -461,6 +462,7 @@ pub fn rate_estimate(count: usize, total: usize) -> RateEstimate {
             upper: 0.0,
         };
     }
+    let count = count.min(total);
     let n = total as f64;
     let p = count as f64 / n;
     let z: f64 = 1.959963984540054;

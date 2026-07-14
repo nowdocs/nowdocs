@@ -153,6 +153,24 @@ fn ndcg_rewards_ideal_ordering() {
 }
 
 #[test]
+fn ndcg_at_k_truncates_ideal_gains_to_k() {
+    // There are three labeled targets, but nDCG@2 must compare only the best
+    // two possible gains. Returning those at ranks 1 and 2 is ideal at k.
+    let targets = vec![
+        target("high.md", 3),
+        target("medium.md", 2),
+        target("low.md", 1),
+    ];
+    let hits = vec![hit("high.md"), hit("medium.md")];
+    let m = compute_ranking_metrics(&hits, &targets, 2);
+    assert!(
+        (m.ndcg - 1.0).abs() < 1e-6,
+        "an ideal top-2 ranking must have nDCG@2 of 1.0, got {}",
+        m.ndcg
+    );
+}
+
+#[test]
 fn empty_inputs_yield_zero_valued_fields() {
     let targets = vec![target("a.md", 2)];
 
@@ -242,4 +260,15 @@ fn wilson_interval_handles_degenerate_counts() {
     assert_eq!(all.rate, 1.0);
     assert_eq!(all.upper, 1.0);
     assert!(all.lower > 0.0 && all.lower < 1.0);
+}
+
+#[test]
+fn wilson_interval_saturates_invalid_count_above_total() {
+    let estimate = rate_estimate(21, 20);
+    assert_eq!(estimate.count, 20);
+    assert_eq!(estimate.total, 20);
+    assert_eq!(estimate.rate, 1.0);
+    assert!(estimate.lower.is_finite());
+    assert!(estimate.upper.is_finite());
+    assert_eq!(estimate.upper, 1.0);
 }
