@@ -3,6 +3,7 @@ pub mod automation;
 pub mod cache;
 pub mod chunker;
 pub mod cli;
+pub mod confidence;
 pub mod doctor;
 pub mod errors;
 pub mod input;
