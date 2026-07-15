@@ -45,9 +45,9 @@ pub enum EnsureApplyResult {
 /// Stable prefixes used to store selected-package metadata inside a C3
 /// `PlannedAction`'s `target_paths`. The strings are sorted so plan hashing is
 /// deterministic, and each prefix is unambiguous so apply can decode them.
-const PKG_VERSION_PREFIX: &str = "pkg:version:";
-const PKG_URL_PREFIX: &str = "pkg:url:";
-const PKG_SHA_PREFIX: &str = "pkg:sha:";
+pub(crate) const PKG_VERSION_PREFIX: &str = "pkg:version:";
+pub(crate) const PKG_URL_PREFIX: &str = "pkg:url:";
+pub(crate) const PKG_SHA_PREFIX: &str = "pkg:sha:";
 
 /// Plan an idempotent ensure for `docset`.
 ///
@@ -182,7 +182,10 @@ pub fn ensure_apply(docset: &str, plan_id: &str, now_unix_secs: u64) -> Result<E
 }
 
 /// Capture a `DocsetPrecondition` fingerprint for the current docset state.
-fn docset_precondition(docset: &str, state: &InstalledDocsetState) -> DocsetPrecondition {
+pub(crate) fn docset_precondition(
+    docset: &str,
+    state: &InstalledDocsetState,
+) -> DocsetPrecondition {
     let installed = *state != InstalledDocsetState::NotInstalled;
     let manifest_sha256 = if *state == InstalledDocsetState::Healthy {
         manifest_sha256(docset).ok()
@@ -260,7 +263,7 @@ fn build_ensure_plan(
 
 /// Build a `PlannedAction` whose `target_paths` encode the selected package
 /// metadata deterministically.
-fn package_action(
+pub(crate) fn package_action(
     id: &str,
     kind: &str,
     risk: RiskLevel,
@@ -290,12 +293,12 @@ fn package_action(
 }
 
 /// True when `risk` implies state mutation (mirrors C3 normalization rule).
-fn risk_implies_state_change(risk: RiskLevel) -> bool {
+pub(crate) fn risk_implies_state_change(risk: RiskLevel) -> bool {
     matches!(risk, RiskLevel::Additive | RiskLevel::Mutating)
 }
 
 /// Decode the selected package metadata stored in a plan's install/update action.
-fn desired_package_from_plan(
+pub(crate) fn desired_package_from_plan(
     plan: &crate::automation::plan::AutomationPlan,
 ) -> Option<RegistryPackage> {
     let action = plan
@@ -308,7 +311,10 @@ fn desired_package_from_plan(
 
 /// Decode package metadata from the `target_paths` of a registry install/update
 /// action.
-fn decode_package_action(action: &PlannedAction, docset: &str) -> Result<RegistryPackage> {
+pub(crate) fn decode_package_action(
+    action: &PlannedAction,
+    docset: &str,
+) -> Result<RegistryPackage> {
     let mut version = None;
     let mut download_url = None;
     let mut sha256 = None;
@@ -335,7 +341,7 @@ fn decode_package_action(action: &PlannedAction, docset: &str) -> Result<Registr
 
 /// True when the docset is installed and its version matches the desired
 /// package version.
-fn is_already_satisfied(docset: &str, package: &RegistryPackage) -> bool {
+pub(crate) fn is_already_satisfied(docset: &str, package: &RegistryPackage) -> bool {
     if cache::check_docset_state_pure(docset) != InstalledDocsetState::Healthy {
         return false;
     }
