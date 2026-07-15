@@ -1047,18 +1047,8 @@ fn evaluate_query(
         .map(|&i| query.targets[i].grade)
         .collect();
 
-    let answer_state = if trace.gate_passed {
-        AnswerState::Confident
-    } else {
-        AnswerState::NoAnswer
-    };
-    let decision_reason = if trace.fused.is_empty() {
-        ReportDecisionReason::NoCandidates
-    } else if trace.gate_passed {
-        ReportDecisionReason::CurrentGatePass
-    } else {
-        ReportDecisionReason::CurrentGateReject
-    };
+    let (answer_state, decision_reason) =
+        answer_state_to_report(result.answer_state, trace.fused.is_empty());
 
     // Benchmark: the warm run above produced this query's metrics; measured
     // repeats re-run the full per-query retrieval in-process.
@@ -1135,6 +1125,36 @@ fn hit_to_chunk(hit: &SearchHit) -> ResultChunk {
         chunk_type: hit.chunk_type.clone(),
         text: String::new(),
         score: None,
+    }
+}
+
+/// Map the runtime `SearchResult` answer state to the v1 report's answer state
+/// and decision reason. The `fused_empty` flag distinguishes `NoAnswer` caused
+/// by no candidates from `NoAnswer` caused by gate rejection.
+///
+/// `Borderline` is reserved for calibrated policies; C06 must not return it at
+/// runtime.
+pub fn answer_state_to_report(
+    state: AnswerState,
+    fused_empty: bool,
+) -> (AnswerState, ReportDecisionReason) {
+    match state {
+        AnswerState::NoAnswer => {
+            let reason = if fused_empty {
+                ReportDecisionReason::NoCandidates
+            } else {
+                ReportDecisionReason::CurrentGateReject
+            };
+            (AnswerState::NoAnswer, reason)
+        }
+        AnswerState::Confident => (
+            AnswerState::Confident,
+            ReportDecisionReason::CurrentGatePass,
+        ),
+        AnswerState::Borderline => (
+            AnswerState::Borderline,
+            ReportDecisionReason::CalibratedBorderline,
+        ),
     }
 }
 

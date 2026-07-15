@@ -10,9 +10,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use nowdocs::confidence::AnswerState;
 use nowdocs::eval::{
-    rate_estimate, AnswerStateMetrics, CorpusIdentity, EvalReportV1, EvalSplit, MetricBucket,
-    QueryClass, QueryForm, QueryReport, ReportDecisionReason, RetrievalEvalArgs,
-    RetrievalParameters, StageMetrics, StageMetricsSet, StageRanks,
+    answer_state_to_report, rate_estimate, AnswerStateMetrics, CorpusIdentity, EvalReportV1,
+    EvalSplit, MetricBucket, QueryClass, QueryForm, QueryReport, ReportDecisionReason,
+    RetrievalEvalArgs, RetrievalParameters, StageMetrics, StageMetricsSet, StageRanks,
 };
 
 fn sample_stage(k: usize) -> StageMetrics {
@@ -350,5 +350,72 @@ fn cli_rejects_invalid_code_commit_without_model_initialization() {
     assert!(
         RetrievalEvalArgs::try_parse_args(&excessive_runs).is_err(),
         "--benchmark-runs above the supported maximum must be rejected"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// C06: answer_state_to_report mapping tests
+// ---------------------------------------------------------------------------
+
+/// Regression: the report mapping must follow `SearchResult.answer_state`,
+/// not the trace `gate_passed` bit. This test supplies a `NoAnswer` state
+/// with an empty fused trace and expects `NoCandidates`.
+#[test]
+fn answer_state_no_answer_empty_fused_is_no_candidates() {
+    let (state, reason) = answer_state_to_report(AnswerState::NoAnswer, true);
+    assert_eq!(state, AnswerState::NoAnswer);
+    assert_eq!(reason, ReportDecisionReason::NoCandidates);
+}
+
+/// Regression: `NoAnswer` with a non-empty fused trace maps to
+/// `CurrentGateReject` (gate saw candidates but rejected them).
+#[test]
+fn answer_state_no_answer_non_empty_fused_is_gate_reject() {
+    let (state, reason) = answer_state_to_report(AnswerState::NoAnswer, false);
+    assert_eq!(state, AnswerState::NoAnswer);
+    assert_eq!(reason, ReportDecisionReason::CurrentGateReject);
+}
+
+/// Regression: `Confident` always maps to `CurrentGatePass` regardless of
+/// the trace's fused-pool contents.
+#[test]
+fn answer_state_confident_is_gate_pass() {
+    let (state, reason) = answer_state_to_report(AnswerState::Confident, true);
+    assert_eq!(state, AnswerState::Confident);
+    assert_eq!(reason, ReportDecisionReason::CurrentGatePass);
+
+    let (state, reason) = answer_state_to_report(AnswerState::Confident, false);
+    assert_eq!(state, AnswerState::Confident);
+    assert_eq!(reason, ReportDecisionReason::CurrentGatePass);
+}
+
+/// Regression: `Borderline` is reserved for calibrated policies; the mapping
+/// returns `CalibratedBorderline` without panic. C06 must not make the runtime
+/// return `Borderline`.
+#[test]
+fn answer_state_borderline_is_reserved_calibrated() {
+    let (state, reason) = answer_state_to_report(AnswerState::Borderline, false);
+    assert_eq!(state, AnswerState::Borderline);
+    assert_eq!(reason, ReportDecisionReason::CalibratedBorderline);
+}
+
+/// Key regression: when `SearchResult.answer_state` contradicts the trace
+/// `gate_passed` bit, the report must follow the result state. Here the
+/// result says `NoAnswer` but the trace gate would say passed — the report
+/// must reflect `NoAnswer`.
+#[test]
+fn answer_state_follows_result_not_trace_gate() {
+    // Simulate: trace.gate_passed = true (fused non-empty, gate passed),
+    // but result.answer_state = NoAnswer. The report must follow the result.
+    let (state, reason) = answer_state_to_report(AnswerState::NoAnswer, false);
+    assert_eq!(
+        state,
+        AnswerState::NoAnswer,
+        "report must use result.answer_state, not trace.gate_passed"
+    );
+    assert_eq!(
+        reason,
+        ReportDecisionReason::CurrentGateReject,
+        "non-empty fused + NoAnswer must be CurrentGateReject"
     );
 }
