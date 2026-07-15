@@ -702,7 +702,27 @@ fn run_setup(command: SetupCommands) -> anyhow::Result<()> {
 /// Run `setup plan --client <client> --docset <docset> [--online] [--json]`.
 fn run_setup_plan(client: &str, docset: &str, online: bool, json: bool) -> anyhow::Result<()> {
     let now = now_unix_secs()?;
-    match nowdocs::automation::setup::setup_plan(docset, client, online, now) {
+    let root_path = match resolve_approved_root() {
+        Ok(r) => r,
+        Err(_) => {
+            if json {
+                print_setup_json(
+                    "setup.plan",
+                    nowdocs::agent_contract::AgentStatus::ActionRequired,
+                    nowdocs::agent_contract::ResultCode::ClientNotDetected,
+                    "cannot determine approved client root; manual configuration required",
+                    serde_json::json!({"client": client, "docset": docset}),
+                    Vec::new(),
+                    None,
+                );
+                return Ok(());
+            } else {
+                anyhow::bail!("cannot determine home directory for approved client root");
+            }
+        }
+    };
+    let root = nowdocs::clients::approved_root(&root_path)?;
+    match nowdocs::automation::setup::setup_plan(docset, client, &root, online, now) {
         Ok(nowdocs::automation::setup::SetupPlanResult::AlreadySatisfied { .. }) => {
             if json {
                 print_setup_json(
@@ -797,7 +817,7 @@ fn run_setup_plan(client: &str, docset: &str, online: bool, json: bool) -> anyho
             Ok(())
         }
         Err(e) => {
-            let (status, code, summary) = setup_error_mapping(&e);
+            let (status, code, summary, error_code) = setup_error_mapping(&e);
             if json {
                 print_setup_json(
                     "setup.plan",
@@ -807,7 +827,7 @@ fn run_setup_plan(client: &str, docset: &str, online: bool, json: bool) -> anyho
                     serde_json::json!({
                         "client": client,
                         "docset": docset,
-                        "error": format!("{e:#}")
+                        "error_code": error_code
                     }),
                     Vec::new(),
                     None,
@@ -834,7 +854,7 @@ fn run_setup_apply(plan_hash: &str, json: bool) -> anyhow::Result<()> {
                     nowdocs::agent_contract::AgentStatus::ActionRequired,
                     nowdocs::agent_contract::ResultCode::ClientNotDetected,
                     "cannot determine approved client root; manual configuration required",
-                    serde_json::json!({"plan_hash": plan_hash, "error": format!("{e:#}")}),
+                    serde_json::json!({"plan_hash": plan_hash, "error_code": "client_root_not_found"}),
                     Vec::new(),
                     None,
                 );
@@ -978,8 +998,41 @@ fn run_setup_apply(plan_hash: &str, json: bool) -> anyhow::Result<()> {
                 );
             }
         }
+        Ok(nowdocs::automation::setup::SetupApplyResult::AppliedButUnverified { observations }) => {
+            // Adapter committed but metadata could not be safely persisted.
+            // No rollback object is offered (contract 6). Exit 21.
+            if json {
+                print_setup_json(
+                    "setup.apply",
+                    nowdocs::agent_contract::AgentStatus::Partial,
+                    nowdocs::agent_contract::ResultCode::AppliedButUnverified,
+                    "configuration applied but setup metadata could not be persisted",
+                    serde_json::json!({
+                        "plan_hash": plan_hash,
+                        "observations": observations,
+                    }),
+                    Vec::new(),
+                    None,
+                );
+                std::process::exit(
+                    nowdocs::agent_contract::ResultCode::AppliedButUnverified
+                        .exit_code()
+                        .into(),
+                );
+            } else {
+                println!(
+                    "partial: configuration applied but setup metadata could not be persisted"
+                );
+                println!("rollback is not available; verify the client configuration manually");
+                std::process::exit(
+                    nowdocs::agent_contract::ResultCode::AppliedButUnverified
+                        .exit_code()
+                        .into(),
+                );
+            }
+        }
         Err(e) => {
-            let (status, code, summary) = setup_error_mapping(&e);
+            let (status, code, summary, error_code) = setup_error_mapping(&e);
             if json {
                 print_setup_json(
                     "setup.apply",
@@ -988,7 +1041,7 @@ fn run_setup_apply(plan_hash: &str, json: bool) -> anyhow::Result<()> {
                     &summary,
                     serde_json::json!({
                         "plan_hash": plan_hash,
-                        "error": format!("{e:#}")
+                        "error_code": error_code
                     }),
                     Vec::new(),
                     None,
@@ -1022,7 +1075,7 @@ fn run_setup_rollback(operation_id: &str, json: bool) -> anyhow::Result<()> {
                     "cannot determine approved client root; manual rollback required",
                     serde_json::json!({
                         "operation_id": operation_id,
-                        "error": format!("{e:#}")
+                        "error_code": "client_root_not_found"
                     }),
                     Vec::new(),
                     None,
@@ -1077,7 +1130,7 @@ fn run_setup_rollback(operation_id: &str, json: bool) -> anyhow::Result<()> {
             Ok(())
         }
         Err(e) => {
-            let (status, code, summary) = setup_error_mapping(&e);
+            let (status, code, summary, error_code) = setup_error_mapping(&e);
             if json {
                 print_setup_json(
                     "setup.rollback",
@@ -1086,7 +1139,7 @@ fn run_setup_rollback(operation_id: &str, json: bool) -> anyhow::Result<()> {
                     &summary,
                     serde_json::json!({
                         "operation_id": operation_id,
-                        "error": format!("{e:#}")
+                        "error_code": error_code
                     }),
                     Vec::new(),
                     None,
@@ -1163,11 +1216,16 @@ fn print_setup_json(
 }
 
 /// Map a `setup` error to an agent-contract status/code/summary.
+///
+/// The summary and `error_code` are stable, redacted strings: they never
+/// contain raw error text, file paths, HOME/XDG values, or config bytes
+/// (contract 7).
 fn setup_error_mapping(
     e: &anyhow::Error,
 ) -> (
     nowdocs::agent_contract::AgentStatus,
     nowdocs::agent_contract::ResultCode,
+    String,
     String,
 ) {
     let msg = format!("{e:#}");
@@ -1175,49 +1233,57 @@ fn setup_error_mapping(
         (
             nowdocs::agent_contract::AgentStatus::Error,
             nowdocs::agent_contract::ResultCode::PlanNotFound,
-            msg,
+            "plan not found".to_string(),
+            "plan_not_found".to_string(),
         )
     } else if msg.contains("PLAN_EXPIRED") {
         (
             nowdocs::agent_contract::AgentStatus::Error,
             nowdocs::agent_contract::ResultCode::PlanExpired,
-            msg,
+            "plan expired".to_string(),
+            "plan_expired".to_string(),
         )
     } else if msg.contains("PLAN_STALE") {
         (
             nowdocs::agent_contract::AgentStatus::Error,
             nowdocs::agent_contract::ResultCode::PlanStale,
-            msg,
+            "plan stale".to_string(),
+            "plan_stale".to_string(),
         )
     } else if msg.contains("PLAN_TAMPERED") {
         (
             nowdocs::agent_contract::AgentStatus::Error,
             nowdocs::agent_contract::ResultCode::PlanTampered,
-            msg,
+            "plan tampered".to_string(),
+            "plan_tampered".to_string(),
         )
     } else if msg.contains("OPERATION_IN_PROGRESS") {
         (
             nowdocs::agent_contract::AgentStatus::Error,
             nowdocs::agent_contract::ResultCode::OperationInProgress,
-            msg,
+            "operation in progress".to_string(),
+            "operation_in_progress".to_string(),
         )
     } else if msg.contains("OPERATION_LOCK_UNSAFE") {
         (
             nowdocs::agent_contract::AgentStatus::Error,
             nowdocs::agent_contract::ResultCode::PermissionDenied,
-            msg,
+            "operation lock unsafe".to_string(),
+            "operation_lock_unsafe".to_string(),
         )
     } else if msg.contains("VERIFICATION_FAILED") {
         (
             nowdocs::agent_contract::AgentStatus::Error,
             nowdocs::agent_contract::ResultCode::VerificationFailed,
-            msg,
+            "verification failed".to_string(),
+            "verification_failed".to_string(),
         )
     } else {
         (
             nowdocs::agent_contract::AgentStatus::Error,
             nowdocs::agent_contract::ResultCode::InternalError,
-            msg,
+            "internal error".to_string(),
+            "internal_error".to_string(),
         )
     }
 }
