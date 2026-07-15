@@ -27,5 +27,6 @@ pub mod retrieve;
 pub mod smoke;
 pub mod store;
 pub mod tools;
+pub mod update;
 
 // ---- Module stubs (1b-1h fill these) ----

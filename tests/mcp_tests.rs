@@ -338,3 +338,162 @@ fn test_mcp_oversized_line_returns_32700() {
         "oversized line must return parse error -32700, got: {line}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Cached update reminder on serve (unified update service)
+//
+// serve is cache-only: it may claim a fresh unnotified reminder and write it
+// exactly once to stderr. It must never initiate a network request, stdout
+// must remain protocol-clean NDJSON, and two sequential serve processes must
+// not both claim the same reminder.
+// ---------------------------------------------------------------------------
+
+/// Write a seeded update-cache.json into `<cache_home>/nowdocs/` with a fresh
+/// unnotified newer version, so serve claims the reminder without fetching.
+fn seed_update_cache(cache_home: &std::path::Path) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let cache_json = serde_json::json!({
+        "schema_version": 1,
+        "running_version": env!("CARGO_PKG_VERSION"),
+        "last_attempt_secs": now,
+        "last_success_secs": now,
+        "latest_version": "99.0.0",
+        "notified_version": null,
+    });
+    let dir = cache_home.join("nowdocs");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("update-cache.json"), cache_json.to_string()).unwrap();
+}
+
+/// Spawn `nowdocs serve` with an unreachable proxy and a seeded cache, capturing
+/// stderr. Returns the child handle so the caller can interact with it.
+fn spawn_with_cache(cache_path: &std::path::Path) -> (McpSession, std::process::Child) {
+    let bin = bin_path();
+    let mut child = Command::new(&bin)
+        .arg("serve")
+        .env("XDG_CACHE_HOME", cache_path)
+        // Unreachable proxy so any accidental network attempt fails fast.
+        .env("http_proxy", "http://127.0.0.1:9")
+        .env("https_proxy", "http://127.0.0.1:9")
+        .env("HTTP_PROXY", "http://127.0.0.1:9")
+        .env("HTTPS_PROXY", "http://127.0.0.1:9")
+        .env("ALL_PROXY", "http://127.0.0.1:9")
+        .env("no_proxy", "")
+        .env("NO_PROXY", "")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn nowdocs serve");
+    let stdin = child.stdin.take().unwrap();
+    let stdout = BufReader::new(child.stdout.take().unwrap());
+    let session = McpSession { stdin, stdout };
+    (session, child)
+}
+
+/// serve with a seeded cache must: (1) print exactly one reminder to stderr,
+/// (2) keep stdout protocol-clean, (3) never make a network request.
+#[test]
+fn cached_update_reminder() {
+    let cache = tempfile::tempdir().unwrap();
+    let cache_path = cache.path().to_path_buf();
+    seed_update_cache(&cache_path);
+
+    let (mut s, child) = spawn_with_cache(&cache_path);
+
+    // Send initialize - the response must be clean JSON-RPC on stdout.
+    let resp = s.round_trip(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0.0.0"}
+        }
+    }));
+    let result = resp.get("result").expect("initialize must return result");
+    assert_eq!(result["protocolVersion"], nowdocs::mcp::PROTOCOL_VERSION);
+    assert_eq!(result["serverInfo"]["name"], "nowdocs");
+
+    // Do a tools/list to be sure stdout is fully protocol-clean.
+    let resp2 = s.round_trip(&serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
+    assert!(
+        resp2.get("result").is_some(),
+        "tools/list must return result"
+    );
+
+    // Close stdin so the server exits, then read stderr.
+    drop(s.stdin);
+    let output = child.wait_with_output().expect("wait for child");
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    let stderr_str = String::from_utf8_lossy(&output.stderr);
+
+    // stdout must be valid NDJSON (every non-empty line is a JSON object with
+    // jsonrpc field). No reminder text on stdout.
+    for line in stdout_str.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("stdout line not JSON: {line:?} ({e})"));
+        assert!(
+            v.get("jsonrpc").is_some(),
+            "stdout must be JSON-RPC, got: {line}"
+        );
+        assert!(
+            !line.contains("99.0.0"),
+            "stdout must not contain the update reminder, got: {line}"
+        );
+    }
+
+    // stderr must contain exactly one reminder with the version.
+    assert!(
+        stderr_str.contains("99.0.0"),
+        "stderr must contain the update reminder, got: {stderr_str}"
+    );
+    let count = stderr_str.matches("99.0.0").count();
+    assert_eq!(
+        count, 1,
+        "stderr must contain the reminder exactly once, got {count} times: {stderr_str}"
+    );
+}
+
+/// Two sequential serve processes must not both claim the same reminder: the
+/// first claims it (marks notified), the second sees it as already notified.
+#[test]
+fn cached_update_reminder_no_duplicate_claim() {
+    let cache = tempfile::tempdir().unwrap();
+    let cache_path = cache.path().to_path_buf();
+    seed_update_cache(&cache_path);
+
+    // First serve process: claims the reminder.
+    let (mut s1, child1) = spawn_with_cache(&cache_path);
+    let _ = s1.round_trip(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}
+    }));
+    drop(s1.stdin);
+    let out1 = child1.wait_with_output().expect("wait child1");
+    let stderr1 = String::from_utf8_lossy(&out1.stderr);
+    assert!(
+        stderr1.contains("99.0.0"),
+        "first serve must claim the reminder, got stderr: {stderr1}"
+    );
+
+    // Second serve process: must NOT claim (already notified).
+    let (mut s2, child2) = spawn_with_cache(&cache_path);
+    let _ = s2.round_trip(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}
+    }));
+    drop(s2.stdin);
+    let out2 = child2.wait_with_output().expect("wait child2");
+    let stderr2 = String::from_utf8_lossy(&out2.stderr);
+    assert!(
+        !stderr2.contains("99.0.0"),
+        "second serve must not re-claim the reminder, got stderr: {stderr2}"
+    );
+}
