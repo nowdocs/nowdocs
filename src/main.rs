@@ -88,8 +88,8 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             Ok(())
         }
         Commands::Install { docset } => {
-            let (url, sha) = catalog_lookup_for(&docset)?;
-            nowdocs::registry::install_with_sha256(&docset, &url, &sha)?;
+            let package = catalog_lookup_for(&docset)?;
+            nowdocs::registry::install_verified_package(&package)?;
             print_install_success(&docset);
             Ok(())
         }
@@ -155,8 +155,8 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             // expected SHA-256 hash. The library's internal update() handler (which handles local test file://
             // redirection via NOWDOCS_TEST_URL in test mode) is bypassed here to enforce domain rules and
             // integrity symmetry.
-            let (url, sha) = catalog_lookup_for(&docset)?;
-            nowdocs::registry::install_with_sha256(&docset, &url, &sha)?;
+            let package = catalog_lookup_for(&docset)?;
+            nowdocs::registry::install_verified_package(&package)?;
             print_update_success(&docset);
             Ok(())
         }
@@ -560,7 +560,7 @@ fn print_ingest_success(docset: &str, files: u32, chunks: u32) {
     println!("next: nowdocs smoke {docset}");
 }
 
-/// Look up a docset's download URL and expected sha256 from the registry catalog index (S2).
+/// Look up a docset's full package metadata from the registry catalog index (S2).
 ///
 /// The catalog is the source of truth for integrity: `fetch_index` already
 /// validates every package's allowlisted download URL, license, and 64-hex
@@ -568,11 +568,11 @@ fn print_ingest_success(docset: &str, files: u32, chunks: u32) {
 /// is rejected before any active cache path is touched. An index fetch failure
 /// or an unknown docset is a hard error — registry installs never skip
 /// integrity verification.
-fn catalog_lookup_for(docset: &str) -> anyhow::Result<(String, String)> {
+fn catalog_lookup_for(docset: &str) -> anyhow::Result<nowdocs::registry::RegistryPackage> {
     let idx = nowdocs::registry::fetch_index()
         .context("fetch registry index to verify artifact integrity")?;
-    match idx.packages.iter().find(|p| p.docset == docset) {
-        Some(p) => Ok((p.download_url.clone(), p.sha256.clone())),
+    match idx.packages.into_iter().find(|p| p.docset == docset) {
+        Some(p) => Ok(p),
         None => anyhow::bail!(
             "docset {docset} not found in the registry index; run `nowdocs registry list` to see available docsets"
         ),

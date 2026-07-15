@@ -739,17 +739,34 @@ fn validate_chunks_jsonl(manifest: &Manifest, rows: &[JsonlChunk]) -> Result<(),
 /// **Security**: production URLs must be on `nowdocs-registry` domains.
 /// Test `file://` URLs are allowed (test fixture bypass).
 pub fn install(docset: &str, url: &str) -> Result<()> {
-    install_inner(docset, url, None)
+    install_inner(docset, url, None, || Ok(()))
 }
 
 /// Install a docset, verifying the archive's sha256 against `expected_sha256`
 /// (S2). A mismatch removes any transient download and bails with
 /// `ARCHIVE_SHA256_MISMATCH` before any active cache path is touched.
 pub fn install_with_sha256(docset: &str, url: &str, expected_sha256: &str) -> Result<()> {
-    install_inner(docset, url, Some(expected_sha256))
+    install_inner(docset, url, Some(expected_sha256), || Ok(()))
 }
 
-fn install_inner(docset: &str, url: &str, expected_sha256: Option<&str>) -> Result<()> {
+/// Install a verified Registry package, creating a provenance receipt after
+/// promotion. Receipt persistence failure makes the install fail.
+pub fn install_verified_package(package: &RegistryPackage) -> Result<()> {
+    let docset = input::validate_docset(&package.docset)?;
+    install_inner(
+        &docset,
+        &package.download_url,
+        Some(&package.sha256),
+        || crate::registry_receipt::record_after_promotion(package),
+    )
+}
+
+fn install_inner(
+    docset: &str,
+    url: &str,
+    expected_sha256: Option<&str>,
+    post_promotion: impl FnOnce() -> Result<()>,
+) -> Result<()> {
     let docset = input::validate_docset(docset)?;
     cache::ensure_layout()?;
 
@@ -763,6 +780,9 @@ fn install_inner(docset: &str, url: &str, expected_sha256: Option<&str>) -> Resu
     // Atomically promote staging -> active (rename-based). On failure this
     // restores the previous active docset and leaves staging for diagnostics.
     promote_staging(&docset, &staging_path)?;
+
+    // Execute post-promotion hook while the install lock is still held.
+    post_promotion()?;
 
     Ok(())
 }
@@ -1301,6 +1321,8 @@ pub fn update(docset: &str) -> Result<()> {
 /// docset-scoped leftovers (stashed license, staging dirs, rollback dirs).
 pub fn uninstall(docset: &str) -> Result<()> {
     let docset = input::validate_docset(docset)?;
+    // Remove provenance receipt before cache data to prevent stale identity.
+    crate::registry_receipt::remove(&docset)?;
     let db = cache::db_path(&docset);
     let mp = cache::manifest_path(&docset);
     if db.exists() {
