@@ -80,6 +80,11 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Plan, apply, or roll back a one-plan setup for one client plus one docset
+    Setup {
+        #[command(subcommand)]
+        command: SetupCommands,
+    },
     /// Browse the nowdocs registry catalog (list / search available docsets; may access the network)
     Registry {
         #[command(subcommand)]
@@ -153,6 +158,43 @@ pub enum RegistryCommands {
     Search {
         /// Search query (matched against docset name and description)
         query: String,
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SetupCommands {
+    /// Create one reusable setup plan for one client plus one docset
+    Plan {
+        /// Client to configure (claude-code, claude-desktop, cursor, generic)
+        #[arg(long)]
+        client: String,
+        /// Docset to ensure
+        #[arg(long)]
+        docset: String,
+        /// Fetch and validate registry metadata in memory (required to plan a new install/update)
+        #[arg(long)]
+        online: bool,
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+    /// Apply a previously created setup plan by hash
+    Apply {
+        /// Plan hash (64 lowercase hex characters)
+        #[arg(long)]
+        plan_hash: String,
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+    /// Roll back a setup operation by its operation id
+    Rollback {
+        /// Operation id to roll back
+        #[arg(long)]
+        operation_id: String,
         /// Output in JSON format
         #[arg(long)]
         json: bool,
