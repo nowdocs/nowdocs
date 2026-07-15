@@ -19,10 +19,10 @@ pub use config_io::{
     SafeTarget,
 };
 
-mod claude_code;
-mod claude_desktop;
-mod cursor;
-mod generic;
+pub(crate) mod claude_code;
+pub(crate) mod claude_desktop;
+pub(crate) mod cursor;
+pub(crate) mod generic;
 
 /// Supported MCP clients. The set is fixed; there is no arbitrary map or
 /// secret-bearing string field.
@@ -95,12 +95,111 @@ pub struct GeneratedConfig {
     pub manual_steps: Vec<String>,
 }
 
+/// Explicit, non-serialized inputs for a confirmed client execution step.
+///
+/// C6 adapters receive an approved configuration root and an absolute nowdocs
+/// binary path; neither value is included in machine-facing observations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientExecutionRequest {
+    operation_id: String,
+    approved_root: ApprovedRoot,
+    binary_path: std::path::PathBuf,
+}
+
+impl ClientExecutionRequest {
+    /// Construct a validated execution request.
+    pub fn new(
+        operation_id: &str,
+        approved_root: ApprovedRoot,
+        binary_path: std::path::PathBuf,
+    ) -> Result<Self> {
+        if operation_id.is_empty()
+            || operation_id.len() > 64
+            || !operation_id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        {
+            anyhow::bail!("invalid client execution operation id");
+        }
+        if !binary_path.is_absolute() {
+            anyhow::bail!("client execution binary path must be absolute");
+        }
+        Ok(Self {
+            operation_id: operation_id.to_string(),
+            approved_root,
+            binary_path,
+        })
+    }
+
+    /// Stable operation identifier for operation-owned rollback.
+    pub fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+
+    /// Explicitly approved configuration root.
+    pub fn approved_root(&self) -> &ApprovedRoot {
+        &self.approved_root
+    }
+
+    /// Absolute nowdocs binary path for stdio registration.
+    pub fn binary_path(&self) -> &Path {
+        &self.binary_path
+    }
+}
+
+/// Closed result state for a client execution attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientExecutionOutcome {
+    Applied,
+    Verified,
+    RolledBack,
+    ManualRequired,
+    Conflict,
+    Unsupported,
+}
+
+/// Redacted result of a client execution attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientExecutionResult {
+    pub outcome: ClientExecutionOutcome,
+    pub observations: Vec<String>,
+}
+
+impl ClientExecutionResult {
+    /// Return a stable result for a capability that this adapter does not own.
+    pub fn unsupported(client: ClientId, operation: &str) -> Self {
+        Self {
+            outcome: ClientExecutionOutcome::Unsupported,
+            observations: vec![format!(
+                "{} does not support {} in this build",
+                client, operation
+            )],
+        }
+    }
+}
+
 /// One generation-only client adapter.
 pub trait ClientAdapter {
     fn id(&self) -> ClientId;
     fn capabilities(&self) -> AdapterCapabilities;
     fn detect(&self, root: &ApprovedRoot) -> Result<Detection>;
     fn generate(&self, binary_path: &Path) -> Result<GeneratedConfig>;
+
+    /// Apply an approved configuration change. C5 adapters default-deny until
+    /// their owning C6 slice implements this method.
+    fn apply(&self, _request: &ClientExecutionRequest) -> Result<ClientExecutionResult> {
+        Ok(ClientExecutionResult::unsupported(self.id(), "apply"))
+    }
+
+    /// Verify a previously requested configuration change.
+    fn verify(&self, _request: &ClientExecutionRequest) -> Result<ClientExecutionResult> {
+        Ok(ClientExecutionResult::unsupported(self.id(), "verify"))
+    }
+
+    /// Roll back an operation-owned configuration change.
+    fn rollback(&self, _request: &ClientExecutionRequest) -> Result<ClientExecutionResult> {
+        Ok(ClientExecutionResult::unsupported(self.id(), "rollback"))
+    }
 }
 
 /// All supported client adapters in a stable order.
