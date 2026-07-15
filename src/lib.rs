@@ -23,6 +23,7 @@ pub mod registry_build;
 // temporary dead-code allowance when runtime wiring makes every item live.
 #[allow(dead_code)]
 pub(crate) mod rerank;
+pub mod registry_receipt;
 pub mod retrieve;
 pub mod smoke;
 pub mod store;
