@@ -55,7 +55,10 @@ impl SafeTarget {
 /// Validate and take ownership of an approved root directory.
 ///
 /// The path must be absolute, exist as a directory, contain no symlink
-/// component, and (on Unix) be owner-only (`0700`) or be chmodable to `0700`.
+/// component, and (on Unix) have neither group nor other write bit set
+/// (`mode & 0o022 == 0`). This accepts normal `0755` and private `0700`;
+/// it refuses `0775`, `0777`, and any other group/world-writable mode.
+/// The function is a pure validator: it never changes the directory's mode.
 pub fn approved_root(path: &Path) -> Result<ApprovedRoot> {
     if !path.is_absolute() {
         anyhow::bail!("approved root must be absolute: {}", path.display());
@@ -73,14 +76,16 @@ pub fn approved_root(path: &Path) -> Result<ApprovedRoot> {
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = meta.permissions().mode() & 0o777;
-        if mode > 0o700 {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-                .with_context(|| format!("chmod 0700 approved root {}", path.display()))?;
-        } else if mode < 0o700 {
-            // Stricter-than-0700 with no owner-write (e.g., 0500) would prevent
-            // later writes; refuse rather than silently relax.
+        if mode & 0o022 != 0 {
             anyhow::bail!(
-                "approved root {} has unusable permissions {:03o} (must be 0700 or writable by owner)",
+                "approved root {} is group- or world-writable ({:03o})",
+                path.display(),
+                mode
+            );
+        }
+        if mode & 0o700 == 0 {
+            anyhow::bail!(
+                "approved root {} has no owner permissions ({:03o})",
                 path.display(),
                 mode
             );
