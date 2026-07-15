@@ -42,7 +42,10 @@ impl ClientAdapter for GenericAdapter {
             redacted_fragment:
                 r#"{"mcpServers":{"nowdocs":{"command":"<binary>","args":["serve"]}}}"#.to_string(),
             manual_steps: vec![
-                "Add this stdio server to your MCP client configuration.".to_string()
+                "Copy the generated stdio configuration into a compatible MCP \
+                 client's documented configuration."
+                    .to_string(),
+                "Restart or reload that MCP client as required by its documentation.".to_string(),
             ],
         })
     }
