@@ -1051,6 +1051,50 @@ fn update_notification_failing_command_no_remind() {
     );
 }
 
+/// An eligible command with seeded docset updates must print the docset
+/// notice to stderr.
+#[test]
+fn update_notification_eligible_command_prints_docset_notice() {
+    let root = tempfile::tempdir().unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let cache_json = serde_json::json!({
+        "schema_version": 2,
+        "binary": {
+            "running_version": env!("CARGO_PKG_VERSION"),
+            "last_attempt_secs": now,
+            "last_success_secs": now,
+            "latest_version": null,
+            "notified_version": null,
+        },
+        "registry": {
+            "last_attempt_secs": now,
+            "last_success_secs": now,
+            "available": [
+                {"docset": "nextjs", "installed_version": "14.2.5", "latest_version": "15.0.0"}
+            ],
+            "notified_snapshot": null,
+        },
+    });
+    let dir = root.path().join("nowdocs");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("update-cache.json"), cache_json.to_string()).unwrap();
+
+    let out = run_nowdocs_isolated(root.path(), &["doctor", "--json"]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("nowdocs update nextjs"),
+        "stderr must contain docset update command, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("Updates available for installed docsets:"),
+        "stderr must contain docset notice header, got: {stderr}"
+    );
+}
+
 /// Opt-out (NOWDOCS_UPDATE_CHECK=0) suppresses the reminder even with a seeded
 /// cache.
 #[test]
