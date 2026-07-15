@@ -27,6 +27,13 @@ If a desktop client starts with a restricted `PATH`, use an absolute path to the
 }
 ```
 
+Native Cohere reranking is optional and must be configured in the environment
+of the process that starts `nowdocs serve`, not in an MCP tool request. Desktop
+clients can launch with a restricted environment, so make the required
+variables available to that client or server process. Read the [native Cohere
+reranking configuration and data-transfer disclosure](../README.md#optional-native-cohere-reranking)
+before enabling it.
+
 ## Cursor
 
 Add the generic server entry to Cursor's MCP configuration, restart Cursor, and ask the agent to list tools. Verify that `nowdocs_search` and `nowdocs_list` are available.

@@ -6,11 +6,11 @@ Coding agents can confidently suggest APIs that have changed since their trainin
 
 ![Architecture overview: documentation sources are ingested, embedded, indexed locally, retrieved through hybrid search, sanitized, and served to MCP clients over stdio.](docs/assets/architecture.png)
 
-**Current release:** [v0.1.2](https://github.com/nowdocs/nowdocs/releases/tag/v0.1.2). nowdocs is free to run, has no telemetry, and keeps queries, embeddings, and indexed documentation on your device.
+**Current release:** [v0.1.2](https://github.com/nowdocs/nowdocs/releases/tag/v0.1.2). nowdocs is free to run, has no telemetry, and by default keeps queries, embeddings, and indexed documentation on your device.
 
 ## Why nowdocs
 
-- **Local-first:** query text, embeddings, and document content stay on your machine.
+- **Local-first by default:** query text, embeddings, and document content stay on your machine unless you opt in to native Cohere reranking.
 - **Hybrid retrieval:** semantic search, BM25 full-text search, and reciprocal-rank fusion (RRF).
 - **MCP over stdio:** no listening port, host, or public service to configure.
 - **Curated registry:** start with current Next.js, React, and Vue docsets, or ingest local Markdown documentation.
@@ -78,6 +78,51 @@ Register the server with an MCP client using this generic configuration:
 ```
 
 Client-specific configuration for Cursor, Claude Code, Claude Desktop, and Aider is in [MCP Clients](docs/MCP_CLIENTS.md).
+
+## Optional native Cohere reranking
+
+Reranking is disabled by default. When you explicitly enable native Cohere
+reranking, nowdocs sends each search query and up to 40 sanitized, size-bounded
+candidate document strings to Cohere using your account. Disabled mode remains
+local-only. `nowdocs smoke` uses the same configured reranker and can also make
+a request under your Cohere account. If a remote request fails, nowdocs falls
+back to local ranking for that search, although the failed request may already
+have transmitted its input.
+
+Configure the environment of the process that starts `nowdocs serve`:
+
+```bash
+export NOWDOCS_RERANK_PROVIDER=cohere
+export NOWDOCS_RERANK_MODEL=rerank-v3.5
+export COHERE_API_KEY='your-cohere-api-key'
+# Optional; defaults to 2000 and must be an integer from 100 through 10000.
+export NOWDOCS_RERANK_TIMEOUT_MS=2000
+nowdocs serve
+```
+
+nowdocs does not persist the key. `COHERE_API_KEY` is sent only in Cohere's
+required Authorization header; nowdocs never includes it in logs, MCP output,
+or evaluator output. A partial or invalid opt-in is a startup error rather than
+a silent fallback.
+
+The integration accepts any model identifier that Cohere's native v2 Rerank
+endpoint accepts, subject to your account access. These are non-binding
+examples:
+
+| Example identifier | Use when |
+|---|---|
+| `rerank-v3.5` | You already use this Cohere Rerank model or want an established baseline to evaluate. |
+| `rerank-v4.0-fast` | Interactive latency and throughput matter most. |
+| `rerank-v4.0-pro` | You prioritize ranking quality for more complex workloads. |
+
+See Cohere's [Rerank model documentation](https://docs.cohere.com/docs/rerank)
+for current model availability and account terms. OpenRouter credentials and
+OpenRouter model slugs are not supported by this native Cohere integration.
+
+Cohere changes only the candidate order before nowdocs applies its local MMR
+diversity ranking. nowdocs does not expose or use Cohere relevance scores as an
+answer-confidence score, and this optional integration does not promise a
+quality improvement.
 
 ## Common workflows
 
