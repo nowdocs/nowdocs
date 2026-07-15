@@ -529,12 +529,24 @@ mod tests {
         let request_lower = request.to_ascii_lowercase();
         assert!(request_lower.contains("authorization: bearer test-api-key\r\n"));
         assert!(request_lower.contains("accept: application/json\r\n"));
+        assert!(request_lower.contains("content-type: application/json\r\n"));
         assert!(request_lower.contains(&format!(
             "user-agent: {}\r\n",
             COHERE_USER_AGENT.to_ascii_lowercase()
         )));
         let json_start = request.find("\r\n\r\n").unwrap() + 4;
         let value: serde_json::Value = serde_json::from_str(&request[json_start..]).unwrap();
+        let mut keys: Vec<_> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["documents", "max_tokens_per_doc", "model", "query", "top_n"]
+        );
         assert_eq!(
             value.get("model").and_then(|v| v.as_str()),
             Some("rerank-v4.0-fast")
@@ -545,8 +557,10 @@ mod tests {
             value.get("max_tokens_per_doc").and_then(|v| v.as_u64()),
             Some(4096)
         );
-        assert_eq!(value.get("documents").unwrap().as_array().unwrap().len(), 3);
-        assert!(value.get("stable_id").is_none());
+        assert_eq!(
+            value.get("documents").unwrap(),
+            &serde_json::json!(["first document", "second document", "third document"])
+        );
         assert!(!request[json_start..].contains("test-api-key"));
         let debug = format!("{reranker:?}");
         assert!(debug.contains("[REDACTED]"));
