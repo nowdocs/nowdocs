@@ -85,7 +85,11 @@ impl fmt::Display for RerankConfigError {
 impl std::error::Error for RerankConfigError {}
 
 pub(crate) fn load_rerank_config() -> Result<RerankConfig, RerankConfigError> {
-    parse_rerank_config_with(|name| std::env::var_os(name))
+    parse_rerank_config_with(read_process_env)
+}
+
+fn read_process_env(name: &str) -> Option<OsString> {
+    std::env::var_os(name)
 }
 
 pub(crate) fn parse_rerank_config_with<F>(
@@ -259,12 +263,20 @@ mod tests {
                 setting: TIMEOUT_ENV
             })
         );
+        assert_eq!(
+            parse(&[(MODEL_ENV, "rerank-v4.0-fast"), (TIMEOUT_ENV, "2000")]),
+            Err(RerankConfigError::ProviderRequired { setting: MODEL_ENV })
+        );
     }
 
     #[test]
     fn cohere_opt_in_requires_exact_provider_model_and_key() {
         assert_eq!(
             parse(&[(PROVIDER_ENV, "COHERE")]),
+            Err(RerankConfigError::UnsupportedProvider)
+        );
+        assert_eq!(
+            parse(&[(PROVIDER_ENV, "voyage")]),
             Err(RerankConfigError::UnsupportedProvider)
         );
         assert_eq!(
@@ -276,7 +288,23 @@ mod tests {
             Err(RerankConfigError::MissingModel)
         );
         assert_eq!(
-            parse(&[(PROVIDER_ENV, "cohere"), (MODEL_ENV, "rerank-v4.0-fast"),]),
+            parse(&[(PROVIDER_ENV, "cohere"), (MODEL_ENV, "rerank-v4.0-fast")]),
+            Err(RerankConfigError::MissingApiKey)
+        );
+        assert_eq!(
+            parse(&[
+                (PROVIDER_ENV, "cohere"),
+                (MODEL_ENV, "   "),
+                (COHERE_API_KEY_ENV, "key"),
+            ]),
+            Err(RerankConfigError::MissingModel)
+        );
+        assert_eq!(
+            parse(&[
+                (PROVIDER_ENV, "cohere"),
+                (MODEL_ENV, "model"),
+                (COHERE_API_KEY_ENV, "   "),
+            ]),
             Err(RerankConfigError::MissingApiKey)
         );
     }
@@ -403,16 +431,23 @@ mod tests {
     fn non_unicode_values_fail_without_echoing_bytes() {
         use std::os::unix::ffi::OsStringExt;
 
-        let error = parse_rerank_config_with(|name| {
-            (name == PROVIDER_ENV).then(|| OsString::from_vec(vec![0xff]))
-        })
-        .unwrap_err();
-        assert_eq!(
-            error,
-            RerankConfigError::NonUnicode {
-                setting: PROVIDER_ENV
-            }
-        );
-        assert!(!error.to_string().contains("255"));
+        for invalid_setting in [PROVIDER_ENV, MODEL_ENV, TIMEOUT_ENV, COHERE_API_KEY_ENV] {
+            let error = parse_rerank_config_with(|name| match name {
+                _ if name == invalid_setting => Some(OsString::from_vec(vec![0xff])),
+                PROVIDER_ENV => Some(OsString::from("cohere")),
+                MODEL_ENV => Some(OsString::from("model")),
+                TIMEOUT_ENV => None,
+                COHERE_API_KEY_ENV => Some(OsString::from("key")),
+                _ => None,
+            })
+            .unwrap_err();
+            assert_eq!(
+                error,
+                RerankConfigError::NonUnicode {
+                    setting: invalid_setting
+                }
+            );
+            assert!(!error.to_string().contains("255"));
+        }
     }
 }
