@@ -611,8 +611,8 @@ fn vectors() -> HashMap<u32, Vec<f32>> {
 
 #[test]
 fn trace_does_not_change_rank_or_gate() {
-    let plain = rank_and_gate_candidates(&qv(), hits(), &vectors(), 3, false, None, None);
-    let traced = rank_and_gate_candidates(&qv(), hits(), &vectors(), 3, true, None, None);
+    let plain = rank_and_gate_candidates(&qv(), hits(), &vectors(), 3, false);
+    let traced = rank_and_gate_candidates(&qv(), hits(), &vectors(), 3, true);
     let plain_ids: Vec<_> = plain.hits.iter().map(|hit| hit.chunk_idx).collect();
     let traced_ids: Vec<_> = traced.hits.iter().map(|hit| hit.chunk_idx).collect();
     assert_eq!(plain_ids, traced_ids);
@@ -631,7 +631,7 @@ fn gate_retains_pre_gate_selection_for_answer_decision() {
     let candidates = vec![evidence(hit_url(0, "below-threshold.md", 0.016))];
     let vectors = vecs(&[(0, vec_with_cosine(0.80))]);
 
-    let result = rank_and_gate_candidates(&qv(), candidates, &vectors, 1, true, None, None);
+    let result = rank_and_gate_candidates(&qv(), candidates, &vectors, 1, true);
 
     assert!(
         result.hits.is_empty(),
@@ -663,7 +663,7 @@ fn trace_pre_mmr_cosines_come_from_fused_pool_not_mmr_order() {
         (1, vec_with_cosine(0.94)), // near-duplicate of chunk 0
         (2, diverse),
     ]);
-    let result = rank_and_gate_candidates(&qv(), hits, &vectors, 3, true, None, None);
+    let result = rank_and_gate_candidates(&qv(), hits, &vectors, 3, true);
     assert!(result.gate_passed, "top cosine 0.95 must pass the gate");
     let trace = result.trace.expect("trace enabled");
 
@@ -706,7 +706,7 @@ fn trace_pre_mmr_cosines_omit_non_finite_values() {
     ];
     let vectors = vecs(&[(0, vec_with_cosine(0.90)), (1, vec![f32::NAN, 1.0])]);
 
-    let result = rank_and_gate_candidates(&qv(), hits, &vectors, 2, true, None, None);
+    let result = rank_and_gate_candidates(&qv(), hits, &vectors, 2, true);
     let trace = result.trace.expect("trace enabled");
 
     assert_eq!(trace.pre_mmr_top_cosines.len(), 1);
@@ -772,7 +772,7 @@ fn calibrated_runtime_no_answer_preserves_empty_invariants() {
     // Top cosine 0.80 / RRF 0.016: below both binary thresholds -> reject.
     let candidates = vec![evidence(hit_url(0, "low.md", 0.016))];
     let vectors = vecs(&[(0, vec_with_cosine(0.80))]);
-    let result = rank_and_gate_candidates(&qv(), candidates, &vectors, 1, true, None, None);
+    let result = rank_and_gate_candidates(&qv(), candidates, &vectors, 1, true);
 
     assert!(
         result.hits.is_empty(),
@@ -800,7 +800,7 @@ fn calibrated_runtime_borderline_retains_pre_gate_hits() {
     // Top cosine 0.83: above MIN_ANSWER_COSINE (0.82) but below 0.845.
     let candidates = vec![evidence(hit_url(0, "match.md", 0.030))];
     let vectors = vecs(&[(0, vec_with_cosine(0.83))]);
-    let result = rank_and_gate_candidates(&qv(), candidates, &vectors, 1, true, None, None);
+    let result = rank_and_gate_candidates(&qv(), candidates, &vectors, 1, true);
 
     assert!(result.gate_passed, "0.83 cosine must pass the binary gate");
     assert_eq!(
@@ -833,7 +833,7 @@ fn calibrated_runtime_confident_uses_same_ranking_path() {
         evidence(hit_url(1, "b.md", 0.029)),
     ];
     let vectors = vecs(&[(0, vec_with_cosine(0.90)), (1, vec_with_cosine(0.85))]);
-    let result = rank_and_gate_candidates(&qv(), candidates, &vectors, 2, true, None, None);
+    let result = rank_and_gate_candidates(&qv(), candidates, &vectors, 2, true);
 
     assert!(result.gate_passed, "0.90 cosine must pass the gate");
 
@@ -857,7 +857,7 @@ fn calibrated_runtime_confident_uses_same_ranking_path() {
 /// ranking path yields zero pre-gate hits (empty-result invariant).
 #[test]
 fn calibrated_runtime_no_candidates_yields_empty() {
-    let result = rank_and_gate_candidates(&qv(), Vec::new(), &HashMap::new(), 1, true, None, None);
+    let result = rank_and_gate_candidates(&qv(), Vec::new(), &HashMap::new(), 1, true);
     assert!(
         result.pre_gate_hits.is_empty(),
         "no candidates must yield zero pre-gate hits"

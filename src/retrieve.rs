@@ -338,7 +338,7 @@ fn search_impl(
         pre_gate_hits,
         trace,
         ..
-    } = rank_and_gate_candidates(
+    } = rank_and_gate_candidates_with_reranker(
         &query_vector,
         candidates,
         &vectors,
@@ -485,9 +485,14 @@ pub fn mmr_rerank(
         })
         .collect();
 
-    mmr_rerank_inner(hits, vectors, top_k, lambda, &|chunk_idx| {
-        query_cos.get(&chunk_idx).copied().unwrap_or(0.0)
-    })
+    mmr_rerank_inner(
+        hits,
+        vectors,
+        top_k,
+        lambda,
+        &|chunk_idx| query_cos.get(&chunk_idx).copied().unwrap_or(0.0),
+        false,
+    )
 }
 
 /// Internal MMR helper parameterized by a relevance closure. Public
@@ -499,6 +504,7 @@ fn mmr_rerank_inner(
     top_k: usize,
     lambda: f32,
     relevance: &dyn Fn(u32) -> f32,
+    preserve_fallback_order: bool,
 ) -> Vec<SearchHit> {
     if hits.is_empty() || top_k == 0 {
         return Vec::new();
@@ -507,11 +513,13 @@ fn mmr_rerank_inner(
     let (mut pool, mut fallback): (Vec<SearchHit>, Vec<SearchHit>) = hits
         .into_iter()
         .partition(|h| vectors.contains_key(&h.chunk_idx));
-    fallback.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if !preserve_fallback_order {
+        fallback.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
 
     let mut selected: Vec<SearchHit> = Vec::with_capacity(top_k);
 
@@ -680,7 +688,11 @@ fn validate_rerank_order(
     let expected: std::collections::HashSet<u32> =
         candidates.iter().map(|c| c.hit.chunk_idx).collect();
     let seen: std::collections::HashSet<u32> = response_ids.iter().copied().collect();
-    if expected.len() != seen.len() || expected != seen {
+    if expected.len() != candidates.len()
+        || response_ids.len() != candidates.len()
+        || seen.len() != response_ids.len()
+        || expected != seen
+    {
         return None;
     }
     Some(response_ids.to_vec())
@@ -703,6 +715,25 @@ fn validate_rerank_order(
 /// gate returns at least one hit, so a no-answer decision still yields its
 /// trace.
 pub fn rank_and_gate_candidates(
+    query_vector: &[f32],
+    candidates: Vec<CandidateEvidence>,
+    vectors: &HashMap<u32, Vec<f32>>,
+    top_k: usize,
+    trace: bool,
+) -> RankedGateResult {
+    rank_and_gate_candidates_with_reranker(
+        query_vector,
+        candidates,
+        vectors,
+        top_k,
+        trace,
+        None,
+        None,
+    )
+}
+
+/// Internal reranker-aware variant of [`rank_and_gate_candidates`].
+pub(crate) fn rank_and_gate_candidates_with_reranker(
     query_vector: &[f32],
     candidates: Vec<CandidateEvidence>,
     vectors: &HashMap<u32, Vec<f32>>,
@@ -777,9 +808,14 @@ pub fn rank_and_gate_candidates(
             .enumerate()
             .map(|(p, h)| (h.chunk_idx, (n - p) as f32 / n as f32))
             .collect();
-        let selected = mmr_rerank_inner(reranked_cand_hits, vectors, top_k, MMR_LAMBDA, &|idx| {
-            ordinal_rel.get(&idx).copied().unwrap_or(0.0)
-        });
+        let selected = mmr_rerank_inner(
+            reranked_cand_hits,
+            vectors,
+            top_k,
+            MMR_LAMBDA,
+            &|idx| ordinal_rel.get(&idx).copied().unwrap_or(0.0),
+            true,
+        );
         Some(selected)
     });
 
@@ -1093,24 +1129,8 @@ mod c08c_tests {
             (1, vec_with_cosine(0.85)),
             (2, vec_with_cosine(0.80)),
         ]);
-        let local = rank_and_gate_candidates(
-            &qv(),
-            candidates.clone(),
-            &vectors,
-            3,
-            true,
-            None,
-            Some("test query"),
-        );
-        let reranked = rank_and_gate_candidates(
-            &qv(),
-            candidates,
-            &vectors,
-            3,
-            true,
-            None,
-            Some("test query"),
-        );
+        let local = rank_and_gate_candidates(&qv(), candidates.clone(), &vectors, 3, true);
+        let reranked = rank_and_gate_candidates(&qv(), candidates, &vectors, 3, true);
         let local_ids: Vec<u32> = local.hits.iter().map(|h| h.chunk_idx).collect();
         let reranked_ids: Vec<u32> = reranked.hits.iter().map(|h| h.chunk_idx).collect();
         assert_eq!(local_ids, reranked_ids, "disabled must give same hit IDs");
@@ -1139,7 +1159,7 @@ mod c08c_tests {
         ]);
         // Reranker says: chunk 1 first, chunk 0 second, chunk 2 third
         let fake = FakeReranker::new(vec![1, 0, 2]);
-        let result = rank_and_gate_candidates(
+        let result = rank_and_gate_candidates_with_reranker(
             &qv(),
             candidates,
             &vectors,
@@ -1191,20 +1211,12 @@ mod c08c_tests {
             (2, vec_with_cosine(0.80)),
         ]);
         // Baseline: no reranker
-        let baseline = rank_and_gate_candidates(
-            &qv(),
-            candidates.clone(),
-            &vectors,
-            3,
-            true,
-            None,
-            Some("test"),
-        );
+        let baseline = rank_and_gate_candidates(&qv(), candidates.clone(), &vectors, 3, true);
         let baseline_ids: Vec<u32> = baseline.hits.iter().map(|h| h.chunk_idx).collect();
 
         for class in classes {
             let failing = FailingReranker::new(class);
-            let result = rank_and_gate_candidates(
+            let result = rank_and_gate_candidates_with_reranker(
                 &qv(),
                 candidates.clone(),
                 &vectors,
@@ -1231,6 +1243,44 @@ mod c08c_tests {
         }
     }
 
+    #[test]
+    fn c08c_rejects_duplicate_or_overlong_rerank_order() {
+        let candidates = vec![
+            evidence(hit(0, "a.md", 0.030)),
+            evidence(hit(1, "b.md", 0.029)),
+        ];
+
+        assert!(validate_rerank_order(&[0], &candidates).is_none());
+        assert!(validate_rerank_order(&[0, 1, 0], &candidates).is_none());
+        assert!(validate_rerank_order(&[0, 9], &candidates).is_none());
+    }
+
+    #[test]
+    fn c08c_successful_rerank_keeps_vectorless_provider_order() {
+        let candidates = vec![
+            evidence(hit(0, "a.md", 0.010)),
+            evidence(hit(1, "b.md", 0.040)),
+        ];
+        let reranker = FakeReranker::new(vec![0, 1]);
+        let result = rank_and_gate_candidates_with_reranker(
+            &qv(),
+            candidates,
+            &HashMap::new(),
+            2,
+            true,
+            Some(&reranker),
+            Some("test query"),
+        );
+        let ids: Vec<u32> = result
+            .trace
+            .expect("trace enabled")
+            .mmr
+            .into_iter()
+            .map(|hit| hit.chunk_idx)
+            .collect();
+        assert_eq!(ids, vec![0, 1]);
+    }
+
     /// Assertion 5: Reranked NoAnswer returns no chunks; a gate-passing finite
     /// cosine below 0.845 is Borderline with chunks.
     #[test]
@@ -1239,7 +1289,7 @@ mod c08c_tests {
         let no_answer_candidates = vec![evidence(hit(0, "low.md", 0.016))];
         let no_answer_vectors = vecs(&[(0, vec_with_cosine(0.80))]);
         let fake = FakeReranker::new(vec![0]);
-        let result = rank_and_gate_candidates(
+        let result = rank_and_gate_candidates_with_reranker(
             &qv(),
             no_answer_candidates,
             &no_answer_vectors,
@@ -1257,7 +1307,7 @@ mod c08c_tests {
         let borderline_candidates = vec![evidence(hit(0, "match.md", 0.030))];
         let borderline_vectors = vecs(&[(0, vec_with_cosine(0.83))]);
         let fake2 = FakeReranker::new(vec![0]);
-        let result2 = rank_and_gate_candidates(
+        let result2 = rank_and_gate_candidates_with_reranker(
             &qv(),
             borderline_candidates,
             &borderline_vectors,

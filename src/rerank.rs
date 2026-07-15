@@ -339,17 +339,17 @@ fn into_utf8(value: OsString, setting: &'static str) -> Result<String, RerankCon
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RerankDocument {
+pub(crate) struct RerankDocument {
     pub(crate) stable_id: u32,
     pub(crate) document: String,
 }
 
-pub trait Reranker: Send + Sync {
+pub(crate) trait Reranker: Send + Sync {
     fn rerank(&self, query: &str, documents: &[RerankDocument]) -> Result<Vec<u32>, RerankFailure>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RerankFailureClass {
+pub(crate) enum RerankFailureClass {
     Network,
     Timeout,
     Authentication,
@@ -360,7 +360,7 @@ pub enum RerankFailureClass {
 }
 
 impl RerankFailureClass {
-    pub const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Network => "network",
             Self::Timeout => "timeout",
@@ -374,17 +374,17 @@ impl RerankFailureClass {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RerankFailure {
+pub(crate) struct RerankFailure {
     class: RerankFailureClass,
 }
 
 impl RerankFailure {
-    pub const fn new(class: RerankFailureClass) -> Self {
+    pub(crate) const fn new(class: RerankFailureClass) -> Self {
         Self { class }
     }
 
-    #[allow(dead_code)] // used by integration tests
-    pub const fn class(&self) -> RerankFailureClass {
+    #[allow(dead_code)] // exercised by adapter unit tests
+    pub(crate) const fn class(&self) -> RerankFailureClass {
         self.class
     }
 }
