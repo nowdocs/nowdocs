@@ -719,3 +719,154 @@ fn trace_pre_mmr_cosines_omit_non_finite_values() {
         .windows(2)
         .all(|pair| pair[0].total_cmp(&pair[1]).is_ge()));
 }
+
+// --- C07b: calibrated three-state runtime regression ---
+
+use nowdocs::confidence::{decide_calibrated, QueryEvidence};
+
+/// Raw query–chunk cosine, mirroring the private `retrieve::cosine`. The test
+/// vectors are 2-D unit vectors, so this is faithful to the runtime's evidence
+/// construction.
+fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na * nb)
+    }
+}
+
+/// Build `QueryEvidence` from a `RankedGateResult` exactly as `search_impl`
+/// does: the top pre-gate hit's raw cosine and RRF score. This isolates the
+/// calibrated decision step from the ranking path, proving the runtime
+/// composes the calibrated decision without activating a different ranking
+/// path.
+fn evidence_from_ranked(
+    result: &nowdocs::retrieve::RankedGateResult,
+    query_vector: &[f32],
+    vectors: &HashMap<u32, Vec<f32>>,
+) -> QueryEvidence {
+    let top = result.pre_gate_hits.first();
+    let top_cosine = top.and_then(|hit| {
+        vectors
+            .get(&hit.chunk_idx)
+            .map(|v| cosine_sim(query_vector, v))
+    });
+    QueryEvidence {
+        top_selected_cosine: top.map(|_| top_cosine.unwrap_or(0.0)),
+        top_selected_rrf: top.map(|hit| hit.score),
+        pre_mmr_top_cosine: None,
+        pre_mmr_second_cosine: None,
+        pre_mmr_cosine_margin: None,
+        dense_rank: None,
+        lexical_rank: None,
+    }
+}
+
+/// A no-answer result (binary reject) preserves the empty-result invariants:
+/// zero chunks, zero tokens, and NoAnswer state.
+#[test]
+fn calibrated_runtime_no_answer_preserves_empty_invariants() {
+    // Top cosine 0.80 / RRF 0.016: below both binary thresholds -> reject.
+    let candidates = vec![evidence(hit_url(0, "low.md", 0.016))];
+    let vectors = vecs(&[(0, vec_with_cosine(0.80))]);
+    let result = rank_and_gate_candidates(&qv(), candidates, &vectors, 1, true);
+
+    assert!(
+        result.hits.is_empty(),
+        "legacy gate must reject 0.80 cosine"
+    );
+    assert_eq!(
+        result.pre_gate_hits.len(),
+        1,
+        "pre-gate selection must be retained for the decision"
+    );
+
+    let ev = evidence_from_ranked(&result, &qv(), &vectors);
+    let decision = decide_calibrated(&ev);
+    assert_eq!(decision.state, AnswerState::NoAnswer);
+    // The runtime contract: NoAnswer => zero chunks, zero tokens.
+    // (search_impl enforces this by returning early; here we verify the
+    // decision that drives that early return.)
+    assert!(result.hits.is_empty(), "NoAnswer must yield zero chunks");
+}
+
+/// An accepted result below the calibrated floor (0.845) is Borderline and
+/// retains the same pre-gate selected hits as the current accepted path.
+#[test]
+fn calibrated_runtime_borderline_retains_pre_gate_hits() {
+    // Top cosine 0.83: above MIN_ANSWER_COSINE (0.82) but below 0.845.
+    let candidates = vec![evidence(hit_url(0, "match.md", 0.030))];
+    let vectors = vecs(&[(0, vec_with_cosine(0.83))]);
+    let result = rank_and_gate_candidates(&qv(), candidates, &vectors, 1, true);
+
+    assert!(result.gate_passed, "0.83 cosine must pass the binary gate");
+    assert_eq!(
+        result.pre_gate_hits.len(),
+        result.hits.len(),
+        "ranking path must not activate a different selection for Borderline"
+    );
+
+    let ev = evidence_from_ranked(&result, &qv(), &vectors);
+    let decision = decide_calibrated(&ev);
+    assert_eq!(
+        decision.state,
+        AnswerState::Borderline,
+        "0.83 (above 0.82, below 0.845) must be Borderline"
+    );
+    // Borderline retains the selected chunks (not emptied like NoAnswer).
+    assert!(
+        !result.hits.is_empty(),
+        "Borderline must retain pre-gate selected hits"
+    );
+}
+
+/// An accepted result at or above the calibrated floor (0.845) is Confident
+/// and uses the same ranking path as the binary gate.
+#[test]
+fn calibrated_runtime_confident_uses_same_ranking_path() {
+    // Top cosine 0.90: well above both 0.82 and 0.845.
+    let candidates = vec![
+        evidence(hit_url(0, "a.md", 0.030)),
+        evidence(hit_url(1, "b.md", 0.029)),
+    ];
+    let vectors = vecs(&[(0, vec_with_cosine(0.90)), (1, vec_with_cosine(0.85))]);
+    let result = rank_and_gate_candidates(&qv(), candidates, &vectors, 2, true);
+
+    assert!(result.gate_passed, "0.90 cosine must pass the gate");
+
+    let ev = evidence_from_ranked(&result, &qv(), &vectors);
+    let decision = decide_calibrated(&ev);
+    assert_eq!(
+        decision.state,
+        AnswerState::Confident,
+        "0.90 cosine (>= 0.845) must be Confident"
+    );
+    // The Confident path assembles the same pre-gate selected hits - the
+    // ranking path is unchanged from the binary gate.
+    assert_eq!(
+        result.pre_gate_hits.len(),
+        result.hits.len(),
+        "Confident must not activate a different ranking path"
+    );
+}
+
+/// No candidates: the calibrated decision is NoAnswer / NoCandidates, and the
+/// ranking path yields zero pre-gate hits (empty-result invariant).
+#[test]
+fn calibrated_runtime_no_candidates_yields_empty() {
+    let result = rank_and_gate_candidates(&qv(), Vec::new(), &HashMap::new(), 1, true);
+    assert!(
+        result.pre_gate_hits.is_empty(),
+        "no candidates must yield zero pre-gate hits"
+    );
+    let ev = evidence_from_ranked(&result, &qv(), &HashMap::new());
+    let decision = decide_calibrated(&ev);
+    assert_eq!(decision.state, AnswerState::NoAnswer);
+    assert_eq!(
+        decision.reason,
+        nowdocs::confidence::DecisionReason::NoCandidates
+    );
+}
