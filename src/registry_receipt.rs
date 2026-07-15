@@ -22,10 +22,10 @@ const SCHEMA_VERSION: u32 = 1;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegistryReceipt {
     schema_version: u32,
-    docset: String,
-    package_version: String,
-    package_sha256: String,
-    manifest_sha256: String,
+    pub docset: String,
+    pub package_version: String,
+    pub package_sha256: String,
+    pub manifest_sha256: String,
 }
 
 /// Path to the receipt file for a docset.

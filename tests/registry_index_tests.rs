@@ -11,18 +11,6 @@ fn fixture_url() -> String {
     format!("file://{}", path.display())
 }
 
-fn oversize_fixture_url() -> String {
-    // Create a JSON file larger than 2 MiB to test the body cap.
-    let path = std::env::temp_dir().join(format!("nowdocs_oversize_{}.json", std::process::id()));
-    let big = "x".repeat(2 * 1024 * 1024 + 1);
-    let json = format!(r#"{{"schema_version":1,"generated_at":"2026-07-07","packages":[]}}"#,);
-    // Write a file that's technically valid JSON but exceeds the 2 MiB body cap.
-    // We pad with whitespace to exceed the cap while staying valid.
-    let padded = format!("{}{}", json, " ".repeat(2 * 1024 * 1024));
-    std::fs::write(&path, padded).unwrap();
-    format!("file://{}", path.display())
-}
-
 #[test]
 fn parses_local_index_fixture() {
     let idx = fetch_index_from(&fixture_url()).expect("parse index.json");

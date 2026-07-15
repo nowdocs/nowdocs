@@ -1,6 +1,6 @@
-//! Unified Update Service for binary-version reminders.
+//! Unified Update Service for binary-version and registry-docset reminders.
 //!
-//! Checks only binary releases (not registry/docset updates) after successful
+//! Checks binary releases and registry docset updates after successful
 //! completion of eligible CLI commands. The service is designed to be safe and
 //! invisible: every failure path (network, parse, I/O, lock contention, cache
 //! corruption) returns `None` and never changes the primary command's exit code.
@@ -9,20 +9,16 @@
 //! - Eligible commands: `install`, `update`, `ensure`, `registry`, `smoke`,
 //!   `doctor`. Checked only after successful completion; never on `serve`,
 //!   `--help`, `--version`, or primary-command failure.
-//! - Fetches GitHub's official latest-release metadata with an 800 ms timeout.
-//!   Rejects draft and prerelease responses. Silent failures on any error.
-//! - Cache at `cache::cache_root()/update-cache.json`. Freshness is 24 hours for
-//!   the same running binary version. A failed attempt still advances the
-//!   attempt timestamp so repeated CLI invocations don't retry during an outage.
+//! - Binary channel: fetches GitHub's official latest-release metadata with an
+//!   800 ms timeout. Rejects draft and prerelease responses.
+//! - Registry channel: loads valid receipts, fetches the Registry index once
+//!   through the bounded reader, compares semver versions.
+//! - Cache at `cache::cache_root()/update-cache.json`. Freshness is 24 hours
+//!   independently per channel.
 //! - `NOWDOCS_UPDATE_CHECK=0`: no network check and no cached reminder.
-//! - One reminder per discovered newer version (package-manager-neutral text).
 //! - `serve` is cache-only: it may claim a fresh unnotified reminder and write
 //!   it to stderr exactly once; it never initiates a request.
-//! - Cross-process dedup via `fs2` advisory lock on the cache file (same
-//!   primitive used by the automation operation lock and registry install lock).
-//!   `fs2` maps to `flock(2)` on Unix and `LockFileEx` on Windows - both are
-//!   process-lifetime and auto-released on crash, satisfying the safe
-//!   cross-platform cache/lock requirement without a new dependency.
+//! - Cross-process dedup via `fs2` advisory lock on the cache file.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -35,12 +31,16 @@ use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 
 use crate::cache;
+use crate::registry;
 
 /// Cache freshness window for the same running binary version.
 const FRESHNESS_SECS: u64 = 24 * 60 * 60; // 24 hours
 
 /// HTTP timeout for the GitHub latest-release metadata fetch.
 const FETCH_TIMEOUT: Duration = Duration::from_millis(800);
+
+/// HTTP timeout for the Registry index fetch during update checks.
+const REGISTRY_FETCH_TIMEOUT: Duration = Duration::from_millis(800);
 
 /// GitHub latest-release API endpoint (redirects to the latest non-prerelease,
 /// non-draft release tag).
@@ -57,38 +57,101 @@ const CACHE_FILE_NAME: &str = "update-cache.json";
 const LOCK_FILE_NAME: &str = "update-cache.lock";
 
 /// On-disk cache schema version. Bump if the cache structure changes.
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
-/// The on-disk update cache record.
+// ===========================================================================
+// Cache v2 types
+// ===========================================================================
+
+/// On-disk update cache (schema v2).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct UpdateCache {
+struct UpdateCacheV2 {
     schema_version: u32,
-    /// The running binary version that last wrote this cache. When the current
-    /// binary differs, the cache is treated as stale (forces a re-check after
-    /// an upgrade).
+    #[serde(default)]
+    binary: BinaryChannelCache,
+    #[serde(default)]
+    registry: RegistryChannelCache,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct BinaryChannelCache {
+    /// The running binary version that last wrote this cache.
+    #[serde(default)]
     running_version: String,
     /// Wall-clock seconds of the last fetch attempt (success or failure).
-    /// Used to throttle retries during outages.
+    #[serde(default)]
     last_attempt_secs: u64,
     /// Wall-clock seconds of the last successful fetch. 0 = never succeeded.
+    #[serde(default)]
     last_success_secs: u64,
     /// The latest non-prerelease version discovered, or null if unknown.
+    #[serde(default)]
     latest_version: Option<String>,
     /// The version the user has already been notified about, or null.
-    /// Prevents re-notifying for the same newer version.
+    #[serde(default)]
     notified_version: Option<String>,
 }
 
-impl Default for UpdateCache {
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct RegistryChannelCache {
+    /// Wall-clock seconds of the last fetch attempt (success or failure).
+    #[serde(default)]
+    last_attempt_secs: u64,
+    /// Wall-clock seconds of the last successful fetch. 0 = never succeeded.
+    #[serde(default)]
+    last_success_secs: u64,
+    /// Available docset updates sorted by docset name.
+    #[serde(default)]
+    available: Vec<DocsetUpdate>,
+    /// Stable snapshot string of the most recently announced updates.
+    /// Used for deduplication: same snapshot = already notified.
+    #[serde(default)]
+    notified_snapshot: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct DocsetUpdate {
+    docset: String,
+    installed_version: String,
+    latest_version: String,
+}
+
+impl Default for UpdateCacheV2 {
     fn default() -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
-            running_version: env!("CARGO_PKG_VERSION").to_string(),
-            last_attempt_secs: 0,
-            last_success_secs: 0,
-            latest_version: None,
-            notified_version: None,
+            binary: BinaryChannelCache::default(),
+            registry: RegistryChannelCache::default(),
         }
+    }
+}
+
+// ===========================================================================
+// Migration from v1
+// ===========================================================================
+
+/// Legacy v1 cache structure for migration.
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateCacheV1 {
+    schema_version: u32,
+    running_version: String,
+    last_attempt_secs: u64,
+    last_success_secs: u64,
+    latest_version: Option<String>,
+    notified_version: Option<String>,
+}
+
+fn migrate_v1_to_v2(v1: UpdateCacheV1) -> UpdateCacheV2 {
+    UpdateCacheV2 {
+        schema_version: SCHEMA_VERSION,
+        binary: BinaryChannelCache {
+            running_version: v1.running_version,
+            last_attempt_secs: v1.last_attempt_secs,
+            last_success_secs: v1.last_success_secs,
+            latest_version: v1.latest_version,
+            notified_version: v1.notified_version,
+        },
+        registry: RegistryChannelCache::default(),
     }
 }
 
@@ -106,13 +169,48 @@ fn lock_path() -> PathBuf {
     cache::cache_root().join(LOCK_FILE_NAME)
 }
 
-/// The exact package-manager-neutral reminder text for a newer version.
+/// The exact package-manager-neutral reminder text for a newer binary version.
 pub fn reminder_text(version: &str) -> String {
     format!(
         "A newer version of nowdocs is available ({version}).\n\
          Update using the package manager you used to install nowdocs.\n\
          https://github.com/nowdocs/nowdocs/releases/latest"
     )
+}
+
+/// Render the docset-update reminder section.
+fn docset_reminder_section(updates: &[DocsetUpdate]) -> String {
+    let mut lines = Vec::new();
+    lines.push("Updates available for installed docsets:".to_string());
+    for u in updates {
+        lines.push(format!(
+            "- {}: {} -> {}",
+            u.docset, u.installed_version, u.latest_version
+        ));
+    }
+    lines.push(String::new());
+    lines.push("Run:".to_string());
+    for u in updates {
+        lines.push(format!("nowdocs update {}", u.docset));
+    }
+    lines.join("\n")
+}
+
+/// Compute the combined reminder text from binary and registry channels.
+fn combined_reminder_text(binary: Option<&str>, docsets: &[DocsetUpdate]) -> Option<String> {
+    let binary_section = binary.map(reminder_text);
+    let docset_section = if docsets.is_empty() {
+        None
+    } else {
+        Some(docset_reminder_section(docsets))
+    };
+
+    match (binary_section, docset_section) {
+        (Some(b), Some(d)) => Some(format!("{b}\n\n{d}")),
+        (Some(b), None) => Some(b),
+        (None, Some(d)) => Some(d),
+        (None, None) => None,
+    }
 }
 
 /// A reusable update-check service. Owns all update-check logic for one
@@ -133,116 +231,96 @@ impl UpdateService {
     /// should be surfaced, or `None` otherwise. All failures are silent and
     /// invisible: this method never returns an error that a caller needs to
     /// act on (the `Result` is only for structural correctness).
-    ///
-    /// Called by eligible CLI commands after successful completion.
-    ///
-    /// Flow:
-    /// 1. Opt-out -> None immediately.
-    /// 2. Read cache. If fresh (same running version, attempt < 24h), skip
-    ///    fetch but still claim the reminder under lock if one is pending.
-    /// 3. If stale, acquire lock, re-check, fetch, update cache.
-    /// 4. A reminder is only returned when we hold the lock AND we mark
-    ///    `notified_version` atomically, so a concurrent process that also
-    ///    reads the same `latest_version` will see it as already notified.
     pub fn check_and_notify(&self) -> Result<Option<String>> {
-        // Opt-out: no check, no reminder.
         if is_opted_out() {
             return Ok(None);
         }
 
-        let cache = read_cache();
-
-        if !cache_needs_fetch(&cache, &self.running_version) {
-            // Cache is fresh. If there's an unnotified newer version, claim it
-            // under the lock so only one process notifies. If we can't get the
-            // lock, another process is handling it - return None.
-            return Ok(self.claim_reminder_under_lock(&cache));
-        }
-
-        // Cache is stale: try to acquire the lock and fetch.
         let Some(_lock) = acquire_lock() else {
-            // Another process holds the lock; don't fetch or notify.
             return Ok(None);
         };
 
-        // Re-read after acquiring the lock (another process may have updated).
-        let cache = read_cache();
-        if !cache_needs_fetch(&cache, &self.running_version) {
-            // Another process already refreshed the cache while we waited.
-            // Claim the reminder if one is pending.
-            return Ok(self.claim_reminder_locked(&cache));
-        }
-
-        // Attempt the fetch. On failure, advance the attempt timestamp and
-        // return None (no reminder).
+        let mut cache = read_cache();
         let now = now_unix_secs();
-        match fetch_latest_release() {
-            Ok(Some(version)) => {
-                let mut updated = cache.clone();
-                updated.running_version = self.running_version.clone();
-                updated.last_attempt_secs = now;
-                updated.last_success_secs = now;
-                updated.latest_version = Some(version.clone());
-                // Claim the reminder: if newer and not yet notified, mark it.
-                let reminder = compute_reminder(&updated, &self.running_version);
-                if reminder.is_some() {
-                    updated.notified_version = Some(version);
+
+        // --- Binary channel ---
+        if channel_needs_fetch(
+            cache.binary.last_attempt_secs,
+            &cache.binary.running_version,
+            &self.running_version,
+        ) {
+            match fetch_latest_release() {
+                Ok(Some(version)) => {
+                    cache.binary.running_version = self.running_version.clone();
+                    cache.binary.last_attempt_secs = now;
+                    cache.binary.last_success_secs = now;
+                    cache.binary.latest_version = Some(version);
                 }
-                if write_cache(&updated).is_ok() {
-                    Ok(reminder)
-                } else {
-                    Ok(None)
+                Ok(None) => {
+                    cache.binary.running_version = self.running_version.clone();
+                    cache.binary.last_attempt_secs = now;
+                    if cache.binary.latest_version.is_some() {
+                        cache.binary.last_success_secs = now;
+                    }
                 }
-            }
-            Ok(None) => {
-                // No newer version or rejected (draft/prerelease/parse).
-                let mut updated = cache.clone();
-                updated.running_version = self.running_version.clone();
-                updated.last_attempt_secs = now;
-                if updated.latest_version.is_some() {
-                    updated.last_success_secs = now;
+                Err(_) => {
+                    cache.binary.running_version = self.running_version.clone();
+                    cache.binary.last_attempt_secs = now;
                 }
-                if write_cache(&updated).is_ok() {
-                    Ok(self.claim_reminder_locked(&updated))
-                } else {
-                    Ok(None)
-                }
-            }
-            Err(_) => {
-                // Network/timeout/parse failure: advance attempt timestamp so
-                // repeated invocations don't retry during an outage.
-                let mut updated = cache.clone();
-                updated.running_version = self.running_version.clone();
-                updated.last_attempt_secs = now;
-                let _write_result = write_cache(&updated);
-                Ok(None)
             }
         }
-    }
 
-    /// Claim a pending reminder from a fresh cache. Acquires the lock, marks
-    /// `notified_version`, and returns the reminder text. Returns None if the
-    /// lock can't be acquired or there's no pending reminder.
-    fn claim_reminder_under_lock(&self, _cache: &UpdateCache) -> Option<String> {
-        let _lock = acquire_lock()?;
-        // Re-read under lock in case another process already claimed.
-        let cache = read_cache();
-        self.claim_reminder_locked(&cache)
-    }
-
-    /// Claim a pending reminder when the lock is already held. Marks
-    /// `notified_version` and returns the reminder text, or None if there's
-    /// no pending newer version.
-    fn claim_reminder_locked(&self, cache: &UpdateCache) -> Option<String> {
-        let reminder = compute_reminder(cache, &self.running_version);
-        if let Some(reminder) = reminder {
-            let mut updated = cache.clone();
-            if let Some(ref v) = updated.latest_version {
-                updated.notified_version = Some(v.clone());
+        // --- Registry channel ---
+        if channel_needs_fetch(
+            cache.registry.last_attempt_secs,
+            "", // registry has no running_version concept
+            "",
+        ) {
+            cache.registry.last_attempt_secs = now;
+            match check_registry_updates() {
+                Ok(updates) => {
+                    cache.registry.last_success_secs = now;
+                    cache.registry.available = updates;
+                }
+                Err(_) => {
+                    // Silent failure — leave available as-is.
+                }
             }
-            return write_cache(&updated).ok().map(|_| reminder);
         }
-        None
+
+        // --- Compute and claim reminders ---
+        let binary_version = cache
+            .binary
+            .latest_version
+            .as_deref()
+            .filter(|v| cache.binary.notified_version.as_deref() != Some(v))
+            .filter(|v| is_newer(v, &self.running_version));
+
+        let docset_snapshot = make_snapshot(&cache.registry.available);
+        let docset_updates =
+            if cache.registry.notified_snapshot.as_deref() == Some(&docset_snapshot) {
+                vec![]
+            } else {
+                cache.registry.available.clone()
+            };
+
+        let reminder = combined_reminder_text(binary_version, &docset_updates);
+
+        if reminder.is_some() {
+            // Mark as notified.
+            if let Some(v) = binary_version {
+                cache.binary.notified_version = Some(v.to_string());
+            }
+            if !docset_updates.is_empty() {
+                cache.registry.notified_snapshot = Some(docset_snapshot);
+            }
+        }
+
+        if write_cache(&cache).is_err() {
+            return Ok(None);
+        }
+
+        Ok(reminder)
     }
 }
 
@@ -250,8 +328,7 @@ impl UpdateService {
 ///
 /// After cache layout initialization, `nowdocs serve` calls this to surface a
 /// previously-discovered newer version exactly once on stderr. It never
-/// initiates a network request. Returns the reminder text if a fresh
-/// unnotified newer version exists, or `None` otherwise.
+/// initiates a network request.
 pub fn serve_claim_cached_reminder(running_version: &str) -> Result<Option<String>> {
     if is_opted_out() {
         return Ok(None);
@@ -261,20 +338,37 @@ pub fn serve_claim_cached_reminder(running_version: &str) -> Result<Option<Strin
         return Ok(None);
     };
 
-    let cache = read_cache();
-    let reminder = compute_reminder(&cache, running_version);
-    if let Some(reminder) = reminder {
-        // Mark as notified so a second serve process doesn't re-notify.
-        let mut updated = cache;
-        if let Some(ref v) = updated.latest_version {
-            updated.notified_version = Some(v.clone());
+    let mut cache = read_cache();
+
+    let binary_version = cache
+        .binary
+        .latest_version
+        .as_deref()
+        .filter(|v| cache.binary.notified_version.as_deref() != Some(v))
+        .filter(|v| is_newer(v, running_version));
+
+    let docset_snapshot = make_snapshot(&cache.registry.available);
+    let docset_updates = if cache.registry.notified_snapshot.as_deref() == Some(&docset_snapshot) {
+        vec![]
+    } else {
+        cache.registry.available.clone()
+    };
+
+    let reminder = combined_reminder_text(binary_version, &docset_updates);
+
+    if reminder.is_some() {
+        if let Some(v) = binary_version {
+            cache.binary.notified_version = Some(v.to_string());
         }
-        if write_cache(&updated).is_err() {
+        if !docset_updates.is_empty() {
+            cache.registry.notified_snapshot = Some(docset_snapshot);
+        }
+        if write_cache(&cache).is_err() {
             return Ok(None);
         }
-        return Ok(Some(reminder));
     }
-    Ok(None)
+
+    Ok(reminder)
 }
 
 // ===========================================================================
@@ -287,22 +381,32 @@ fn is_opted_out() -> bool {
 }
 
 /// Read the cache from disk. Returns a default cache on any error (missing
-/// file, malformed JSON, schema mismatch).
-fn read_cache() -> UpdateCache {
+/// file, malformed JSON, schema mismatch). Handles migration from v1.
+fn read_cache() -> UpdateCacheV2 {
     let path = cache_path();
     let Ok(raw) = std::fs::read_to_string(&path) else {
-        return UpdateCache::default();
+        return UpdateCacheV2::default();
     };
-    match serde_json::from_str::<UpdateCache>(&raw) {
-        Ok(c) if c.schema_version == SCHEMA_VERSION => c,
-        _ => UpdateCache::default(),
+
+    // Try v2 first.
+    if let Ok(c) = serde_json::from_str::<UpdateCacheV2>(&raw) {
+        if c.schema_version == SCHEMA_VERSION {
+            return c;
+        }
     }
+
+    // Try v1 migration.
+    if let Ok(v1) = serde_json::from_str::<UpdateCacheV1>(&raw) {
+        if v1.schema_version == 1 {
+            return migrate_v1_to_v2(v1);
+        }
+    }
+
+    UpdateCacheV2::default()
 }
 
-/// Write the cache atomically (unique same-directory tempfile + replacement)
-/// so a crash mid-write never leaves a corrupt cache. The caller decides
-/// whether a persistence failure suppresses a notification.
-fn write_cache(cache: &UpdateCache) -> Result<()> {
+/// Write the cache atomically (unique same-directory tempfile + replacement).
+fn write_cache(cache: &UpdateCacheV2) -> Result<()> {
     let path = cache_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -319,31 +423,25 @@ fn write_cache(cache: &UpdateCache) -> Result<()> {
 }
 
 /// Determine whether a network fetch is needed based on cache freshness.
-///
-/// A fetch is needed when:
-/// - The running version changed (upgrade detected), OR
-/// - The last attempt is older than 24 hours.
-fn cache_needs_fetch(cache: &UpdateCache, running_version: &str) -> bool {
-    if cache.running_version != running_version {
+fn channel_needs_fetch(
+    last_attempt_secs: u64,
+    cached_version: &str,
+    running_version: &str,
+) -> bool {
+    if !cached_version.is_empty() && cached_version != running_version {
         return true;
     }
     let now = now_unix_secs();
-    now.saturating_sub(cache.last_attempt_secs) >= FRESHNESS_SECS
+    now.saturating_sub(last_attempt_secs) >= FRESHNESS_SECS
 }
 
-/// Compute the reminder from a cache record, if a newer unnotified version
-/// exists.
-fn compute_reminder(cache: &UpdateCache, running_version: &str) -> Option<String> {
-    let latest = cache.latest_version.as_ref()?;
-    // Already notified for this version.
-    if cache.notified_version.as_deref() == Some(latest.as_str()) {
-        return None;
-    }
-    if is_newer(latest, running_version) {
-        Some(reminder_text(latest))
-    } else {
-        None
-    }
+/// Make a stable snapshot string from sorted docset updates.
+fn make_snapshot(updates: &[DocsetUpdate]) -> String {
+    let parts: Vec<String> = updates
+        .iter()
+        .map(|u| format!("{}:{}->{}", u.docset, u.installed_version, u.latest_version))
+        .collect();
+    parts.join(",")
 }
 
 // ===========================================================================
@@ -377,6 +475,38 @@ fn acquire_lock() -> Option<UpdateLock> {
 }
 
 // ===========================================================================
+// Internal: registry update check
+// ===========================================================================
+
+/// Check for registry docset updates by loading receipts and comparing against
+/// the Registry index. Returns a sorted list of available updates.
+/// Any error returns an empty list (silent failure).
+fn check_registry_updates() -> Result<Vec<DocsetUpdate>> {
+    let receipts = crate::registry_receipt::load_matching_installed();
+    if receipts.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let idx = registry::fetch_index_for_update(REGISTRY_FETCH_TIMEOUT)?;
+
+    let mut updates = Vec::new();
+    for receipt in &receipts {
+        if let Some(pkg) = idx.packages.iter().find(|p| p.docset == receipt.docset) {
+            if is_newer(&pkg.version, &receipt.package_version) {
+                updates.push(DocsetUpdate {
+                    docset: receipt.docset.clone(),
+                    installed_version: receipt.package_version.clone(),
+                    latest_version: pkg.version.clone(),
+                });
+            }
+        }
+    }
+
+    updates.sort_by(|a, b| a.docset.cmp(&b.docset));
+    Ok(updates)
+}
+
+// ===========================================================================
 // Internal: HTTP fetch (in-process ureq client)
 // ===========================================================================
 
@@ -389,9 +519,6 @@ struct GithubRelease {
 }
 
 /// Fetch the latest non-prerelease, non-draft release version from GitHub.
-/// Returns `Ok(Some(version))` if a newer release was found, `Ok(None)` if
-/// the response was rejected (draft/prerelease/parse/no tag), or `Err` on
-/// network/timeout failure.
 fn fetch_latest_release() -> Result<Option<String>> {
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(FETCH_TIMEOUT))
@@ -414,8 +541,7 @@ fn fetch_latest_release() -> Result<Option<String>> {
 }
 
 /// Parse a release JSON value, returning the version string if it is a stable
-/// (non-draft, non-prerelease) release, or None otherwise. Strips an optional
-/// leading `v` prefix and rejects prerelease semver tags.
+/// (non-draft, non-prerelease) release, or None otherwise.
 fn parse_release_inner(release: &GithubRelease) -> Option<String> {
     if release.draft || release.prerelease {
         return None;
@@ -424,9 +550,6 @@ fn parse_release_inner(release: &GithubRelease) -> Option<String> {
         .tag_name
         .strip_prefix('v')
         .unwrap_or(&release.tag_name);
-    // Reject prerelease semver (e.g. "0.2.0-rc1") even if the GitHub flag is
-    // false. `semver::Version` parses prerelease tags, so we check via
-    // `Version::pre` being non-empty.
     let Ok(ver) = semver::Version::parse(tag) else {
         return None;
     };
@@ -472,8 +595,7 @@ fn is_eligible_command(cmd: &str) -> bool {
 }
 
 // ===========================================================================
-// Test-only utilities (compiled in all builds; exposed under a test_util
-// module so integration tests can exercise pure helpers without network).
+// Test-only utilities
 // ===========================================================================
 
 /// Test-only utilities for exercising pure helpers in integration tests.
@@ -501,9 +623,28 @@ pub mod test_util {
     }
 
     /// Acquire the update cache lock. Returns the guard or None on failure.
-    /// Used by tests to simulate a concurrent lock holder.
     pub fn acquire_lock() -> Option<super::UpdateLock> {
         super::acquire_lock()
+    }
+
+    /// Read the update cache as a JSON value (test-only).
+    pub fn read_update_cache_json() -> serde_json::Value {
+        let path = super::cache_path();
+        let raw = std::fs::read_to_string(&path).unwrap_or_default();
+        serde_json::from_str(&raw).unwrap_or(serde_json::json!({}))
+    }
+
+    /// Render the docset reminder text for a set of updates (test-only).
+    pub fn registry_reminder_text(updates: &[(&str, &str, &str)]) -> String {
+        let docset_updates: Vec<super::DocsetUpdate> = updates
+            .iter()
+            .map(|(docset, installed, latest)| super::DocsetUpdate {
+                docset: docset.to_string(),
+                installed_version: installed.to_string(),
+                latest_version: latest.to_string(),
+            })
+            .collect();
+        super::docset_reminder_section(&docset_updates)
     }
 }
 
