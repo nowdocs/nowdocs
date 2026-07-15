@@ -236,6 +236,127 @@ fn config_io_preserves_restrictive_permissions() {
 }
 
 // ---------------------------------------------------------------------------
+// Task C7R1: safe client-root validation (pure, no chmod)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn approved_root_accepts_0755_without_chmod() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root_dir = tmp.path().join("root_0755");
+    std::fs::create_dir(&root_dir).unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&root_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let root = approved_root(&root_dir).unwrap();
+    assert_eq!(root.path(), root_dir);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let actual = std::fs::metadata(&root_dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(actual, 0o755, "approved_root must not change 0755 mode");
+    }
+}
+
+#[test]
+fn approved_root_accepts_0700_without_chmod() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root_dir = tmp.path().join("root_0700");
+    std::fs::create_dir(&root_dir).unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&root_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    let root = approved_root(&root_dir).unwrap();
+    assert_eq!(root.path(), root_dir);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let actual = std::fs::metadata(&root_dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(actual, 0o700, "approved_root must not change 0700 mode");
+    }
+}
+
+#[test]
+fn approved_root_refuses_0775_and_preserves_mode() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root_dir = tmp.path().join("root_0775");
+    std::fs::create_dir(&root_dir).unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&root_dir, std::fs::Permissions::from_mode(0o775)).unwrap();
+        let err = approved_root(&root_dir).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("writable") || msg.contains("group") || msg.contains("other"),
+            "expected group/world-writable refusal, got: {}",
+            msg
+        );
+        let actual = std::fs::metadata(&root_dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            actual, 0o775,
+            "mode must not be changed by failed validation"
+        );
+    }
+}
+
+#[test]
+fn approved_root_refuses_0777_and_preserves_mode() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root_dir = tmp.path().join("root_0777");
+    std::fs::create_dir(&root_dir).unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&root_dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let err = approved_root(&root_dir).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("writable") || msg.contains("group") || msg.contains("other"),
+            "expected group/world-writable refusal, got: {}",
+            msg
+        );
+        let actual = std::fs::metadata(&root_dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            actual, 0o777,
+            "mode must not be changed by failed validation"
+        );
+    }
+}
+
+#[test]
+fn approved_root_refuses_symlink_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = tmp.path().join("link");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    #[cfg(not(unix))]
+    {
+        return;
+    }
+    let err = approved_root(&link).unwrap_err();
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("symlink") || msg.contains("unsafe"),
+        "expected symlinked-root refusal, got: {}",
+        msg
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Task 2: typed adapter model and staged execution capabilities
 // ---------------------------------------------------------------------------
 
