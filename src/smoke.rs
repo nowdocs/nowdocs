@@ -43,6 +43,28 @@ pub struct SmokeHit {
 
 /// Run a smoke test: real retrieval on an installed docset.
 pub fn smoke(docset: &str, query: Option<&str>, top_k: Option<u32>) -> Result<SmokeResult> {
+    smoke_with_reranker(docset, query, top_k, None)
+}
+
+/// Like [`smoke`], but builds the internal reranker runtime from environment
+/// configuration once and delegates to a crate-private helper. Used by CLI
+/// smoke and `serve` so both share configuration semantics.
+pub fn smoke_with_configured_reranker(
+    docset: &str,
+    query: Option<&str>,
+    top_k: Option<u32>,
+) -> Result<SmokeResult> {
+    let reranker = crate::rerank::configured_reranker()
+        .map_err(|e| anyhow::anyhow!("reranker configuration error: {e}"))?;
+    smoke_with_reranker(docset, query, top_k, reranker.as_deref())
+}
+
+fn smoke_with_reranker(
+    docset: &str,
+    query: Option<&str>,
+    top_k: Option<u32>,
+    reranker: Option<&dyn crate::rerank::Reranker>,
+) -> Result<SmokeResult> {
     let query = query.unwrap_or(DEFAULT_QUERY);
     let top_k = top_k.unwrap_or(DEFAULT_TOP_K);
 
@@ -96,7 +118,7 @@ pub fn smoke(docset: &str, query: Option<&str>, top_k: Option<u32>) -> Result<Sm
     let search_start = Instant::now();
 
     // Run real retrieval (embed + hybrid search).
-    let search_result = retrieve::search(docset, query, None, Some(top_k))
+    let search_result = retrieve::search_with_reranker(docset, query, None, Some(top_k), reranker)
         .context("retrieval failed — model may need downloading; try `nowdocs doctor --model`")?;
 
     let search_ms = search_start.elapsed().as_millis() as u64;

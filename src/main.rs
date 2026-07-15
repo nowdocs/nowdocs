@@ -352,7 +352,8 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
             query,
             json,
             top_k,
-        } => match nowdocs::smoke::smoke(&docset, query.as_deref(), top_k) {
+        } => match nowdocs::smoke::smoke_with_configured_reranker(&docset, query.as_deref(), top_k)
+        {
             Ok(result) => {
                 if result.result_count == 0 {
                     if json {

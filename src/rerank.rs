@@ -258,6 +258,7 @@ impl fmt::Display for RerankConfigError {
 
 impl std::error::Error for RerankConfigError {}
 
+#[allow(dead_code)] // used by integration tests and callers outside the lib
 pub(crate) fn load_rerank_config() -> Result<RerankConfig, RerankConfigError> {
     parse_rerank_config_with(read_process_env)
 }
@@ -338,17 +339,17 @@ fn into_utf8(value: OsString, setting: &'static str) -> Result<String, RerankCon
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RerankDocument {
+pub struct RerankDocument {
     pub(crate) stable_id: u32,
     pub(crate) document: String,
 }
 
-pub(crate) trait Reranker: Send + Sync {
+pub trait Reranker: Send + Sync {
     fn rerank(&self, query: &str, documents: &[RerankDocument]) -> Result<Vec<u32>, RerankFailure>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RerankFailureClass {
+pub enum RerankFailureClass {
     Network,
     Timeout,
     Authentication,
@@ -359,7 +360,7 @@ pub(crate) enum RerankFailureClass {
 }
 
 impl RerankFailureClass {
-    pub(crate) const fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Network => "network",
             Self::Timeout => "timeout",
@@ -373,16 +374,17 @@ impl RerankFailureClass {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RerankFailure {
+pub struct RerankFailure {
     class: RerankFailureClass,
 }
 
 impl RerankFailure {
-    pub(crate) const fn new(class: RerankFailureClass) -> Self {
+    pub const fn new(class: RerankFailureClass) -> Self {
         Self { class }
     }
 
-    pub(crate) const fn class(&self) -> RerankFailureClass {
+    #[allow(dead_code)] // used by integration tests
+    pub const fn class(&self) -> RerankFailureClass {
         self.class
     }
 }
@@ -394,6 +396,26 @@ impl fmt::Display for RerankFailure {
 }
 
 impl std::error::Error for RerankFailure {}
+
+/// Build a configured reranker from environment variables. Returns `Ok(None)`
+/// when the rerank feature is not configured. Returns `Err` for a partial or
+/// invalid opt-in — the caller must surface the error before entering the read
+/// loop.
+pub(crate) fn configured_reranker() -> Result<Option<Box<dyn Reranker>>, RerankConfigError> {
+    configured_reranker_with(read_process_env)
+}
+
+pub(crate) fn configured_reranker_with<F>(
+    read_env: F,
+) -> Result<Option<Box<dyn Reranker>>, RerankConfigError>
+where
+    F: FnMut(&str) -> Option<OsString>,
+{
+    match parse_rerank_config_with(read_env)? {
+        RerankConfig::Disabled => Ok(None),
+        RerankConfig::Cohere(config) => Ok(Some(Box::new(CohereReranker::new(config)))),
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -982,6 +1004,59 @@ mod tests {
                 }
             );
             assert!(!error.to_string().contains("255"));
+        }
+    }
+
+    #[test]
+    fn configured_reranker_factory_performs_no_network() {
+        // Injected environment: Disabled → Ok(None) with zero network.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let result = super::configured_reranker_with(|_| None).unwrap();
+        assert!(result.is_none());
+        assert!(
+            matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+            "factory must not connect for Disabled config"
+        );
+
+        // Cohere → Ok(Some) with zero network (no request until rerank()).
+        let result = super::configured_reranker_with(|name| match name {
+            PROVIDER_ENV => Some(OsString::from("cohere")),
+            MODEL_ENV => Some(OsString::from("rerank-v4.0-fast")),
+            COHERE_API_KEY_ENV => Some(OsString::from("test-key")),
+            _ => None,
+        })
+        .unwrap();
+        assert!(result.is_some());
+        assert!(
+            matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+            "factory must not connect for Cohere config"
+        );
+    }
+
+    #[test]
+    fn configured_reranker_fails_serve_and_smoke_before_search() {
+        // Invalid opt-in → Err (partial config fails startup).
+        for (entries, expected) in [
+            (
+                vec![(PROVIDER_ENV, "cohere")],
+                RerankConfigError::MissingModel,
+            ),
+            (
+                vec![(PROVIDER_ENV, "cohere"), (MODEL_ENV, "model")],
+                RerankConfigError::MissingApiKey,
+            ),
+        ] {
+            let result = super::configured_reranker_with(|name| {
+                entries
+                    .iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| OsString::from(*v))
+            });
+            match result {
+                Ok(_) => panic!("expected error {expected:?}, got Ok"),
+                Err(e) => assert_eq!(e, expected),
+            }
         }
     }
 }

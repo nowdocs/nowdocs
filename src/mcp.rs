@@ -12,7 +12,7 @@ use std::io::{self, BufRead, Write};
 
 use serde_json::{json, Value};
 
-use crate::{cache, embedder, tools};
+use crate::{cache, embedder, rerank, tools};
 
 pub const PROTOCOL_VERSION: &str = "2025-11-25";
 
@@ -56,6 +56,11 @@ pub fn run_loop() -> io::Result<()> {
     // fast. Best-effort + offline-safe: a cold cache (model not yet downloaded)
     // skips instantly and the first search loads on demand instead.
     embedder::preload_default_embedder();
+
+    // C08c: construct the optional reranker once before the read loop.
+    // A partial/invalid opt-in fails startup — it must not enter stdio.
+    let reranker: Option<Box<dyn crate::rerank::Reranker>> = rerank::configured_reranker()
+        .map_err(|e| io::Error::other(format!("reranker configuration error: {e}")))?;
 
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -128,7 +133,7 @@ pub fn run_loop() -> io::Result<()> {
         let result: Option<Value> = match method {
             "initialize" => Some(handle_initialize()),
             "tools/list" => Some(handle_tools_list()),
-            "tools/call" => Some(handle_tools_call(msg.get("params"))),
+            "tools/call" => Some(handle_tools_call(msg.get("params"), reranker.as_deref())),
             // Unknown request method.
             _ if id.is_some() => {
                 let _ = write_response(
@@ -251,7 +256,10 @@ pub fn handle_tools_list() -> Value {
     })
 }
 
-fn handle_tools_call(params: Option<&Value>) -> Value {
+fn handle_tools_call(
+    params: Option<&Value>,
+    reranker: Option<&dyn crate::rerank::Reranker>,
+) -> Value {
     let params = match params {
         Some(p) => p,
         None => return err_response(ERR_INVALID_PARAMS, "missing params"),
@@ -260,7 +268,7 @@ fn handle_tools_call(params: Option<&Value>) -> Value {
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
     // Delegate to tools module.
-    tools::handle_call(name, args)
+    tools::handle_call_with_reranker(name, args, reranker)
 }
 
 fn err_response(code: i64, message: &str) -> Value {

@@ -86,18 +86,29 @@ fn classify_error(err: &anyhow::Error, docset: &str) -> ToolError {
     }
 }
 
-/// Dispatch an MCP tool call by name.
+/// Dispatch an MCP tool call by name (local-only, no reranker).
 ///
 /// Returns a JSON-RPC `result` on success, or an `error` object on failure.
 pub fn handle_call(name: &str, args: Value) -> Value {
+    handle_call_with_reranker(name, args, None)
+}
+
+/// Dispatch an MCP tool call by name with an optional reranker.
+///
+/// Returns a JSON-RPC `result` on success, or an `error` object on failure.
+pub(crate) fn handle_call_with_reranker(
+    name: &str,
+    args: Value,
+    reranker: Option<&dyn crate::rerank::Reranker>,
+) -> Value {
     match name {
-        "nowdocs_search" => handle_search(args),
+        "nowdocs_search" => handle_search(args, reranker),
         "nowdocs_list" => handle_list(),
         other => err_response(ERR_METHOD_NOT_FOUND, &format!("unknown tool: {other}")),
     }
 }
 
-fn handle_search(args: Value) -> Value {
+fn handle_search(args: Value, reranker: Option<&dyn crate::rerank::Reranker>) -> Value {
     // Extract and validate inputs.
     let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
     let docset = args.get("docset").and_then(|v| v.as_str()).unwrap_or("");
@@ -126,14 +137,15 @@ fn handle_search(args: Value) -> Value {
     }
 
     // Run retrieval pipeline.
-    let search_result = match retrieve::search(docset, query, max_tokens, top_k) {
-        Ok(r) => r,
-        Err(e) => {
-            let te = classify_error(&e, docset);
-            eprintln!("nowdocs_search failed (docset={docset}): {te:?} — {e:#}");
-            return te.to_tool_result();
-        }
-    };
+    let search_result =
+        match retrieve::search_with_reranker(docset, query, max_tokens, top_k, reranker) {
+            Ok(r) => r,
+            Err(e) => {
+                let te = classify_error(&e, docset);
+                eprintln!("nowdocs_search failed (docset={docset}): {te:?} — {e:#}");
+                return te.to_tool_result();
+            }
+        };
 
     // Sanitize each chunk.
     // OQ14: `score` is intentionally NOT exposed to the LLM in v1. RRF/BM25/vector
