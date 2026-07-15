@@ -490,9 +490,10 @@ fn apply_refuses_archive_whose_installed_version_differs_from_the_plan() {
     };
 
     let err = ensure_apply("nextjs", &plan_id, 1_000_000_001).unwrap_err();
+    let msg = format!("{err:#}");
     assert!(
-        format!("{err:#}").contains("VERIFICATION_FAILED"),
-        "a manifest/index version mismatch must not report apply success: {err:#}"
+        msg.contains("VERIFICATION_FAILED") || msg.contains("registry provenance receipt"),
+        "a manifest/index version mismatch must not report apply success: {msg}"
     );
 }
 

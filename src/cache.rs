@@ -63,6 +63,11 @@ pub fn license_text_path(docset: &str) -> PathBuf {
         .join(format!("{docset}.license.txt"))
 }
 
+/// `<cache>/nowdocs/registry-receipts/` — per-docset provenance receipts.
+pub fn registry_receipts_root() -> PathBuf {
+    cache_root().join("registry-receipts")
+}
+
 /// `<cache>/nowdocs/staging/` — root for staging directories during install/update.
 pub fn staging_root() -> PathBuf {
     cache_root().join("staging")

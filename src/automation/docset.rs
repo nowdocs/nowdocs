@@ -166,7 +166,7 @@ pub fn ensure_apply(docset: &str, plan_id: &str, now_unix_secs: u64) -> Result<E
     }
 
     // Delegate to the existing transactional registry service.
-    registry::install_with_sha256(&docset, &package.download_url, &package.sha256)
+    registry::install_verified_package(&package)
         .with_context(|| format!("install docset {docset}"))?;
 
     // Verify the result.

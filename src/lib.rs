@@ -21,6 +21,7 @@ pub mod registry;
 pub mod registry_build;
 // C08a foundation: C08b/C08c consume this crate-private module. Remove the
 // temporary dead-code allowance when runtime wiring makes every item live.
+pub mod registry_receipt;
 #[allow(dead_code)]
 pub(crate) mod rerank;
 pub mod retrieve;

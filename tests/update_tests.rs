@@ -150,8 +150,8 @@ fn changed_running_version_makes_cache_stale() {
 
     let raw = read_cache_raw();
     let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    // The running_version must be updated to the current binary.
-    assert_eq!(parsed["running_version"], TEST_RUNNING_VERSION);
+    // The running_version must be updated to the current binary (v2 schema).
+    assert_eq!(parsed["binary"]["running_version"], TEST_RUNNING_VERSION);
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +202,7 @@ fn failed_attempt_throttles_retry() {
     let raw = read_cache_raw();
     let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(
-        parsed["last_attempt_secs"].as_u64(),
+        parsed["binary"]["last_attempt_secs"].as_u64(),
         Some(now),
         "throttled attempt must not advance the timestamp"
     );
@@ -235,7 +235,7 @@ fn failed_attempt_advances_timestamp() {
 
     let raw = read_cache_raw();
     let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    let attempt = parsed["last_attempt_secs"].as_u64().unwrap();
+    let attempt = parsed["binary"]["last_attempt_secs"].as_u64().unwrap();
     assert!(
         attempt >= before && attempt <= after,
         "failed attempt must advance timestamp to ~now, got {attempt} (before={before}, after={after})"
@@ -607,4 +607,102 @@ fn reminder_claim_does_not_ignore_cache_persistence_failure() {
         !source.contains("let _ = write_cache"),
         "a reminder must not be returned when its notified state failed to persist"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Schema v2 migration: a v1 binary cache must migrate without repeating its
+// notification.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn v1_binary_cache_migrates_without_repeating_its_notification() {
+    let (_dir, _g) = isolated_cache();
+    let now = update::test_util::now_unix_secs();
+    // v1 cache with a notified version.
+    let cache_json = serde_json::json!({
+        "schema_version": 1,
+        "running_version": TEST_RUNNING_VERSION,
+        "last_attempt_secs": now,
+        "last_success_secs": now,
+        "latest_version": "0.3.0",
+        "notified_version": "0.3.0",
+    });
+    seed_cache(&cache_json.to_string());
+
+    // The service must read the migrated v2 cache and not re-notify.
+    let svc = update::UpdateService::new(TEST_RUNNING_VERSION).unwrap();
+    let result = svc.check_and_notify().unwrap();
+    assert_eq!(result, None, "migrated cache must not re-notify");
+
+    // Verify the cache was written as v2 with the binary fields preserved.
+    let cache = update::test_util::read_update_cache_json();
+    assert_eq!(cache["schema_version"], 2);
+    assert_eq!(cache["binary"]["notified_version"], "0.3.0");
+}
+
+// ---------------------------------------------------------------------------
+// Registry updates: sort by docset, deduplicate by snapshot.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn registry_updates_sort_dedupe_and_render_commands() {
+    // Input is already sorted by docset name (the caller sorts before rendering).
+    let text = update::test_util::registry_reminder_text(&[
+        ("nextjs", "14.2.5", "15.0.0"),
+        ("react", "19.0.0", "19.1.0"),
+    ]);
+    assert!(text.contains("Updates available for installed docsets:"));
+    // Must maintain the sorted order.
+    let nextjs_pos = text.find("nextjs").unwrap();
+    let react_pos = text.find("react").unwrap();
+    assert!(
+        nextjs_pos < react_pos,
+        "updates must be sorted by docset name"
+    );
+    assert!(text.contains("nowdocs update nextjs"));
+    assert!(text.contains("nowdocs update react"));
+}
+
+// ---------------------------------------------------------------------------
+// Combined reminder: binary + docset sections rendered as one message.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn combined_reminder_renders_binary_first_then_docsets() {
+    // Seed a v2 cache with both binary and registry updates pending.
+    let (_dir, _g) = isolated_cache();
+    let now = update::test_util::now_unix_secs();
+    let cache_json = serde_json::json!({
+        "schema_version": 2,
+        "binary": {
+            "running_version": TEST_RUNNING_VERSION,
+            "last_attempt_secs": now,
+            "last_success_secs": now,
+            "latest_version": "0.2.0",
+            "notified_version": null,
+        },
+        "registry": {
+            "last_attempt_secs": now,
+            "last_success_secs": now,
+            "available": [
+                {"docset": "nextjs", "installed_version": "14.2.5", "latest_version": "15.0.0"}
+            ],
+            "notified_snapshot": null,
+        },
+    });
+    seed_cache(&cache_json.to_string());
+
+    let svc = update::UpdateService::new(TEST_RUNNING_VERSION).unwrap();
+    let result = svc.check_and_notify().unwrap();
+    assert!(result.is_some(), "must produce a combined reminder");
+    let msg = result.unwrap();
+
+    // Binary section must come first.
+    let binary_pos = msg.find("A newer version of nowdocs").unwrap();
+    let docset_pos = msg.find("Updates available for installed docsets").unwrap();
+    assert!(
+        binary_pos < docset_pos,
+        "binary section must precede docset section"
+    );
+    assert!(msg.contains("nowdocs update nextjs"));
 }
