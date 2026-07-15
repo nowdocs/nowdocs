@@ -265,8 +265,8 @@ fn adapter_capability_matrix_matches_n1() {
     let cu = by_id[&ClientId::Cursor].capabilities();
     assert_eq!(cu.detect, CapabilitySupport::Supported);
     assert_eq!(cu.generate, CapabilitySupport::Supported);
-    assert_eq!(cu.apply, CapabilitySupport::Unsupported);
-    assert_eq!(cu.verify, CapabilitySupport::Unsupported);
+    assert_eq!(cu.apply, CapabilitySupport::Conditional);
+    assert_eq!(cu.verify, CapabilitySupport::Conditional);
 
     let gen = by_id[&ClientId::Generic].capabilities();
     assert_eq!(gen.detect, CapabilitySupport::Unsupported);
