@@ -3,6 +3,7 @@
 
 use nowdocs::registry::{fetch_index_from, search_packages};
 use std::path::PathBuf;
+use std::time::Duration;
 
 fn fixture_url() -> String {
     let manifest = env!("CARGO_MANIFEST_DIR");
@@ -194,4 +195,40 @@ fn accepts_index_with_github_release_download_url() {
     assert_eq!(idx.packages.len(), 1);
     assert_eq!(idx.packages[0].docset, "nextjs");
     let _ = std::fs::remove_file(&path);
+}
+
+// ---- Update-index reader tests ----
+
+#[test]
+fn update_reader_validates_fixture_index_without_writing_it_to_disk() {
+    let idx =
+        nowdocs::registry::fetch_index_for_update_from(&fixture_url(), Duration::from_millis(50))
+            .unwrap();
+    assert_eq!(idx.packages.len(), 3);
+}
+
+#[test]
+fn update_reader_rejects_disallowed_redirects() {
+    let result = nowdocs::registry::validate_update_index_redirect(
+        "https://github.com/nowdocs-registry/registry-index/raw/main/index.json",
+        "https://evil.example/index.json",
+    );
+    assert!(result.is_err(), "redirect to evil.example must be rejected");
+}
+
+#[test]
+fn update_reader_rejects_oversized_file_fixture_before_parsing() {
+    let path = std::env::temp_dir().join(format!(
+        "nowdocs_oversized_update_index_{}.json",
+        std::process::id()
+    ));
+    std::fs::write(&path, vec![b'x'; (2 * 1024 * 1024) + 1]).unwrap();
+
+    let result = nowdocs::registry::fetch_index_for_update_from(
+        &format!("file://{}", path.display()),
+        Duration::from_millis(50),
+    );
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("exceeds"));
+    let _ = std::fs::remove_file(path);
 }

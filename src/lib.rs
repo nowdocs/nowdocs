@@ -20,6 +20,7 @@ pub mod ingest;
 pub mod registry;
 pub mod registry_build;
 // C08a foundation: C08b/C08c consume this crate-private module.
+pub mod registry_receipt;
 pub(crate) mod rerank;
 pub mod retrieve;
 pub mod smoke;

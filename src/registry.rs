@@ -3,6 +3,7 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use fs2::FileExt;
@@ -739,17 +740,34 @@ fn validate_chunks_jsonl(manifest: &Manifest, rows: &[JsonlChunk]) -> Result<(),
 /// **Security**: production URLs must be on `nowdocs-registry` domains.
 /// Test `file://` URLs are allowed (test fixture bypass).
 pub fn install(docset: &str, url: &str) -> Result<()> {
-    install_inner(docset, url, None)
+    install_inner(docset, url, None, || Ok(()))
 }
 
 /// Install a docset, verifying the archive's sha256 against `expected_sha256`
 /// (S2). A mismatch removes any transient download and bails with
 /// `ARCHIVE_SHA256_MISMATCH` before any active cache path is touched.
 pub fn install_with_sha256(docset: &str, url: &str, expected_sha256: &str) -> Result<()> {
-    install_inner(docset, url, Some(expected_sha256))
+    install_inner(docset, url, Some(expected_sha256), || Ok(()))
 }
 
-fn install_inner(docset: &str, url: &str, expected_sha256: Option<&str>) -> Result<()> {
+/// Install a verified Registry package, creating a provenance receipt after
+/// promotion. Receipt persistence failure makes the install fail.
+pub fn install_verified_package(package: &RegistryPackage) -> Result<()> {
+    let docset = input::validate_docset(&package.docset)?;
+    install_inner(
+        &docset,
+        &package.download_url,
+        Some(&package.sha256),
+        || crate::registry_receipt::record_after_promotion(package),
+    )
+}
+
+fn install_inner(
+    docset: &str,
+    url: &str,
+    expected_sha256: Option<&str>,
+    post_promotion: impl FnOnce() -> Result<()>,
+) -> Result<()> {
     let docset = input::validate_docset(docset)?;
     cache::ensure_layout()?;
 
@@ -763,6 +781,9 @@ fn install_inner(docset: &str, url: &str, expected_sha256: Option<&str>) -> Resu
     // Atomically promote staging -> active (rename-based). On failure this
     // restores the previous active docset and leaves staging for diagnostics.
     promote_staging(&docset, &staging_path)?;
+
+    // Execute post-promotion hook while the install lock is still held.
+    post_promotion()?;
 
     Ok(())
 }
@@ -1301,6 +1322,8 @@ pub fn update(docset: &str) -> Result<()> {
 /// docset-scoped leftovers (stashed license, staging dirs, rollback dirs).
 pub fn uninstall(docset: &str) -> Result<()> {
     let docset = input::validate_docset(docset)?;
+    // Remove provenance receipt before cache data to prevent stale identity.
+    crate::registry_receipt::remove(&docset)?;
     let db = cache::db_path(&docset);
     let mp = cache::manifest_path(&docset);
     if db.exists() {
@@ -1485,6 +1508,133 @@ pub fn fetch_selected_package_from(docset: &str, index_url: &str) -> Result<Regi
             "docset {docset} not found in the registry index; run `nowdocs registry list` to see available docsets"
         ),
     }
+}
+
+/// Maximum response size for the bounded update-index reader (2 MiB).
+const UPDATE_INDEX_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+/// Default User-Agent for the bounded update-index reader.
+const UPDATE_USER_AGENT: &str = concat!("nowdocs/", env!("CARGO_PKG_VERSION"));
+
+/// Read one update-index response without allocating beyond the hard limit.
+///
+/// Reading one extra byte distinguishes an exact-limit response from an
+/// oversized one while keeping both file fixtures and HTTP responses bounded.
+fn read_update_index_body(mut reader: impl Read) -> Result<String> {
+    let mut bytes = Vec::with_capacity(UPDATE_INDEX_MAX_BYTES.min(64 * 1024));
+    reader
+        .by_ref()
+        .take((UPDATE_INDEX_MAX_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .context("read registry index body")?;
+    if bytes.len() > UPDATE_INDEX_MAX_BYTES {
+        anyhow::bail!(
+            "registry index response exceeds {} byte limit",
+            UPDATE_INDEX_MAX_BYTES
+        );
+    }
+    String::from_utf8(bytes).context("registry index body is not UTF-8")
+}
+
+/// Fetch and parse the registry catalog index for automatic update checks.
+///
+/// Uses in-process `ureq` with HTTPS-only, an 800 ms global timeout, a 2 MiB
+/// response cap, and manual redirect handling (`max_redirects(0)`). At most one
+/// validated GitHub raw-content hop is allowed. Does not write to disk.
+///
+/// For `file://` test fixtures, reads directly from disk.
+pub fn fetch_index_for_update(timeout: Duration) -> Result<RegistryIndex> {
+    fetch_index_for_update_from(&index_url(), timeout)
+}
+
+/// Fetch the registry catalog index for automatic update checks from an
+/// explicit URL.
+pub fn fetch_index_for_update_from(url: &str, timeout: Duration) -> Result<RegistryIndex> {
+    if is_test_file_url(url) {
+        if !is_test_mode() {
+            anyhow::bail!("file:// URLs are not allowed in production builds");
+        }
+        let path = url.strip_prefix("file://").unwrap_or(url);
+        let file = File::open(path).with_context(|| format!("reading registry index at {path}"))?;
+        let text = read_update_index_body(file)?;
+        let idx: RegistryIndex =
+            serde_json::from_str(&text).context("parsing registry index.json")?;
+        validate_registry_index(&idx)?;
+        return Ok(idx);
+    }
+
+    if !is_allowed_registry_url(url) {
+        anyhow::bail!("registry index URL not in allowed domains: {}", url);
+    }
+
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .https_only(true)
+        .max_redirects(0)
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
+
+    let mut response = agent
+        .get(url)
+        .header("User-Agent", UPDATE_USER_AGENT)
+        .header("Accept", "application/json")
+        .call()
+        .context("fetch registry index for update")?;
+
+    let status = response.status();
+    if (301..400).contains(&status.as_u16()) {
+        // Redirect response — validate and follow exactly one hop.
+        let location = response
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        validate_update_index_redirect(url, &location)?;
+
+        let config2 = ureq::Agent::config_builder()
+            .timeout_global(Some(timeout))
+            .https_only(true)
+            .max_redirects(0)
+            .build();
+        let agent2 = ureq::Agent::new_with_config(config2);
+        let mut resp2 = agent2
+            .get(&location)
+            .header("User-Agent", UPDATE_USER_AGENT)
+            .header("Accept", "application/json")
+            .call()
+            .context("follow redirect for registry index")?;
+        let body = read_update_index_body(resp2.body_mut().as_reader())?;
+        let idx: RegistryIndex =
+            serde_json::from_str(&body).context("parsing registry index.json")?;
+        validate_registry_index(&idx)?;
+        return Ok(idx);
+    }
+
+    let body = read_update_index_body(response.body_mut().as_reader())?;
+    let idx: RegistryIndex = serde_json::from_str(&body).context("parsing registry index.json")?;
+    validate_registry_index(&idx)?;
+    Ok(idx)
+}
+
+/// Validate that a redirect from `from_url` to `to_url` is allowed for the
+/// update-index reader. Only the configured GitHub index URL to its exact
+/// raw.githubusercontent.com equivalent is permitted.
+pub fn validate_update_index_redirect(from_url: &str, to_url: &str) -> Result<()> {
+    // Only allow redirect from the configured GitHub /raw/ URL to its
+    // raw.githubusercontent.com equivalent.
+    let expected_from = "https://github.com/nowdocs-registry/registry-index/raw/main/index.json";
+    let expected_to =
+        "https://raw.githubusercontent.com/nowdocs-registry/registry-index/main/index.json";
+
+    if from_url == expected_from && to_url == expected_to {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "redirect from {} to {} is not allowed for update-index reader",
+        from_url,
+        to_url
+    )
 }
 
 /// Filter catalog packages by a case-insensitive substring match on name + description.
