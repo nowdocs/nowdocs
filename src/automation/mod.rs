@@ -14,7 +14,7 @@ pub mod lock;
 pub mod plan;
 
 // C4 owns registry-aware ensure planning and C5 exposes its operation contract
-// for integration tests. C7's setup boundary remains private.
+// for integration tests. C7 owns setup orchestration.
 pub mod docset;
 pub mod operation;
-mod setup;
+pub mod setup;

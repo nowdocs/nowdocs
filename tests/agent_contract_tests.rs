@@ -285,9 +285,9 @@ fn capabilities_data_is_deterministically_ordered() {
     let expected_commands: [(&str, bool, bool, bool); 8] = [
         ("capabilities", true, true, false),
         ("status", true, true, false),
-        ("setup.plan", false, false, true),
-        ("setup.apply", false, false, true),
-        ("setup.rollback", false, false, false),
+        ("setup.plan", true, false, true),
+        ("setup.apply", true, false, true),
+        ("setup.rollback", true, false, false),
         ("ensure.plan", true, false, true),
         ("ensure.apply", true, false, true),
         ("verify", false, true, false),

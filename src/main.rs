@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use anyhow::Context;
 use clap::Parser;
-use nowdocs::cli::{CacheCommands, Cli, Commands, RegistryCommands};
+use nowdocs::cli::{CacheCommands, Cli, Commands, RegistryCommands, SetupCommands};
 
 fn main() -> ExitCode {
     let args = Cli::parse();
@@ -303,6 +303,7 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Setup { command } => run_setup(command),
         Commands::Rebuild { docset } => {
             let stats = nowdocs::ingest::rebuild_docset(&docset)?;
             println!("rebuilt {docset}: {} chunks", stats.chunks);
@@ -618,6 +619,560 @@ fn ensure_error_mapping(
         (
             nowdocs::agent_contract::AgentStatus::Error,
             nowdocs::agent_contract::ResultCode::PermissionDenied,
+            msg,
+        )
+    } else {
+        (
+            nowdocs::agent_contract::AgentStatus::Error,
+            nowdocs::agent_contract::ResultCode::InternalError,
+            msg,
+        )
+    }
+}
+
+// ---- C7: setup orchestration ----
+
+/// Resolve the approved client configuration root from the caller context.
+///
+/// For this slice, the approved root is the user's home directory. C7 never
+/// silently uses a real home directory without disclosing it: the root is
+/// reported as a redacted observation in the output. If the home directory
+/// cannot be determined, setup returns `action_required` without a write.
+fn resolve_approved_root() -> anyhow::Result<PathBuf> {
+    let home =
+        dirs::home_dir().context("cannot determine home directory for approved client root")?;
+    if !home.is_absolute() {
+        anyhow::bail!("home directory is not an absolute path");
+    }
+    Ok(home)
+}
+
+/// Dispatch a `setup` subcommand.
+fn run_setup(command: SetupCommands) -> anyhow::Result<()> {
+    match command {
+        SetupCommands::Plan {
+            client,
+            docset,
+            online,
+            json,
+        } => run_setup_plan(&client, &docset, online, json),
+        SetupCommands::Apply { plan_hash, json } => run_setup_apply(&plan_hash, json),
+        SetupCommands::Rollback { operation_id, json } => run_setup_rollback(&operation_id, json),
+    }
+}
+
+/// Run `setup plan --client <client> --docset <docset> [--online] [--json]`.
+fn run_setup_plan(client: &str, docset: &str, online: bool, json: bool) -> anyhow::Result<()> {
+    let now = now_unix_secs()?;
+    match nowdocs::automation::setup::setup_plan(docset, client, online, now) {
+        Ok(nowdocs::automation::setup::SetupPlanResult::AlreadySatisfied { .. }) => {
+            if json {
+                print_setup_json(
+                    "setup.plan",
+                    nowdocs::agent_contract::AgentStatus::Ok,
+                    nowdocs::agent_contract::ResultCode::AlreadySatisfied,
+                    &format!("{docset} is already installed"),
+                    serde_json::json!({"client": client, "docset": docset}),
+                    Vec::new(),
+                    None,
+                );
+            } else {
+                println!("{docset} is already installed");
+            }
+            Ok(())
+        }
+        Ok(nowdocs::automation::setup::SetupPlanResult::PlanCreated { plan_hash, .. }) => {
+            let next_actions = vec![nowdocs::agent_contract::NextAction {
+                id: "setup-apply".to_string(),
+                kind: "setup_apply".to_string(),
+                risk: nowdocs::agent_contract::RiskLevel::Additive,
+                summary: format!("Apply the setup plan for {client} + {docset}"),
+                changes_state: true,
+                network_access: false,
+                requires_confirmation: true,
+                reversible: true,
+                argv: Some(vec![
+                    "setup".to_string(),
+                    "apply".to_string(),
+                    "--plan-hash".to_string(),
+                    plan_hash.clone(),
+                ]),
+                target_paths: vec![],
+                estimated_download_bytes: None,
+            }];
+            if json {
+                print_setup_json(
+                    "setup.plan",
+                    nowdocs::agent_contract::AgentStatus::ActionRequired,
+                    nowdocs::agent_contract::ResultCode::ActionRequired,
+                    &format!("run `nowdocs setup apply --plan-hash {plan_hash}`"),
+                    serde_json::json!({
+                        "client": client,
+                        "docset": docset,
+                        "plan_hash": plan_hash
+                    }),
+                    next_actions,
+                    None,
+                );
+            } else {
+                println!("setup plan created: {plan_hash}");
+                println!("run: nowdocs setup apply --plan-hash {plan_hash}");
+            }
+            Ok(())
+        }
+        Ok(nowdocs::automation::setup::SetupPlanResult::RegistryMetadataRequired { .. }) => {
+            let next_actions = vec![nowdocs::agent_contract::NextAction {
+                id: "setup-plan-online".to_string(),
+                kind: "setup_plan".to_string(),
+                risk: nowdocs::agent_contract::RiskLevel::ReadOnly,
+                summary: format!("Fetch registry metadata for {docset}"),
+                changes_state: false,
+                network_access: true,
+                requires_confirmation: false,
+                reversible: true,
+                argv: Some(vec![
+                    "setup".to_string(),
+                    "plan".to_string(),
+                    "--client".to_string(),
+                    client.to_string(),
+                    "--docset".to_string(),
+                    docset.to_string(),
+                    "--online".to_string(),
+                ]),
+                target_paths: vec![],
+                estimated_download_bytes: None,
+            }];
+            if json {
+                print_setup_json(
+                    "setup.plan",
+                    nowdocs::agent_contract::AgentStatus::ActionRequired,
+                    nowdocs::agent_contract::ResultCode::RegistryMetadataRequired,
+                    &format!("registry metadata required for {docset}"),
+                    serde_json::json!({"client": client, "docset": docset}),
+                    next_actions,
+                    None,
+                );
+            } else {
+                println!("registry metadata required for {docset}");
+                println!("run: nowdocs setup plan --client {client} --docset {docset} --online");
+            }
+            Ok(())
+        }
+        Err(e) => {
+            let (status, code, summary) = setup_error_mapping(&e);
+            if json {
+                print_setup_json(
+                    "setup.plan",
+                    status,
+                    code,
+                    &summary,
+                    serde_json::json!({
+                        "client": client,
+                        "docset": docset,
+                        "error": format!("{e:#}")
+                    }),
+                    Vec::new(),
+                    None,
+                );
+                if is_plan_conflict_code(code) {
+                    std::process::exit(code.exit_code().into());
+                }
+                Ok(())
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// Run `setup apply --plan-hash <hash> [--json]`.
+fn run_setup_apply(plan_hash: &str, json: bool) -> anyhow::Result<()> {
+    let root = match resolve_approved_root() {
+        Ok(r) => r,
+        Err(e) => {
+            if json {
+                print_setup_json(
+                    "setup.apply",
+                    nowdocs::agent_contract::AgentStatus::ActionRequired,
+                    nowdocs::agent_contract::ResultCode::ClientNotDetected,
+                    "cannot determine approved client root; manual configuration required",
+                    serde_json::json!({"plan_hash": plan_hash, "error": format!("{e:#}")}),
+                    Vec::new(),
+                    None,
+                );
+                return Ok(());
+            } else {
+                return Err(e);
+            }
+        }
+    };
+
+    let now = now_unix_secs()?;
+    match nowdocs::automation::setup::setup_apply(plan_hash, &root, now) {
+        Ok(nowdocs::automation::setup::SetupApplyResult::SetupComplete {
+            operation_id,
+            observations,
+        }) => {
+            let rollback = make_rollback(&operation_id);
+            if json {
+                print_setup_json(
+                    "setup.apply",
+                    nowdocs::agent_contract::AgentStatus::Ok,
+                    nowdocs::agent_contract::ResultCode::SetupComplete,
+                    "setup complete",
+                    serde_json::json!({
+                        "plan_hash": plan_hash,
+                        "operation_id": operation_id,
+                        "observations": observations,
+                    }),
+                    Vec::new(),
+                    rollback,
+                );
+            } else {
+                println!("setup complete (operation: {operation_id})");
+            }
+            Ok(())
+        }
+        Ok(nowdocs::automation::setup::SetupApplyResult::ClientReloadRequired {
+            operation_id,
+            observations,
+        }) => {
+            let rollback = make_rollback(&operation_id);
+            if json {
+                print_setup_json(
+                    "setup.apply",
+                    nowdocs::agent_contract::AgentStatus::Ok,
+                    nowdocs::agent_contract::ResultCode::ClientReloadRequired,
+                    "setup applied; client reload required",
+                    serde_json::json!({
+                        "plan_hash": plan_hash,
+                        "operation_id": operation_id,
+                        "observations": observations,
+                    }),
+                    Vec::new(),
+                    rollback,
+                );
+            } else {
+                println!(
+                    "setup applied; reload the client to activate (operation: {operation_id})"
+                );
+            }
+            Ok(())
+        }
+        Ok(nowdocs::automation::setup::SetupApplyResult::ActionRequired { observations }) => {
+            if json {
+                print_setup_json(
+                    "setup.apply",
+                    nowdocs::agent_contract::AgentStatus::ActionRequired,
+                    nowdocs::agent_contract::ResultCode::ActionRequired,
+                    "setup could not complete automatically; manual action required",
+                    serde_json::json!({
+                        "plan_hash": plan_hash,
+                        "observations": observations,
+                    }),
+                    Vec::new(),
+                    None,
+                );
+            } else {
+                println!("manual action required:");
+                for obs in &observations {
+                    println!("  - {obs}");
+                }
+            }
+            Ok(())
+        }
+        Ok(nowdocs::automation::setup::SetupApplyResult::PartialNoRollback { observations }) => {
+            // Docset succeeded but client apply could not start. No client
+            // change committed, so no rollback metadata is retained.
+            if json {
+                print_setup_json(
+                    "setup.apply",
+                    nowdocs::agent_contract::AgentStatus::Partial,
+                    nowdocs::agent_contract::ResultCode::ActionRequired,
+                    "docset installed but client configuration requires manual action",
+                    serde_json::json!({
+                        "plan_hash": plan_hash,
+                        "observations": observations,
+                    }),
+                    Vec::new(),
+                    None,
+                );
+            } else {
+                println!("partial: docset installed but client requires manual configuration");
+                for obs in &observations {
+                    println!("  - {obs}");
+                }
+            }
+            Ok(())
+        }
+        Ok(nowdocs::automation::setup::SetupApplyResult::Partial {
+            operation_id,
+            observations,
+        }) => {
+            let rollback = make_rollback(&operation_id);
+            if json {
+                print_setup_json(
+                    "setup.apply",
+                    nowdocs::agent_contract::AgentStatus::Partial,
+                    nowdocs::agent_contract::ResultCode::AppliedButUnverified,
+                    "configuration applied but verification incomplete",
+                    serde_json::json!({
+                        "plan_hash": plan_hash,
+                        "operation_id": operation_id,
+                        "observations": observations,
+                    }),
+                    Vec::new(),
+                    rollback,
+                );
+                // Exit 21 for applied-but-unverified.
+                std::process::exit(
+                    nowdocs::agent_contract::ResultCode::AppliedButUnverified
+                        .exit_code()
+                        .into(),
+                );
+            } else {
+                println!("partial: configuration applied but verification incomplete");
+                println!("rollback: nowdocs setup rollback --operation-id {operation_id}");
+                std::process::exit(
+                    nowdocs::agent_contract::ResultCode::AppliedButUnverified
+                        .exit_code()
+                        .into(),
+                );
+            }
+        }
+        Err(e) => {
+            let (status, code, summary) = setup_error_mapping(&e);
+            if json {
+                print_setup_json(
+                    "setup.apply",
+                    status,
+                    code,
+                    &summary,
+                    serde_json::json!({
+                        "plan_hash": plan_hash,
+                        "error": format!("{e:#}")
+                    }),
+                    Vec::new(),
+                    None,
+                );
+                if is_plan_conflict_code(code) {
+                    std::process::exit(code.exit_code().into());
+                }
+                if code == nowdocs::agent_contract::ResultCode::ConfigWriteUnsafe
+                    || code == nowdocs::agent_contract::ResultCode::UnsupportedPlatform
+                {
+                    std::process::exit(code.exit_code().into());
+                }
+                Ok(())
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// Run `setup rollback --operation-id <id> [--json]`.
+fn run_setup_rollback(operation_id: &str, json: bool) -> anyhow::Result<()> {
+    let root = match resolve_approved_root() {
+        Ok(r) => r,
+        Err(e) => {
+            if json {
+                print_setup_json(
+                    "setup.rollback",
+                    nowdocs::agent_contract::AgentStatus::ActionRequired,
+                    nowdocs::agent_contract::ResultCode::ClientNotDetected,
+                    "cannot determine approved client root; manual rollback required",
+                    serde_json::json!({
+                        "operation_id": operation_id,
+                        "error": format!("{e:#}")
+                    }),
+                    Vec::new(),
+                    None,
+                );
+                return Ok(());
+            } else {
+                return Err(e);
+            }
+        }
+    };
+
+    match nowdocs::automation::setup::setup_rollback(operation_id, &root) {
+        Ok(nowdocs::automation::setup::SetupRollbackResult::RolledBack { observations }) => {
+            if json {
+                print_setup_json(
+                    "setup.rollback",
+                    nowdocs::agent_contract::AgentStatus::Ok,
+                    nowdocs::agent_contract::ResultCode::SetupComplete,
+                    "rollback complete",
+                    serde_json::json!({
+                        "operation_id": operation_id,
+                        "observations": observations,
+                    }),
+                    Vec::new(),
+                    None,
+                );
+            } else {
+                println!("rollback complete (operation: {operation_id})");
+            }
+            Ok(())
+        }
+        Ok(nowdocs::automation::setup::SetupRollbackResult::ManualRequired { observations }) => {
+            if json {
+                print_setup_json(
+                    "setup.rollback",
+                    nowdocs::agent_contract::AgentStatus::ActionRequired,
+                    nowdocs::agent_contract::ResultCode::ActionRequired,
+                    "automatic rollback not possible; manual action required",
+                    serde_json::json!({
+                        "operation_id": operation_id,
+                        "observations": observations,
+                    }),
+                    Vec::new(),
+                    None,
+                );
+            } else {
+                println!("manual rollback required:");
+                for obs in &observations {
+                    println!("  - {obs}");
+                }
+            }
+            Ok(())
+        }
+        Err(e) => {
+            let (status, code, summary) = setup_error_mapping(&e);
+            if json {
+                print_setup_json(
+                    "setup.rollback",
+                    status,
+                    code,
+                    &summary,
+                    serde_json::json!({
+                        "operation_id": operation_id,
+                        "error": format!("{e:#}")
+                    }),
+                    Vec::new(),
+                    None,
+                );
+                if is_plan_conflict_code(code) {
+                    std::process::exit(code.exit_code().into());
+                }
+                Ok(())
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// Build rollback metadata for a successful setup apply.
+fn make_rollback(operation_id: &str) -> Option<nowdocs::agent_contract::RollbackMetadata> {
+    Some(nowdocs::agent_contract::RollbackMetadata {
+        operation_id: operation_id.to_string(),
+        expires_at: nowdocs::automation::operation::retention_expiry(
+            nowdocs::automation::operation::OperationState::AppliedVerified,
+            Some(std::time::SystemTime::now()),
+        )
+        .and_then(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| format!("{}", d.as_secs()))
+        })
+        .unwrap_or_default(),
+        argv: vec![
+            "nowdocs".to_string(),
+            "setup".to_string(),
+            "rollback".to_string(),
+            "--operation-id".to_string(),
+            operation_id.to_string(),
+        ],
+    })
+}
+
+/// True when the result code is a plan/concurrency conflict (exit class 10).
+fn is_plan_conflict_code(code: nowdocs::agent_contract::ResultCode) -> bool {
+    matches!(
+        code,
+        nowdocs::agent_contract::ResultCode::PlanNotFound
+            | nowdocs::agent_contract::ResultCode::PlanExpired
+            | nowdocs::agent_contract::ResultCode::PlanStale
+            | nowdocs::agent_contract::ResultCode::PlanTampered
+            | nowdocs::agent_contract::ResultCode::OperationInProgress
+    )
+}
+
+/// Print one agent envelope for a `setup` subcommand.
+fn print_setup_json(
+    command: &str,
+    status: nowdocs::agent_contract::AgentStatus,
+    code: nowdocs::agent_contract::ResultCode,
+    summary: &str,
+    data: serde_json::Value,
+    next_actions: Vec<nowdocs::agent_contract::NextAction>,
+    rollback: Option<nowdocs::agent_contract::RollbackMetadata>,
+) {
+    let envelope = nowdocs::agent_contract::AgentEnvelope {
+        schema_version: nowdocs::agent_contract::AGENT_CONTRACT_SCHEMA_VERSION,
+        nowdocs_version: env!("CARGO_PKG_VERSION").to_string(),
+        command: command.to_string(),
+        status,
+        code,
+        summary: summary.to_string(),
+        data,
+        next_actions,
+        rollback,
+    };
+    println!("{}", serde_json::to_string_pretty(&envelope).unwrap());
+}
+
+/// Map a `setup` error to an agent-contract status/code/summary.
+fn setup_error_mapping(
+    e: &anyhow::Error,
+) -> (
+    nowdocs::agent_contract::AgentStatus,
+    nowdocs::agent_contract::ResultCode,
+    String,
+) {
+    let msg = format!("{e:#}");
+    if msg.contains("PLAN_NOT_FOUND") {
+        (
+            nowdocs::agent_contract::AgentStatus::Error,
+            nowdocs::agent_contract::ResultCode::PlanNotFound,
+            msg,
+        )
+    } else if msg.contains("PLAN_EXPIRED") {
+        (
+            nowdocs::agent_contract::AgentStatus::Error,
+            nowdocs::agent_contract::ResultCode::PlanExpired,
+            msg,
+        )
+    } else if msg.contains("PLAN_STALE") {
+        (
+            nowdocs::agent_contract::AgentStatus::Error,
+            nowdocs::agent_contract::ResultCode::PlanStale,
+            msg,
+        )
+    } else if msg.contains("PLAN_TAMPERED") {
+        (
+            nowdocs::agent_contract::AgentStatus::Error,
+            nowdocs::agent_contract::ResultCode::PlanTampered,
+            msg,
+        )
+    } else if msg.contains("OPERATION_IN_PROGRESS") {
+        (
+            nowdocs::agent_contract::AgentStatus::Error,
+            nowdocs::agent_contract::ResultCode::OperationInProgress,
+            msg,
+        )
+    } else if msg.contains("OPERATION_LOCK_UNSAFE") {
+        (
+            nowdocs::agent_contract::AgentStatus::Error,
+            nowdocs::agent_contract::ResultCode::PermissionDenied,
+            msg,
+        )
+    } else if msg.contains("VERIFICATION_FAILED") {
+        (
+            nowdocs::agent_contract::AgentStatus::Error,
+            nowdocs::agent_contract::ResultCode::VerificationFailed,
             msg,
         )
     } else {
