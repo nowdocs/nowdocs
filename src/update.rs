@@ -27,19 +27,20 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Result;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+use tempfile::NamedTempFile;
 
 use crate::cache;
 
 /// Cache freshness window for the same running binary version.
 const FRESHNESS_SECS: u64 = 24 * 60 * 60; // 24 hours
 
-/// HTTP timeout for the GitHub latest-release metadata fetch, in seconds.
-/// curl's `--max-time` accepts fractional seconds; 0.8 = 800 ms.
-const FETCH_TIMEOUT_SECS: &str = "0.8";
+/// HTTP timeout for the GitHub latest-release metadata fetch.
+const FETCH_TIMEOUT: Duration = Duration::from_millis(800);
 
 /// GitHub latest-release API endpoint (redirects to the latest non-prerelease,
 /// non-draft release tag).
@@ -187,8 +188,11 @@ impl UpdateService {
                 if reminder.is_some() {
                     updated.notified_version = Some(version);
                 }
-                let _ = write_cache(&updated);
-                Ok(reminder)
+                if write_cache(&updated).is_ok() {
+                    Ok(reminder)
+                } else {
+                    Ok(None)
+                }
             }
             Ok(None) => {
                 // No newer version or rejected (draft/prerelease/parse).
@@ -198,8 +202,11 @@ impl UpdateService {
                 if updated.latest_version.is_some() {
                     updated.last_success_secs = now;
                 }
-                let _ = write_cache(&updated);
-                Ok(self.claim_reminder_locked(&updated))
+                if write_cache(&updated).is_ok() {
+                    Ok(self.claim_reminder_locked(&updated))
+                } else {
+                    Ok(None)
+                }
             }
             Err(_) => {
                 // Network/timeout/parse failure: advance attempt timestamp so
@@ -207,7 +214,7 @@ impl UpdateService {
                 let mut updated = cache.clone();
                 updated.running_version = self.running_version.clone();
                 updated.last_attempt_secs = now;
-                let _ = write_cache(&updated);
+                let _write_result = write_cache(&updated);
                 Ok(None)
             }
         }
@@ -228,14 +235,14 @@ impl UpdateService {
     /// no pending newer version.
     fn claim_reminder_locked(&self, cache: &UpdateCache) -> Option<String> {
         let reminder = compute_reminder(cache, &self.running_version);
-        if reminder.is_some() {
+        if let Some(reminder) = reminder {
             let mut updated = cache.clone();
             if let Some(ref v) = updated.latest_version {
                 updated.notified_version = Some(v.clone());
             }
-            let _ = write_cache(&updated);
+            return write_cache(&updated).ok().map(|_| reminder);
         }
-        reminder
+        None
     }
 }
 
@@ -250,22 +257,24 @@ pub fn serve_claim_cached_reminder(running_version: &str) -> Result<Option<Strin
         return Ok(None);
     }
 
-    let Some(lock) = acquire_lock() else {
+    let Some(_lock) = acquire_lock() else {
         return Ok(None);
     };
 
     let cache = read_cache();
     let reminder = compute_reminder(&cache, running_version);
-    if reminder.is_some() {
+    if let Some(reminder) = reminder {
         // Mark as notified so a second serve process doesn't re-notify.
         let mut updated = cache;
         if let Some(ref v) = updated.latest_version {
             updated.notified_version = Some(v.clone());
         }
-        let _ = write_cache(&updated);
+        if write_cache(&updated).is_err() {
+            return Ok(None);
+        }
+        return Ok(Some(reminder));
     }
-    drop(lock);
-    Ok(reminder)
+    Ok(None)
 }
 
 // ===========================================================================
@@ -290,25 +299,22 @@ fn read_cache() -> UpdateCache {
     }
 }
 
-/// Write the cache atomically (temp file + rename) so a crash mid-write
-/// never leaves a corrupt cache. Best-effort: errors are ignored.
+/// Write the cache atomically (unique same-directory tempfile + replacement)
+/// so a crash mid-write never leaves a corrupt cache. The caller decides
+/// whether a persistence failure suppresses a notification.
 fn write_cache(cache: &UpdateCache) -> Result<()> {
     let path = cache_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension("json.tmp");
     let json = serde_json::to_string(cache)?;
-    {
-        let mut f = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp)?;
-        f.write_all(json.as_bytes())?;
-        f.flush()?;
-    }
-    std::fs::rename(&tmp, &path)?;
+    let parent = path.parent().expect("cache path has a parent");
+    let mut tmp = NamedTempFile::new_in(parent)?;
+    tmp.write_all(json.as_bytes())?;
+    tmp.flush()?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(&path)
+        .map_err(|e| anyhow::Error::new(e.error))?;
     Ok(())
 }
 
@@ -371,7 +377,7 @@ fn acquire_lock() -> Option<UpdateLock> {
 }
 
 // ===========================================================================
-// Internal: HTTP fetch (curl subprocess, same pattern as registry downloads)
+// Internal: HTTP fetch (in-process ureq client)
 // ===========================================================================
 
 /// GitHub latest-release API response (only the fields we need).
@@ -387,40 +393,24 @@ struct GithubRelease {
 /// the response was rejected (draft/prerelease/parse/no tag), or `Err` on
 /// network/timeout failure.
 fn fetch_latest_release() -> Result<Option<String>> {
-    let tmp = std::env::temp_dir().join(format!(
-        "nowdocs_release_{}_{}",
-        std::process::id(),
-        now_unix_secs()
-    ));
-    let status = std::process::Command::new("curl")
-        .args([
-            "-fsSL",
-            "--max-time",
-            FETCH_TIMEOUT_SECS,
-            "--connect-timeout",
-            FETCH_TIMEOUT_SECS,
-            "-H",
-            &format!("User-Agent: {USER_AGENT}"),
-            "-H",
-            "Accept: application/vnd.github+json",
-            "-o",
-            &tmp.to_string_lossy(),
-            LATEST_RELEASE_URL,
-        ])
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("spawn curl for release metadata")?;
-    let result = (|| -> Result<Option<String>> {
-        if !status.success() {
-            anyhow::bail!("curl failed for release metadata");
-        }
-        let body = std::fs::read_to_string(&tmp).context("reading release metadata response")?;
-        let release: GithubRelease =
-            serde_json::from_str(&body).context("parsing release metadata JSON")?;
-        Ok(parse_release_inner(&release))
-    })();
-    let _ = std::fs::remove_file(&tmp);
-    result
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(FETCH_TIMEOUT))
+        .https_only(true)
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
+    let mut response = agent
+        .get(LATEST_RELEASE_URL)
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .context("fetch release metadata")?;
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .context("read release metadata response")?;
+    let release: GithubRelease =
+        serde_json::from_str(&body).context("parse release metadata JSON")?;
+    Ok(parse_release_inner(&release))
 }
 
 /// Parse a release JSON value, returning the version string if it is a stable

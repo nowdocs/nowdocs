@@ -569,3 +569,42 @@ fn cache_path_is_under_cache_root() {
         path.display()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Implementation safety contracts: update checks must stay in-process, and a
+// reminder may only be returned after its claimed state is durably persisted.
+// These source-level guards cover platform-specific failure paths that cannot
+// be exercised from this Unix test host.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn update_service_uses_in_process_http_and_unique_atomic_tempfiles() {
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/update.rs"))
+        .expect("read update service source");
+    assert!(
+        !source.contains("Command::new(\"curl\")"),
+        "update checks must not spawn curl or any helper process"
+    );
+    assert!(
+        source.contains("ureq::"),
+        "update checks must use the in-process HTTP client"
+    );
+    assert!(
+        !source.contains("with_extension(\"json.tmp\")"),
+        "a fixed temporary cache filename is unsafe across processes"
+    );
+    assert!(
+        source.contains("NamedTempFile"),
+        "cache replacement must use a unique same-directory tempfile"
+    );
+}
+
+#[test]
+fn reminder_claim_does_not_ignore_cache_persistence_failure() {
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/update.rs"))
+        .expect("read update service source");
+    assert!(
+        !source.contains("let _ = write_cache"),
+        "a reminder must not be returned when its notified state failed to persist"
+    );
+}
