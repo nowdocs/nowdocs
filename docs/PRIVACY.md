@@ -1,7 +1,7 @@
 # Privacy Policy
 
 > Copyright (c) 2026 GWMM LLC.
-> Last updated: July 4, 2026.
+> Last updated: July 15, 2026.
 
 ## Core commitment
 
@@ -16,6 +16,11 @@ nowdocs accesses the network only when the user explicitly initiates one of the 
 | `nowdocs ingest` for local documents | No | Reads only a local directory. |
 | `nowdocs install` or `nowdocs update` | Yes | Trusted registry sources: `github.com/nowdocs-registry/*` and the reserved, currently inactive `registry.nowdocs.dev/*`. |
 | First model-enabled command | One-time download | Hugging Face through `hf-hub`, to download the approximately 66 MB Jina v2 small model; later use reads the local cache. |
+| Binary version check after `install`, `update`, `ensure`, `registry`, `smoke`, or `doctor` | Yes, at most once every 24 hours | GitHub's official latest-release metadata at `api.github.com/repos/nowdocs/nowdocs/releases/latest`. The request sends only the standard `User-Agent: nowdocs/<version>` header GitHub requires and no user-specific or product-specific identifier. A failed attempt is rate-limited so repeated commands do not retry during an outage. |
+
+`nowdocs serve` never performs a binary version check. It may display a previously discovered newer-version reminder from the local cache on stderr, but it never initiates a network request for that purpose.
+
+Set the environment variable `NOWDOCS_UPDATE_CHECK=0` to disable all version checks and reminders. nowdocs never downloads or installs a binary update automatically; the reminder is informational only and directs you to the package manager you used to install nowdocs.
 
 Cloning a source repository from GitHub or another host is a separate user action, not an action performed by `nowdocs ingest`.
 
@@ -41,6 +46,7 @@ If you contact `legal@gwmmai.com`, for example for a DMCA or Code of Conduct rep
 |---|---|
 | Docset data: Lance tables, manifests, and licenses | `~/.cache/nowdocs/db/`, or the platform-equivalent cache path |
 | Embedder model cache | `~/.cache/nowdocs/models/` |
+| Update check cache (latest version seen and reminder state) | `~/.cache/nowdocs/update-cache.json` |
 | Application configuration | None. nowdocs does not create a configuration directory; MCP client configuration lives in the client's own `mcp.json`. |
 
 ## GDPR and CCPA

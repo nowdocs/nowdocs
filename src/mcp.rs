@@ -43,6 +43,15 @@ pub fn run_loop() -> io::Result<()> {
         return Err(io::Error::other(e.to_string()));
     }
 
+    // Cache-only update reminder: if a fresh unnotified newer binary version was
+    // discovered by a prior eligible command, surface it exactly once on stderr.
+    // This never initiates a network request - serve is cache-only.
+    if let Ok(Some(reminder)) =
+        crate::update::serve_claim_cached_reminder(env!("CARGO_PKG_VERSION"))
+    {
+        eprintln!("{reminder}");
+    }
+
     // N3: warm the default embedder before the read loop so the first search is
     // fast. Best-effort + offline-safe: a cold cache (model not yet downloaded)
     // skips instantly and the first search loads on demand instead.

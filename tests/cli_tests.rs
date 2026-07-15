@@ -939,3 +939,148 @@ fn test_ensure_online_creates_plan_with_hash() {
         "online planning must include an apply next action"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Update notification tests (unified update service)
+//
+// These tests prove the CLI surfaces a cached update reminder on stderr after
+// an eligible command succeeds, that the primary stdout precedes the reminder,
+// and that ineligible or failing commands do not notify. No real network is
+// used: the update cache is seeded on disk so the service reads a pre-existing
+// newer version without fetching.
+// ---------------------------------------------------------------------------
+
+/// Write a seeded update-cache.json into `<cache_home>/nowdocs/` with a fresh
+/// unnotified newer version, so an eligible command produces a reminder
+/// without any network fetch.
+fn seed_update_cache(cache_home: &std::path::Path) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let cache_json = serde_json::json!({
+        "schema_version": 1,
+        "running_version": env!("CARGO_PKG_VERSION"),
+        "last_attempt_secs": now,
+        "last_success_secs": now,
+        "latest_version": "99.0.0",
+        "notified_version": null,
+    });
+    let dir = cache_home.join("nowdocs");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("update-cache.json"), cache_json.to_string()).unwrap();
+}
+
+/// An eligible command (doctor) with a seeded cache must print its primary
+/// output to stdout and the update reminder to stderr.
+#[test]
+fn update_notification_eligible_command_reminds() {
+    let root = tempfile::tempdir().unwrap();
+    seed_update_cache(root.path());
+
+    let out = run_nowdocs_isolated(root.path(), &["doctor", "--json"]);
+    assert!(
+        out.status.success(),
+        "doctor should exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    // Primary output is on stdout (doctor JSON).
+    assert!(
+        stdout.contains("doctor") || stdout.contains("status"),
+        "stdout must contain primary output, got: {stdout}"
+    );
+
+    // Reminder is on stderr and contains the newer version.
+    assert!(
+        stderr.contains("99.0.0"),
+        "stderr must contain the newer version in the reminder, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("package manager"),
+        "stderr reminder must mention the package manager, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("https://github.com/nowdocs/nowdocs/releases/latest"),
+        "stderr reminder must contain the releases URL, got: {stderr}"
+    );
+
+    // Stdout must NOT contain the reminder (stdout is primary output only).
+    assert!(
+        !stdout.contains("99.0.0"),
+        "stdout must not contain the update reminder, got: {stdout}"
+    );
+}
+
+/// An ineligible command (--version) must not produce an update reminder.
+#[test]
+fn update_notification_ineligible_command_no_remind() {
+    let root = tempfile::tempdir().unwrap();
+    seed_update_cache(root.path());
+
+    let out = run_nowdocs_isolated(root.path(), &["--version"]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("99.0.0"),
+        "--version must not produce an update reminder, got stderr: {stderr}"
+    );
+}
+
+/// A failing command must not produce an update reminder (check is only after
+/// successful completion). `list-installed` on a cache dir that's actually a
+/// file causes a failure path.
+#[test]
+fn update_notification_failing_command_no_remind() {
+    let root = tempfile::tempdir().unwrap();
+    seed_update_cache(root.path());
+
+    // `smoke` on a nonexistent docset exits 1 (failure).
+    let out = run_nowdocs_isolated(root.path(), &["smoke", "nonexistent-docset-xyz"]);
+    assert!(
+        !out.status.success(),
+        "smoke on a nonexistent docset should fail"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("99.0.0"),
+        "a failing command must not produce an update reminder, got stderr: {stderr}"
+    );
+}
+
+/// Opt-out (NOWDOCS_UPDATE_CHECK=0) suppresses the reminder even with a seeded
+/// cache.
+#[test]
+fn update_notification_opt_out_suppresses() {
+    let root = tempfile::tempdir().unwrap();
+    seed_update_cache(root.path());
+
+    let out = Command::new(env!("CARGO_BIN_EXE_nowdocs"))
+        .arg("doctor")
+        .arg("--json")
+        .current_dir(root.path())
+        .env("HOME", root.path())
+        .env("XDG_CACHE_HOME", root.path())
+        .env("XDG_CONFIG_HOME", root.path())
+        .env("XDG_DATA_HOME", root.path())
+        .env("NOWDOCS_UPDATE_CHECK", "0")
+        .env("http_proxy", "http://127.0.0.1:9")
+        .env("https_proxy", "http://127.0.0.1:9")
+        .env("HTTP_PROXY", "http://127.0.0.1:9")
+        .env("HTTPS_PROXY", "http://127.0.0.1:9")
+        .env("ALL_PROXY", "http://127.0.0.1:9")
+        .env("no_proxy", "")
+        .env("NO_PROXY", "")
+        .output()
+        .expect("failed to execute nowdocs");
+
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("99.0.0"),
+        "opt-out must suppress the reminder, got stderr: {stderr}"
+    );
+}
