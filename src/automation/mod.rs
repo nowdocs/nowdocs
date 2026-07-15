@@ -13,8 +13,8 @@
 pub mod lock;
 pub mod plan;
 
-// C4 owns registry-aware ensure planning; expose its public API. C5 and C7
-// remain private future-slice boundaries.
+// C4 owns registry-aware ensure planning and C5 exposes its operation contract
+// for integration tests. C7's setup boundary remains private.
 pub mod docset;
-mod operation;
+pub mod operation;
 mod setup;
