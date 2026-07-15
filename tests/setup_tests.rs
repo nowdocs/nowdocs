@@ -13,7 +13,7 @@ use nowdocs::automation::setup::{
 };
 use nowdocs::cache::{self, InstalledDocsetState};
 use nowdocs::chunker::{Chunk, ChunkType};
-use nowdocs::clients::{approved_root, atomic_replace, safe_target};
+use nowdocs::clients::{approved_root, atomic_replace, safe_target, ApprovedRoot};
 use nowdocs::registry::{self, RegistryPackage};
 use nowdocs::store::Store;
 
@@ -65,6 +65,17 @@ impl Drop for EnvGuard {
 
 fn isolate(root: &std::path::Path) -> EnvGuard {
     EnvGuard::isolate(root)
+}
+
+/// Create an ApprovedRoot from a temp directory, setting mode 0700 on Unix so
+/// `approved_root` accepts it.
+fn make_approved_root(path: &std::path::Path) -> ApprovedRoot {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    approved_root(path).expect("approved root")
 }
 
 fn two_chunks() -> Vec<Chunk> {
@@ -259,21 +270,50 @@ fn count_entries(path: &std::path::Path) -> usize {
         .unwrap_or(0)
 }
 
+/// Set up a registry fixture under `root` and create a `client-root`
+/// subdirectory with optional Cursor config. Returns the `ApprovedRoot`
+/// (pointing at `client-root`) and the `config_root` path so `setup_plan`
+/// and `setup_apply` see the same Cursor target fingerprint.
+fn setup_fixture(
+    root: &std::path::Path,
+    docset: &str,
+    version: &str,
+    cursor_config: Option<&serde_json::Value>,
+) -> (ApprovedRoot, std::path::PathBuf) {
+    let archive_path = root.join(format!("{docset}-{version}.lance.tar"));
+    let package = package_for(docset, version, &archive_path);
+    setup_index(root, &package);
+
+    let config_root = root.join("client-root");
+    std::fs::create_dir_all(&config_root).unwrap();
+    if let Some(config) = cursor_config {
+        std::fs::create_dir_all(config_root.join(".cursor")).unwrap();
+        std::fs::write(
+            config_root.join(".cursor").join("mcp.json"),
+            serde_json::to_vec_pretty(config).unwrap(),
+        )
+        .unwrap();
+    }
+    let ar = make_approved_root(&config_root);
+    (ar, config_root)
+}
+
 // ---- 1. Offline missing docset: registry_metadata_required, exit 0, no files ----
 
 #[test]
 fn offline_missing_docset_returns_registry_metadata_required_and_creates_no_files() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let ar = make_approved_root(root.path());
 
-    let result = setup_plan("nextjs", "cursor", false, 1_000_000_000).expect("plan should succeed");
+    let result =
+        setup_plan("nextjs", "cursor", &ar, false, 1_000_000_000).expect("plan should succeed");
     assert!(
         matches!(result, SetupPlanResult::RegistryMetadataRequired { .. }),
         "offline missing docset must return RegistryMetadataRequired, got: {:?}",
         result
     );
 
-    // No cache, model, or automation files should have been created.
     assert!(
         count_entries(root.path()) == 0,
         "offline refusal must create no files under isolated root"
@@ -286,18 +326,19 @@ fn offline_missing_docset_returns_registry_metadata_required_and_creates_no_file
 fn online_planning_produces_one_hash_with_prescribed_action_ordering() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let ar = make_approved_root(root.path());
 
     let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
     let package = package_for("nextjs", "14.2.5", &archive_path);
     setup_index(root.path(), &package);
 
-    let result = setup_plan("nextjs", "cursor", true, 1_000_000_000).expect("online plan succeeds");
+    let result =
+        setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).expect("online plan succeeds");
     let plan_hash = match result {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
 
-    // The plan hash is 64 lowercase hex characters.
     assert_eq!(plan_hash.len(), 64, "plan hash must be 64 hex chars");
     assert!(
         plan_hash
@@ -306,13 +347,11 @@ fn online_planning_produces_one_hash_with_prescribed_action_ordering() {
         "plan hash must be lowercase hex"
     );
 
-    // Load the stored plan and verify action ordering.
     let plan = load_plan(&plan_hash, 1_000_000_001).expect("load stored plan");
     assert_eq!(plan.inputs.client.as_deref(), Some("cursor"));
     assert_eq!(plan.inputs.docset.as_deref(), Some("nextjs"));
     assert!(plan.inputs.online);
 
-    // Action ordering: docset install/update, verify_docset, client_apply, client_verify.
     assert!(plan.actions.len() >= 2, "plan must have at least 2 actions");
     assert!(
         plan.actions[0].kind == "registry_install" || plan.actions[0].kind == "registry_update",
@@ -353,14 +392,12 @@ fn online_planning_produces_one_hash_with_prescribed_action_ordering() {
         "plan must include client_verify for cursor"
     );
 
-    // Ordering: verify_docset < client_apply < client_verify.
     let vd = verify_docset_idx.unwrap();
     let ca = client_apply_idx.unwrap();
     let cv = client_verify_idx.unwrap();
     assert!(vd < ca, "verify_docset must come before client_apply");
     assert!(ca < cv, "client_apply must come before client_verify");
 
-    // No absolute paths, secrets, or config bytes in plan data.
     let plan_json = serde_json::to_string(&plan).unwrap();
     assert!(
         !plan_json.contains("/Users/") && !plan_json.contains("/home/"),
@@ -370,7 +407,6 @@ fn online_planning_produces_one_hash_with_prescribed_action_ordering() {
         !plan_json.contains("token") && !plan_json.contains("secret"),
         "plan must not contain secrets"
     );
-    // Target paths are logical, not absolute.
     for action in &plan.actions {
         for tp in &action.target_paths {
             assert!(
@@ -381,45 +417,82 @@ fn online_planning_produces_one_hash_with_prescribed_action_ordering() {
     }
 }
 
-// ---- 2b. Already satisfied docset: no plan created ----
+// ---- 2b. Already satisfied docset + canonical client ----
 
 #[test]
 fn already_satisfied_docset_returns_already_satisfied() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
 
-    // Install a docset directly.
     let archive = make_release_archive("react", "18.3.1");
     let tar_path = root.path().join("react.tar");
     std::fs::write(&tar_path, &archive).unwrap();
     let url = format!("file://{}", tar_path.display());
     registry::install("react", &url).expect("install fixture docset");
 
-    let result = setup_plan("react", "cursor", false, 1_000_000_000).expect("plan should succeed");
+    let config_root = root.path().join("client-root");
+    std::fs::create_dir_all(config_root.join(".cursor")).unwrap();
+    let binary = std::env::current_exe().unwrap();
+    let canonical = serde_json::json!({
+        "mcpServers": {
+            "nowdocs": {"command": binary.display().to_string(), "args": ["serve"]}
+        }
+    });
+    std::fs::write(
+        config_root.join(".cursor").join("mcp.json"),
+        serde_json::to_vec_pretty(&canonical).unwrap(),
+    )
+    .unwrap();
+    let ar = make_approved_root(&config_root);
+
+    let result =
+        setup_plan("react", "cursor", &ar, false, 1_000_000_000).expect("plan should succeed");
     assert!(
         matches!(result, SetupPlanResult::AlreadySatisfied { .. }),
-        "installed docset must be already satisfied, got: {:?}",
+        "installed docset + canonical client must be already satisfied, got: {:?}",
         result
     );
 }
 
-// ---- 3. Tampered, expired, wrong-version, drifted plans are refused ----
+// ---- 2c. Healthy docset alone (no canonical client) is NOT already_satisfied ----
+
+#[test]
+fn healthy_docset_without_canonical_client_is_not_already_satisfied() {
+    let root = tempfile::tempdir().unwrap();
+    let _g = isolate(root.path());
+
+    let archive = make_release_archive("react", "18.3.1");
+    let tar_path = root.path().join("react.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    let url = format!("file://{}", tar_path.display());
+    registry::install("react", &url).expect("install fixture docset");
+
+    let config_root = root.path().join("client-root");
+    std::fs::create_dir_all(&config_root).unwrap();
+    let ar = make_approved_root(&config_root);
+
+    let result =
+        setup_plan("react", "cursor", &ar, false, 1_000_000_000).expect("plan should succeed");
+    assert!(
+        !matches!(result, SetupPlanResult::AlreadySatisfied { .. }),
+        "healthy docset without canonical client must NOT be already_satisfied, got: {:?}",
+        result
+    );
+}
+
+// ---- 3. Tampered, expired, stale plans are refused ----
 
 #[test]
 fn apply_refuses_tampered_plan() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let (ar, _) = setup_fixture(root.path(), "nextjs", "14.2.5", None);
 
-    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
-    setup_index(root.path(), &package);
-
-    let plan_hash = match setup_plan("nextjs", "cursor", true, 1_000_000_000).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
 
-    // Tamper with the stored plan file.
     let plan_path = root
         .path()
         .join("nowdocs")
@@ -443,18 +516,15 @@ fn apply_refuses_tampered_plan() {
 fn apply_refuses_expired_plan() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
-
-    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
-    setup_index(root.path(), &package);
+    let (ar, _) = setup_fixture(root.path(), "nextjs", "14.2.5", None);
 
     let created_at = 1_000_000_000;
-    let plan_hash = match setup_plan("nextjs", "cursor", true, created_at).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, created_at).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
 
-    let now = created_at + 30 * 60 + 1; // 30 min + 1 sec
+    let now = created_at + 30 * 60 + 1;
     let result = setup_apply(&plan_hash, root.path(), now);
     assert!(result.is_err(), "expired plan must be refused");
     let msg = format!("{}", result.unwrap_err());
@@ -468,17 +538,13 @@ fn apply_refuses_expired_plan() {
 fn apply_refuses_stale_plan_when_docset_state_drifts() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let (ar, _) = setup_fixture(root.path(), "nextjs", "14.2.5", None);
 
-    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
-    setup_index(root.path(), &package);
-
-    let plan_hash = match setup_plan("nextjs", "cursor", true, 1_000_000_000).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
 
-    // Change the state by installing a different version manually.
     let v2_archive = make_release_archive("nextjs", "15.0.0");
     let v2_path = root.path().join("nextjs-15.0.0.lance.tar");
     std::fs::write(&v2_path, &v2_archive).unwrap();
@@ -499,20 +565,20 @@ fn apply_refuses_stale_plan_when_docset_state_drifts() {
 fn claude_desktop_plan_produces_manual_only_and_no_write() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let ar = make_approved_root(root.path());
 
     let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
     let package = package_for("nextjs", "14.2.5", &archive_path);
     setup_index(root.path(), &package);
 
-    let result =
-        setup_plan("nextjs", "claude-desktop", true, 1_000_000_000).expect("plan should succeed");
+    let result = setup_plan("nextjs", "claude-desktop", &ar, true, 1_000_000_000)
+        .expect("plan should succeed");
     let plan_hash = match result {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
 
     let plan = load_plan(&plan_hash, 1_000_000_001).expect("load plan");
-    // Claude Desktop has no client_apply/client_verify actions (apply is Unsupported).
     assert!(
         !plan
             .actions
@@ -520,18 +586,26 @@ fn claude_desktop_plan_produces_manual_only_and_no_write() {
             .any(|a| a.kind == "client_apply" || a.kind == "client_verify"),
         "claude-desktop must not have client apply/verify actions"
     );
+    assert!(
+        plan.actions
+            .iter()
+            .any(|a| a.kind == "client_manual_guidance"),
+        "claude-desktop must have client_manual_guidance action"
+    );
 }
 
 #[test]
 fn generic_plan_produces_manual_only_and_no_write() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let ar = make_approved_root(root.path());
 
     let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
     let package = package_for("nextjs", "14.2.5", &archive_path);
     setup_index(root.path(), &package);
 
-    let result = setup_plan("nextjs", "generic", true, 1_000_000_000).expect("plan should succeed");
+    let result =
+        setup_plan("nextjs", "generic", &ar, true, 1_000_000_000).expect("plan should succeed");
     let plan_hash = match result {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
@@ -545,51 +619,46 @@ fn generic_plan_produces_manual_only_and_no_write() {
             .any(|a| a.kind == "client_apply" || a.kind == "client_verify"),
         "generic must not have client apply/verify actions"
     );
+    assert!(
+        plan.actions
+            .iter()
+            .any(|a| a.kind == "client_manual_guidance"),
+        "generic must have client_manual_guidance action"
+    );
 }
 
-// ---- 5. Cursor/Claude Code conflict, unsafe root, missing executable, malformed target ----
+// ---- 5. Cursor conflict, missing config, malformed JSON ----
 
 #[test]
-fn cursor_apply_returns_conflict_when_nowdocs_already_exists() {
+fn cursor_apply_returns_partial_when_nowdocs_already_exists() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let existing = serde_json::json!({
+        "mcpServers": {"nowdocs": {"command": "/other/nowdocs", "args": ["serve"]}}
+    });
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", Some(&existing));
 
-    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
-    setup_index(root.path(), &package);
-
-    let plan_hash = match setup_plan("nextjs", "cursor", true, 1_000_000_000).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
 
-    // Pre-create the cursor config with an existing nowdocs entry.
-    let config_root = root.path().join("client-root");
-    std::fs::create_dir_all(config_root.join(".cursor")).unwrap();
-    let existing = serde_json::json!({
-        "mcpServers": {
-            "nowdocs": {"command": "/other/nowdocs", "args": ["serve"]}
-        }
-    });
-    std::fs::write(
-        config_root.join(".cursor").join("mcp.json"),
-        serde_json::to_vec_pretty(&existing).unwrap(),
-    )
-    .unwrap();
-
     let original_bytes = std::fs::read(config_root.join(".cursor").join("mcp.json")).unwrap();
 
+    // Noncanonical entry => manual guidance, no adapter mutation (contract 3).
     let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
     match result {
-        SetupApplyResult::PartialNoRollback { .. } => {}
-        other => panic!("expected PartialNoRollback for partial, got: {:?}", other),
+        SetupApplyResult::ActionRequired { .. } => {}
+        other => panic!(
+            "expected ActionRequired for noncanonical entry, got: {:?}",
+            other
+        ),
     }
 
-    // The file must be byte-identical (no mutation).
     assert_eq!(
         std::fs::read(config_root.join(".cursor").join("mcp.json")).unwrap(),
         original_bytes,
-        "conflict must not mutate the config file"
+        "noncanonical entry must not mutate the config file"
     );
 }
 
@@ -597,19 +666,12 @@ fn cursor_apply_returns_conflict_when_nowdocs_already_exists() {
 fn cursor_apply_returns_action_required_for_missing_cursor_config() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", None);
 
-    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
-    setup_index(root.path(), &package);
-
-    let plan_hash = match setup_plan("nextjs", "cursor", true, 1_000_000_000).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
-
-    // Client root with no .cursor/mcp.json -- cursor apply returns ManualRequired.
-    let config_root = root.path().join("client-root");
-    std::fs::create_dir_all(&config_root).unwrap();
 
     let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
     match result {
@@ -620,7 +682,6 @@ fn cursor_apply_returns_action_required_for_missing_cursor_config() {
         ),
     }
 
-    // Docset should have been installed (additive), but no .cursor dir created.
     assert_eq!(
         cache::check_docset_state("nextjs"),
         InstalledDocsetState::Healthy,
@@ -636,64 +697,55 @@ fn cursor_apply_returns_action_required_for_missing_cursor_config() {
 fn cursor_apply_returns_action_required_for_malformed_json() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", None);
 
-    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
-    setup_index(root.path(), &package);
-
-    let plan_hash = match setup_plan("nextjs", "cursor", true, 1_000_000_000).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
 
-    let config_root = root.path().join("client-root");
-    std::fs::create_dir_all(config_root.join(".cursor")).unwrap();
+    // Overwrite with malformed JSON after plan creation.
     let malformed = b"{ this is not valid json ";
+    std::fs::create_dir_all(config_root.join(".cursor")).unwrap();
     std::fs::write(config_root.join(".cursor").join("mcp.json"), malformed).unwrap();
 
-    let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
-    match result {
-        SetupApplyResult::PartialNoRollback { .. } => {}
-        other => panic!(
-            "expected PartialNoRollback for malformed JSON, got: {:?}",
-            other
-        ),
-    }
-
-    // The file must be unchanged.
-    assert_eq!(
-        std::fs::read(config_root.join(".cursor").join("mcp.json")).unwrap(),
-        malformed,
-        "malformed config must not be mutated"
+    let result = setup_apply(&plan_hash, &config_root, 1_000_000_001);
+    // Drift: the plan fingerprint says absent, but now the file exists.
+    assert!(result.is_err(), "malformed JSON after plan must be stale");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("PLAN_STALE"),
+        "error must carry PLAN_STALE, got: {msg}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_plan_refuses_symlinked_cursor_target() {
+    let root = tempfile::tempdir().unwrap();
+    let _g = isolate(root.path());
+    let config_root = root.path().join("client-root");
+    std::fs::create_dir_all(config_root.join(".cursor")).unwrap();
+    std::os::unix::fs::symlink("/dev/null", config_root.join(".cursor/mcp.json")).unwrap();
+    let ar = make_approved_root(&config_root);
+
+    let result = setup_plan("nextjs", "cursor", &ar, false, 1_000_000_000);
+    assert!(result.is_err(), "symlinked Cursor target must fail closed");
 }
 
 #[test]
 fn cursor_apply_succeeds_and_verifies() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let config = serde_json::json!({"mcpServers":{}});
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", Some(&config));
 
-    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
-    setup_index(root.path(), &package);
-
-    let plan_hash = match setup_plan("nextjs", "cursor", true, 1_000_000_000).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
 
-    // Set up a valid cursor config without a nowdocs entry.
-    let config_root = root.path().join("client-root");
-    std::fs::create_dir_all(config_root.join(".cursor")).unwrap();
-    let original = serde_json::json!({"mcpServers":{}});
-    std::fs::write(
-        config_root.join(".cursor").join("mcp.json"),
-        serde_json::to_vec_pretty(&original).unwrap(),
-    )
-    .unwrap();
-
     let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
-    // Cursor verify always emits client_reload_required.
     match result {
         SetupApplyResult::SetupComplete { .. } | SetupApplyResult::ClientReloadRequired { .. } => {}
         other => panic!(
@@ -702,13 +754,11 @@ fn cursor_apply_succeeds_and_verifies() {
         ),
     }
 
-    // Docset is healthy.
     assert_eq!(
         cache::check_docset_state("nextjs"),
         InstalledDocsetState::Healthy
     );
 
-    // Cursor config now has a nowdocs entry.
     let after: serde_json::Value = serde_json::from_slice(
         &std::fs::read(config_root.join(".cursor").join("mcp.json")).unwrap(),
     )
@@ -722,28 +772,15 @@ fn cursor_apply_succeeds_and_verifies() {
 fn cursor_apply_returns_client_reload_required_when_verified() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let config = serde_json::json!({"mcpServers":{}});
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", Some(&config));
 
-    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
-    setup_index(root.path(), &package);
-
-    let plan_hash = match setup_plan("nextjs", "cursor", true, 1_000_000_000).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
 
-    let config_root = root.path().join("client-root");
-    std::fs::create_dir_all(config_root.join(".cursor")).unwrap();
-    let original = serde_json::json!({"mcpServers":{}});
-    std::fs::write(
-        config_root.join(".cursor").join("mcp.json"),
-        serde_json::to_vec_pretty(&original).unwrap(),
-    )
-    .unwrap();
-
     let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
-    // Cursor verify always emits client_reload_required, so the result should be
-    // either SetupComplete or ClientReloadRequired depending on the observation.
     match result {
         SetupApplyResult::SetupComplete { .. } | SetupApplyResult::ClientReloadRequired { .. } => {}
         other => panic!(
@@ -759,30 +796,19 @@ fn cursor_apply_returns_client_reload_required_when_verified() {
 fn partial_result_when_docset_succeeds_but_client_fails() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", None);
 
-    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
-    setup_index(root.path(), &package);
-
-    let plan_hash = match setup_plan("nextjs", "cursor", true, 1_000_000_000).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
 
-    // No cursor config exists -> cursor apply returns ManualRequired.
-    let config_root = root.path().join("client-root");
-    std::fs::create_dir_all(&config_root).unwrap();
-
     let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
     match result {
         SetupApplyResult::PartialNoRollback { .. } => {}
-        other => panic!(
-            "expected PartialNoRollback for malformed JSON, got: {:?}",
-            other
-        ),
+        other => panic!("expected PartialNoRollback, got: {:?}", other),
     }
 
-    // The docset was installed and must remain (never deleted to conceal partial).
     assert_eq!(
         cache::check_docset_state("nextjs"),
         InstalledDocsetState::Healthy,
@@ -796,54 +822,35 @@ fn partial_result_when_docset_succeeds_but_client_fails() {
 fn rollback_restores_cursor_config() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let original = serde_json::json!({
+        "mcpServers": {"filesystem": {"command": "/usr/bin/fs", "args": []}}
+    });
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", Some(&original));
 
-    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
-    setup_index(root.path(), &package);
-
-    let plan_hash = match setup_plan("nextjs", "cursor", true, 1_000_000_000).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
-
-    let config_root = root.path().join("client-root");
-    std::fs::create_dir_all(config_root.join(".cursor")).unwrap();
-    let original = serde_json::json!({
-        "mcpServers": {
-            "filesystem": {"command": "/usr/bin/fs", "args": []}
-        }
-    });
-    std::fs::write(
-        config_root.join(".cursor").join("mcp.json"),
-        serde_json::to_vec_pretty(&original).unwrap(),
-    )
-    .unwrap();
 
     let apply_result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
     let operation_id = match apply_result {
         SetupApplyResult::SetupComplete { operation_id, .. }
         | SetupApplyResult::ClientReloadRequired { operation_id, .. } => operation_id,
-        other => panic!(
-            "expected success variant for rollback setup, got: {:?}",
-            other
-        ),
+        other => panic!("expected success variant, got: {:?}", other),
     };
 
-    // The config now has a nowdocs entry.
     let after: serde_json::Value = serde_json::from_slice(
         &std::fs::read(config_root.join(".cursor").join("mcp.json")).unwrap(),
     )
     .unwrap();
     assert!(after["mcpServers"]["nowdocs"].is_object());
 
-    // Rollback.
     let rollback_result = setup_rollback(&operation_id, &config_root).unwrap();
     match rollback_result {
         nowdocs::automation::setup::SetupRollbackResult::RolledBack { .. } => {}
         other => panic!("expected RolledBack, got: {:?}", other),
     }
 
-    // Original content restored.
     let restored: serde_json::Value = serde_json::from_slice(
         &std::fs::read(config_root.join(".cursor").join("mcp.json")).unwrap(),
     )
@@ -858,24 +865,13 @@ fn rollback_restores_cursor_config() {
 fn rollback_refuses_after_later_user_edit() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let config = serde_json::json!({"mcpServers":{}});
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", Some(&config));
 
-    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
-    setup_index(root.path(), &package);
-
-    let plan_hash = match setup_plan("nextjs", "cursor", true, 1_000_000_000).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
-
-    let config_root = root.path().join("client-root");
-    std::fs::create_dir_all(config_root.join(".cursor")).unwrap();
-    let original = serde_json::json!({"mcpServers":{}});
-    std::fs::write(
-        config_root.join(".cursor").join("mcp.json"),
-        serde_json::to_vec_pretty(&original).unwrap(),
-    )
-    .unwrap();
 
     let apply_result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
     let operation_id = match apply_result {
@@ -884,7 +880,6 @@ fn rollback_refuses_after_later_user_edit() {
         other => panic!("expected success variant, got: {:?}", other),
     };
 
-    // User edits the file after apply.
     let approved = approved_root(&config_root).unwrap();
     let target = safe_target(&approved, ".cursor/mcp.json").unwrap();
     atomic_replace(
@@ -896,13 +891,9 @@ fn rollback_refuses_after_later_user_edit() {
     let rollback_result = setup_rollback(&operation_id, &config_root).unwrap();
     match rollback_result {
         nowdocs::automation::setup::SetupRollbackResult::ManualRequired { .. } => {}
-        other => panic!(
-            "expected ManualRequired for user-edited state, got: {:?}",
-            other
-        ),
+        other => panic!("expected ManualRequired, got: {:?}", other),
     }
 
-    // The user-edited content is preserved (rollback did not overwrite it).
     let current = std::fs::read(config_root.join(".cursor").join("mcp.json")).unwrap();
     assert!(
         String::from_utf8_lossy(&current).contains("edited"),
@@ -910,7 +901,7 @@ fn rollback_refuses_after_later_user_edit() {
     );
 }
 
-// ---- 7. Plan hash is an integrity/scope check; setup apply only accepts that hash ----
+// ---- 7. Plan hash is an integrity/scope check ----
 
 #[test]
 fn setup_apply_rejects_unknown_plan_hash() {
@@ -933,12 +924,13 @@ fn setup_apply_rejects_unknown_plan_hash() {
 fn setup_plan_creates_exactly_one_plan_file() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let ar = make_approved_root(root.path());
 
     let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
     let package = package_for("nextjs", "14.2.5", &archive_path);
     setup_index(root.path(), &package);
 
-    let _ = setup_plan("nextjs", "cursor", true, 1_000_000_000).unwrap();
+    let _ = setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap();
 
     let plans_dir = root.path().join("nowdocs").join("automation").join("plans");
     let plan_files: Vec<_> = std::fs::read_dir(&plans_dir)
@@ -949,7 +941,7 @@ fn setup_plan_creates_exactly_one_plan_file() {
     assert_eq!(
         plan_files.len(),
         1,
-        "exactly one plan file must be created, got: {plan_files:?}"
+        "exactly one plan file, got {plan_files:?}"
     );
 }
 
@@ -959,12 +951,13 @@ fn setup_plan_creates_exactly_one_plan_file() {
 fn claude_code_apply_returns_action_required_without_claude_cli() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let ar = make_approved_root(root.path());
 
     let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
     let package = package_for("nextjs", "14.2.5", &archive_path);
     setup_index(root.path(), &package);
 
-    let plan_hash = match setup_plan("nextjs", "claude-code", true, 1_000_000_000).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "claude-code", &ar, true, 1_000_000_000).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
@@ -972,8 +965,6 @@ fn claude_code_apply_returns_action_required_without_claude_cli() {
     let config_root = root.path().join("client-root");
     std::fs::create_dir_all(&config_root).unwrap();
 
-    // Without a real `claude` CLI on PATH, apply must return PartialNoRollback
-    // (docset installed, client apply could not start).
     let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
     match result {
         SetupApplyResult::PartialNoRollback { .. } => {}
@@ -983,37 +974,25 @@ fn claude_code_apply_returns_action_required_without_claude_cli() {
         ),
     }
 
-    // Docset should still be installed (additive).
     assert_eq!(
         cache::check_docset_state("nextjs"),
         InstalledDocsetState::Healthy
     );
 }
 
-// ---- 10. Operation id format: setup- + first 12 hash chars ----
+// ---- 10. Operation id format ----
 
 #[test]
 fn operation_id_is_setup_prefixed_first_12_hash_chars() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let config = serde_json::json!({"mcpServers":{}});
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", Some(&config));
 
-    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
-    setup_index(root.path(), &package);
-
-    let plan_hash = match setup_plan("nextjs", "cursor", true, 1_000_000_000).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
-
-    let config_root = root.path().join("client-root");
-    std::fs::create_dir_all(config_root.join(".cursor")).unwrap();
-    let original = serde_json::json!({"mcpServers":{}});
-    std::fs::write(
-        config_root.join(".cursor").join("mcp.json"),
-        serde_json::to_vec_pretty(&original).unwrap(),
-    )
-    .unwrap();
 
     let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
     let operation_id = match result {
@@ -1039,7 +1018,6 @@ fn rollback_rejects_unknown_operation_id() {
     let config_root = root.path().join("client-root");
     std::fs::create_dir_all(&config_root).unwrap();
 
-    // A setup-prefixed id that has no setup-meta.json (never recorded by setup).
     let result = setup_rollback("setup-unknown0000", &config_root).unwrap();
     match result {
         nowdocs::automation::setup::SetupRollbackResult::ManualRequired { .. } => {}
@@ -1055,7 +1033,6 @@ fn rollback_rejects_non_setup_operation_id() {
     let config_root = root.path().join("client-root");
     std::fs::create_dir_all(&config_root).unwrap();
 
-    // An operation id without the "setup-" prefix must be refused.
     let result = setup_rollback("ensure-somehash12", &config_root).unwrap();
     match result {
         nowdocs::automation::setup::SetupRollbackResult::ManualRequired { observations } => {
@@ -1075,24 +1052,16 @@ fn rollback_rejects_non_setup_operation_id() {
 fn partial_no_rollback_has_no_operation_id() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", None);
 
-    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
-    setup_index(root.path(), &package);
-
-    let plan_hash = match setup_plan("nextjs", "cursor", true, 1_000_000_000).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
 
-    // No cursor config exists -> cursor apply returns ManualRequired.
-    let config_root = root.path().join("client-root");
-    std::fs::create_dir_all(&config_root).unwrap();
-
     let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
     match result {
         SetupApplyResult::PartialNoRollback { observations } => {
-            // Must not carry an operation_id (no rollback metadata).
             assert!(
                 !observations
                     .iter()
@@ -1103,37 +1072,25 @@ fn partial_no_rollback_has_no_operation_id() {
         other => panic!("expected PartialNoRollback, got: {:?}", other),
     }
 
-    // The docset was installed (additive, not deleted).
     assert_eq!(
         cache::check_docset_state("nextjs"),
         InstalledDocsetState::Healthy
     );
 }
 
-// ---- 12. Redaction: apply result observations contain no paths ----
+// ---- 12. Redaction: observations contain no paths ----
 
 #[test]
 fn apply_result_observations_contain_no_absolute_paths() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let config = serde_json::json!({"mcpServers":{}});
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", Some(&config));
 
-    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
-    setup_index(root.path(), &package);
-
-    let plan_hash = match setup_plan("nextjs", "cursor", true, 1_000_000_000).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
-
-    let config_root = root.path().join("client-root");
-    std::fs::create_dir_all(config_root.join(".cursor")).unwrap();
-    let original = serde_json::json!({"mcpServers":{}});
-    std::fs::write(
-        config_root.join(".cursor").join("mcp.json"),
-        serde_json::to_vec_pretty(&original).unwrap(),
-    )
-    .unwrap();
 
     let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
     let observations = match &result {
@@ -1141,7 +1098,8 @@ fn apply_result_observations_contain_no_absolute_paths() {
         | SetupApplyResult::ClientReloadRequired { observations, .. }
         | SetupApplyResult::ActionRequired { observations }
         | SetupApplyResult::PartialNoRollback { observations }
-        | SetupApplyResult::Partial { observations, .. } => observations,
+        | SetupApplyResult::Partial { observations, .. }
+        | SetupApplyResult::AppliedButUnverified { observations } => observations,
     };
 
     let root_str = root.path().to_string_lossy().to_string();
@@ -1163,8 +1121,9 @@ fn apply_result_observations_contain_no_absolute_paths() {
 fn setup_plan_rejects_invalid_client() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let ar = make_approved_root(root.path());
 
-    let result = setup_plan("nextjs", "invalid-client", false, 1_000_000_000);
+    let result = setup_plan("nextjs", "invalid-client", &ar, false, 1_000_000_000);
     assert!(result.is_err(), "invalid client must be rejected");
 }
 
@@ -1172,45 +1131,32 @@ fn setup_plan_rejects_invalid_client() {
 fn setup_plan_rejects_invalid_docset() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let ar = make_approved_root(root.path());
 
-    let result = setup_plan("UPPERCASE", "cursor", false, 1_000_000_000);
+    let result = setup_plan("UPPERCASE", "cursor", &ar, false, 1_000_000_000);
     assert!(result.is_err(), "invalid docset must be rejected");
 }
 
-// ---- 14. Binary path resolution: refuse if binary cannot be resolved ----
+// ---- 14. Binary path resolution ----
 
 #[test]
 fn setup_apply_works_with_real_binary_path() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
+    let config = serde_json::json!({"mcpServers":{}});
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", Some(&config));
 
-    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
-    setup_index(root.path(), &package);
-
-    let plan_hash = match setup_plan("nextjs", "cursor", true, 1_000_000_000).unwrap() {
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
         SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
         other => panic!("expected PlanCreated, got: {:?}", other),
     };
 
-    let config_root = root.path().join("client-root");
-    std::fs::create_dir_all(config_root.join(".cursor")).unwrap();
-    let original = serde_json::json!({"mcpServers":{}});
-    std::fs::write(
-        config_root.join(".cursor").join("mcp.json"),
-        serde_json::to_vec_pretty(&original).unwrap(),
-    )
-    .unwrap();
-
-    // setup_apply resolves the nowdocs binary at apply time via current_exe.
-    // In tests, the binary is the test executable, which is absolute.
     let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
     match result {
         SetupApplyResult::SetupComplete { .. } | SetupApplyResult::ClientReloadRequired { .. } => {}
         other => panic!("expected success variant, got: {:?}", other),
     }
 
-    // The cursor config should reference the absolute binary path.
     let after: serde_json::Value = serde_json::from_slice(
         &std::fs::read(config_root.join(".cursor").join("mcp.json")).unwrap(),
     )
@@ -1219,5 +1165,310 @@ fn setup_apply_works_with_real_binary_path() {
     assert!(
         std::path::Path::new(cmd).is_absolute(),
         "cursor config must reference an absolute binary path, got: {cmd}"
+    );
+}
+
+// =========================================================================
+// C7R3 repair contract tests
+// =========================================================================
+
+// ---- Gate 1: healthy docset + absent Cursor config => persisted client plan ----
+
+#[test]
+fn gate1_healthy_docset_absent_cursor_config_produces_persisted_client_plan() {
+    let root = tempfile::tempdir().unwrap();
+    let _g = isolate(root.path());
+
+    let archive = make_release_archive("react", "18.3.1");
+    let tar_path = root.path().join("react.tar");
+    std::fs::write(&tar_path, &archive).unwrap();
+    let url = format!("file://{}", tar_path.display());
+    registry::install("react", &url).expect("install fixture docset");
+
+    let config_root = root.path().join("client-root");
+    std::fs::create_dir_all(&config_root).unwrap();
+    let ar = make_approved_root(&config_root);
+
+    let archive_path = root.path().join("react-18.3.1.lance.tar");
+    let package = package_for("react", "18.3.1", &archive_path);
+    setup_index(root.path(), &package);
+
+    let result = setup_plan("react", "cursor", &ar, true, 1_000_000_000).expect("plan succeeds");
+    match result {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => {
+            let plan = load_plan(&plan_hash, 1_000_000_001).expect("load plan");
+            assert!(
+                plan.actions.iter().any(|a| a.kind == "client_apply"),
+                "plan must include client_apply for cursor with absent config"
+            );
+        }
+        other => panic!(
+            "healthy docset + absent cursor config must produce PlanCreated, got: {:?}",
+            other
+        ),
+    }
+}
+
+// ---- Gate 2: noncanonical existing Cursor entry => manual guidance plan,
+//      then apply leaves config byte-identical ----
+
+#[test]
+fn gate2_noncanonical_cursor_entry_produces_manual_guidance_and_no_mutation() {
+    let root = tempfile::tempdir().unwrap();
+    let _g = isolate(root.path());
+    let existing = serde_json::json!({
+        "mcpServers": {"nowdocs": {"command": "/other/nowdocs", "args": ["serve"]}}
+    });
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", Some(&existing));
+
+    let result = setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).expect("plan succeeds");
+    let plan_hash = match result {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
+        other => panic!("expected PlanCreated, got: {:?}", other),
+    };
+
+    let plan = load_plan(&plan_hash, 1_000_000_001).expect("load plan");
+    assert!(
+        plan.actions
+            .iter()
+            .any(|a| a.kind == "client_manual_guidance"),
+        "noncanonical cursor entry must produce client_manual_guidance action"
+    );
+    assert!(
+        !plan.actions.iter().any(|a| a.kind == "client_apply"),
+        "noncanonical cursor entry must NOT produce client_apply action"
+    );
+
+    let config_bytes = std::fs::read(config_root.join(".cursor").join("mcp.json")).unwrap();
+    let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
+    match result {
+        SetupApplyResult::ActionRequired { .. } => {}
+        other => panic!(
+            "expected ActionRequired for noncanonical entry, got: {:?}",
+            other
+        ),
+    }
+
+    assert_eq!(
+        std::fs::read(config_root.join(".cursor").join("mcp.json")).unwrap(),
+        config_bytes,
+        "noncanonical entry must be byte-identical after apply"
+    );
+}
+
+// ---- Gate 3: Cursor target content/existence drift => PLAN_STALE before
+//      registry fixture sees installation or adapter is invoked ----
+
+#[test]
+fn gate3_cursor_target_drift_returns_plan_stale_before_install_or_adapter() {
+    let root = tempfile::tempdir().unwrap();
+    let _g = isolate(root.path());
+    let config = serde_json::json!({"mcpServers":{}});
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", Some(&config));
+
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
+        other => panic!("expected PlanCreated, got: {:?}", other),
+    };
+
+    // Drift: modify the cursor config content after plan creation.
+    let drifted = serde_json::json!({"mcpServers":{"other":{"command":"/x","args":[]}}});
+    std::fs::write(
+        config_root.join(".cursor").join("mcp.json"),
+        serde_json::to_vec_pretty(&drifted).unwrap(),
+    )
+    .unwrap();
+
+    assert_ne!(
+        cache::check_docset_state("nextjs"),
+        InstalledDocsetState::Healthy,
+        "docset must not be installed when plan is stale"
+    );
+
+    let result = setup_apply(&plan_hash, &config_root, 1_000_000_001);
+    assert!(result.is_err(), "stale plan must be refused");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("PLAN_STALE"),
+        "error must carry PLAN_STALE, got: {msg}"
+    );
+
+    assert_ne!(
+        cache::check_docset_state("nextjs"),
+        InstalledDocsetState::Healthy,
+        "docset must not be installed after stale refusal"
+    );
+}
+
+// ---- Gate 4: manual clients retain docset plan/action and apply never
+//      calls an adapter ----
+
+#[test]
+fn gate4_manual_clients_retain_docset_plan_and_apply_never_calls_adapter() {
+    let root = tempfile::tempdir().unwrap();
+    let _g = isolate(root.path());
+    let ar = make_approved_root(root.path());
+
+    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
+    let package = package_for("nextjs", "14.2.5", &archive_path);
+    setup_index(root.path(), &package);
+
+    let plan_hash = match setup_plan("nextjs", "claude-desktop", &ar, true, 1_000_000_000).unwrap()
+    {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
+        other => panic!("expected PlanCreated, got: {:?}", other),
+    };
+
+    let plan = load_plan(&plan_hash, 1_000_000_001).expect("load plan");
+    assert!(
+        plan.actions
+            .iter()
+            .any(|a| a.kind == "registry_install" || a.kind == "registry_update"),
+        "claude-desktop plan must retain docset install/update action"
+    );
+    assert!(
+        plan.actions.iter().any(|a| a.kind == "verify_docset"),
+        "claude-desktop plan must retain verify_docset action"
+    );
+    assert!(
+        plan.actions
+            .iter()
+            .any(|a| a.kind == "client_manual_guidance"),
+        "claude-desktop plan must have client_manual_guidance"
+    );
+    assert!(
+        !plan.actions.iter().any(|a| a.kind == "client_apply"),
+        "claude-desktop must not have client_apply"
+    );
+
+    let config_root = root.path().join("client-root");
+    std::fs::create_dir_all(&config_root).unwrap();
+
+    let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
+    match result {
+        SetupApplyResult::ActionRequired { .. } => {}
+        other => panic!(
+            "expected ActionRequired for manual client, got: {:?}",
+            other
+        ),
+    }
+
+    assert_eq!(
+        cache::check_docset_state("nextjs"),
+        InstalledDocsetState::Healthy
+    );
+}
+
+// ---- Gate 5: metadata symlink through the actual successful apply path
+//      produces a redacted exit-21 outcome and no rollback object ----
+
+#[test]
+fn gate5_metadata_unsafe_produces_applied_but_unverified_no_rollback() {
+    let root = tempfile::tempdir().unwrap();
+    let _g = isolate(root.path());
+    let config = serde_json::json!({"mcpServers":{}});
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", Some(&config));
+
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
+        other => panic!("expected PlanCreated, got: {:?}", other),
+    };
+
+    // Pre-create the operation directory with a symlink at setup-meta.json.
+    let op_id = format!("setup-{}", &plan_hash[..12]);
+    let ops_dir = root
+        .path()
+        .join("nowdocs")
+        .join("automation")
+        .join("operations")
+        .join(&op_id);
+    std::fs::create_dir_all(&ops_dir).unwrap();
+    let meta_path = ops_dir.join("setup-meta.json");
+    std::os::unix::fs::symlink("/dev/null", &meta_path).unwrap();
+
+    let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
+    match result {
+        SetupApplyResult::AppliedButUnverified { observations } => {
+            let root_str = root.path().to_string_lossy().to_string();
+            for obs in &observations {
+                assert!(
+                    !obs.contains(&root_str),
+                    "applied_but_unverified observation leaked path: {obs}"
+                );
+                assert!(
+                    !obs.contains("/Users/"),
+                    "observation leaked absolute path: {obs}"
+                );
+            }
+        }
+        other => panic!(
+            "expected AppliedButUnverified when metadata can't persist, got: {:?}",
+            other
+        ),
+    }
+
+    let after: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(config_root.join(".cursor").join("mcp.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        after["mcpServers"]["nowdocs"].is_object(),
+        "cursor config was written by the adapter before metadata failure"
+    );
+}
+
+// ---- Gate 6: unknown rollback neither follows metadata symlinks nor
+//      creates an operation directory ----
+
+#[test]
+fn gate6_unknown_rollback_does_not_follow_symlinks_or_create_dir() {
+    let root = tempfile::tempdir().unwrap();
+    let _g = isolate(root.path());
+
+    let config_root = root.path().join("client-root");
+    std::fs::create_dir_all(&config_root).unwrap();
+
+    let ops_root = root
+        .path()
+        .join("nowdocs")
+        .join("automation")
+        .join("operations");
+    assert!(
+        !ops_root.exists(),
+        "operations root must not exist before rollback"
+    );
+
+    let result = setup_rollback("setup-unknown0000", &config_root).unwrap();
+    match result {
+        nowdocs::automation::setup::SetupRollbackResult::ManualRequired { .. } => {}
+        other => panic!("expected ManualRequired for unknown op, got: {:?}", other),
+    }
+
+    assert!(
+        !ops_root.join("setup-unknown0000").exists(),
+        "unknown rollback must not create an operation directory"
+    );
+}
+
+// ---- Gate 7: offline missing docset returns only registry_metadata_required
+//      and creates no files ----
+
+#[test]
+fn gate7_offline_missing_docset_creates_no_files() {
+    let root = tempfile::tempdir().unwrap();
+    let _g = isolate(root.path());
+    let ar = make_approved_root(root.path());
+
+    let result =
+        setup_plan("nextjs", "cursor", &ar, false, 1_000_000_000).expect("plan should succeed");
+    assert!(
+        matches!(result, SetupPlanResult::RegistryMetadataRequired { .. }),
+        "offline missing docset must return RegistryMetadataRequired, got: {:?}",
+        result
+    );
+
+    assert!(
+        count_entries(root.path()) == 0,
+        "offline refusal must create no files under isolated root"
     );
 }
