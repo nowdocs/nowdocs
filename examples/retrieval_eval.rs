@@ -20,7 +20,9 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use nowdocs::eval::{run_evaluation, EvalRunConfig, RetrievalEvalArgs};
+use nowdocs::eval::{
+    run_evaluation, validate_evidence_output_path, EvalRunConfig, RetrievalEvalArgs,
+};
 
 fn main() -> Result<()> {
     let args = RetrievalEvalArgs::parse();
@@ -29,6 +31,8 @@ fn main() -> Result<()> {
         "--output must be an absolute path, got {}",
         args.output.display()
     );
+    validate_evidence_output_path(&args.output, args.evidence_output.as_deref())
+        .map_err(anyhow::Error::msg)?;
 
     // Production search defaults, matching the behavior under evaluation.
     let config = EvalRunConfig {
@@ -56,6 +60,19 @@ fn main() -> Result<()> {
         args.output.display(),
         outcome.report.queries.len()
     );
+
+    // C07a: write the optional decision-evidence sidecar.
+    if let Some(ref path) = args.evidence_output {
+        let evidence_json =
+            serde_json::to_string_pretty(&outcome.evidence_rows).context("serialize evidence")?;
+        write_report_atomic(path, &evidence_json)?;
+        eprintln!(
+            "retrieval-eval: wrote evidence sidecar {} ({} rows)",
+            path.display(),
+            outcome.evidence_rows.len()
+        );
+    }
+
     Ok(())
 }
 

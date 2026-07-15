@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 
 use crate::chunker::ChunkType;
+use crate::confidence::{self, AnswerState, QueryEvidence};
 use crate::embedder::{self, EmbedderSpec};
 use crate::input::{resolve_max_tokens, resolve_top_k, validate_docset, validate_query};
 use crate::manifest;
@@ -74,6 +75,7 @@ pub struct SearchResult {
     pub chunks: Vec<ResultChunk>,
     pub tokens_returned: u32,
     pub truncated: bool,
+    pub answer_state: AnswerState,
 }
 
 /// One candidate in the retrieval trace (C02). `rrf_score` is the fused RRF
@@ -106,6 +108,9 @@ pub struct RetrievalTrace {
 /// Outcome of ranking plus the answer gate.
 #[derive(Clone)]
 pub struct RankedGateResult {
+    /// MMR-selected hits before the no-answer gate. C05 derives the answer
+    /// decision from this set, so gate rejection never erases its evidence.
+    pub pre_gate_hits: Vec<SearchHit>,
     pub hits: Vec<SearchHit>,
     pub gate_passed: bool,
     pub trace: Option<RetrievalTrace>,
@@ -115,6 +120,14 @@ impl std::fmt::Debug for RankedGateResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let hit_ids: Vec<u32> = self.hits.iter().map(|hit| hit.chunk_idx).collect();
         f.debug_struct("RankedGateResult")
+            .field(
+                "pre_gate_hit_ids",
+                &self
+                    .pre_gate_hits
+                    .iter()
+                    .map(|hit| hit.chunk_idx)
+                    .collect::<Vec<_>>(),
+            )
             .field("hit_ids", &hit_ids)
             .field("gate_passed", &self.gate_passed)
             .field("trace", &self.trace)
@@ -126,16 +139,22 @@ impl PartialEq for RankedGateResult {
     fn eq(&self, other: &Self) -> bool {
         self.gate_passed == other.gate_passed
             && self.trace == other.trace
+            && self.pre_gate_hits.len() == other.pre_gate_hits.len()
             && self.hits.len() == other.hits.len()
-            && self.hits.iter().zip(&other.hits).all(|(left, right)| {
-                left.score == right.score
-                    && left.chunk_idx == right.chunk_idx
-                    && left.heading_path == right.heading_path
-                    && left.source_url == right.source_url
-                    && left.api_version == right.api_version
-                    && left.chunk_type == right.chunk_type
-                    && left.text == right.text
-            })
+            && self
+                .pre_gate_hits
+                .iter()
+                .zip(&other.pre_gate_hits)
+                .chain(self.hits.iter().zip(&other.hits))
+                .all(|(left, right)| {
+                    left.score == right.score
+                        && left.chunk_idx == right.chunk_idx
+                        && left.heading_path == right.heading_path
+                        && left.source_url == right.source_url
+                        && left.api_version == right.api_version
+                        && left.chunk_type == right.chunk_type
+                        && left.text == right.text
+                })
     }
 }
 
@@ -289,21 +308,69 @@ fn search_impl(
         docset: docset.clone(),
         reason: e.to_string(),
     })?;
+    // Build per-channel rank map before MMR consumes the candidates (C05).
+    let mut rank_map: std::collections::HashMap<u32, (Option<u32>, Option<u32>)> =
+        std::collections::HashMap::new();
+    for c in &candidates {
+        rank_map.insert(c.hit.chunk_idx, (c.dense_rank, c.lexical_rank));
+    }
     // MMR rerank (N1/OQ4) + answer gate (N4/OQ11) run through one shared
     // helper so the traced and untraced paths execute identical ranking logic;
     // the gate's design rationale is documented on `apply_answer_gate`.
-    let RankedGateResult { hits, trace, .. } =
-        rank_and_gate_candidates(&query_vector, candidates, &vectors, top_k as usize, trace);
-    if hits.is_empty() {
+    let RankedGateResult {
+        pre_gate_hits,
+        trace,
+        ..
+    } = rank_and_gate_candidates(&query_vector, candidates, &vectors, top_k as usize, trace);
+
+    // Build evidence after MMR, decide before neighbor expansion (C05).
+    let decision = {
+        let top = pre_gate_hits.first();
+        let top_cosine = top
+            .and_then(|hit| vectors.get(&hit.chunk_idx))
+            .map(|v| cosine(&query_vector, v));
+        let (pre_top, pre_second, pre_margin) = trace
+            .as_ref()
+            .map(|t| {
+                let top = t.pre_mmr_top_cosines.first().copied();
+                let second = t.pre_mmr_top_cosines.get(1).copied();
+                let margin = match (top, second) {
+                    (Some(a), Some(b)) => Some(a - b),
+                    _ => None,
+                };
+                (top, second, margin)
+            })
+            .unwrap_or((None, None, None));
+        let (dr, lr) = top
+            .and_then(|hit| rank_map.get(&hit.chunk_idx).copied())
+            .unwrap_or((None, None));
+        let ev = QueryEvidence {
+            // The existing gate treats a missing vector as cosine 0.0; keep
+            // the new binary decision exactly equivalent.
+            top_selected_cosine: top.map(|_| top_cosine.unwrap_or(0.0)),
+            top_selected_rrf: top.map(|hit| hit.score),
+            pre_mmr_top_cosine: pre_top,
+            pre_mmr_second_cosine: pre_second,
+            pre_mmr_cosine_margin: pre_margin,
+            dense_rank: dr,
+            lexical_rank: lr,
+        };
+        confidence::decide_binary(&ev)
+    };
+
+    if decision.state == AnswerState::NoAnswer {
         return Ok((
             SearchResult {
                 chunks: vec![],
                 tokens_returned: 0,
                 truncated: false,
+                answer_state: AnswerState::NoAnswer,
             },
             trace,
         ));
     }
+
+    let hits = pre_gate_hits;
 
     // Build the neighbor window hit-first: all hybrid hits lead (rank 1..N),
     // then their `[hit-1, hit+1]` neighbors follow as context. This keeps a
@@ -339,7 +406,8 @@ fn search_impl(
     let window_chunks = reorder_to_window(window_chunks, &window_ids);
 
     // Assemble within max_tokens budget.
-    let result = assemble_result(window_chunks, max_tokens)?;
+    let mut result = assemble_result(window_chunks, max_tokens)?;
+    result.answer_state = decision.state;
     Ok((result, trace))
 }
 
@@ -576,6 +644,7 @@ pub fn rank_and_gate_candidates(
             .collect::<Vec<TraceHit>>()
     });
 
+    let pre_gate_hits = hits.clone();
     let hits = apply_answer_gate(hits, query_vector, vectors);
     let gate_passed = !hits.is_empty();
 
@@ -588,6 +657,7 @@ pub fn rank_and_gate_candidates(
     });
 
     RankedGateResult {
+        pre_gate_hits,
         hits,
         gate_passed,
         trace,
@@ -678,5 +748,6 @@ fn assemble_result(chunks: Vec<ResultChunk>, max_tokens: u32) -> Result<SearchRe
         chunks: selected,
         tokens_returned: tokens_used,
         truncated,
+        answer_state: AnswerState::NoAnswer,
     })
 }
