@@ -512,9 +512,16 @@ pub const EVAL_REPORT_SCHEMA_VERSION: u32 = 1;
 
 /// Answer-policy identity for the current binary no-answer gate
 /// (`retrieve::apply_answer_gate`): every query is either answered (gate
-/// pass) or refused (gate reject / no candidates) — no borderline state
+/// pass) or refused (gate reject / no candidates) - no borderline state
 /// exists under this policy.
 pub const BINARY_GATE_POLICY_ID: &str = "binary-current-gate-v1";
+
+/// Answer-policy identity for the C07b calibrated three-state policy: the
+/// existing binary gate remains the no-answer floor, and accepted results are
+/// relabeled `Confident` (finite cosine >= `CALIBRATED_CONFIDENT_COSINE`) or
+/// `Borderline` (all other binary-gate accepts). Do not overwrite or remove
+/// [`BINARY_GATE_POLICY_ID`], which identifies historical reports.
+pub const CALIBRATED_POLICY_ID: &str = "calibrated-cosine-0.845-v1";
 
 /// Native-channel (dense vector / BM25 FTS) and fused-pool stage cutoff.
 const STAGE_K_40: usize = 40;
@@ -1248,8 +1255,10 @@ fn hit_to_chunk(hit: &SearchHit) -> ResultChunk {
 /// and decision reason. The `fused_empty` flag distinguishes `NoAnswer` caused
 /// by no candidates from `NoAnswer` caused by gate rejection.
 ///
-/// `Borderline` is reserved for calibrated policies; C06 must not return it at
-/// runtime.
+/// C07b calibrated mapping: `Confident -> CalibratedConfident`;
+/// `Borderline -> CalibratedBorderline`; no-candidate `NoAnswer ->
+/// NoCandidates`; nonempty-fused `NoAnswer -> CalibratedNoAnswer`. JSON schema
+/// v1 and all sidecar field names are unchanged.
 pub fn answer_state_to_report(
     state: AnswerState,
     fused_empty: bool,
@@ -1259,13 +1268,13 @@ pub fn answer_state_to_report(
             let reason = if fused_empty {
                 ReportDecisionReason::NoCandidates
             } else {
-                ReportDecisionReason::CurrentGateReject
+                ReportDecisionReason::CalibratedNoAnswer
             };
             (AnswerState::NoAnswer, reason)
         }
         AnswerState::Confident => (
             AnswerState::Confident,
-            ReportDecisionReason::CurrentGatePass,
+            ReportDecisionReason::CalibratedConfident,
         ),
         AnswerState::Borderline => (
             AnswerState::Borderline,
@@ -1343,7 +1352,7 @@ fn evaluator_command(config: &EvalRunConfig) -> String {
 
 fn retrieval_parameters(config: &EvalRunConfig) -> RetrievalParameters {
     RetrievalParameters {
-        answer_policy: BINARY_GATE_POLICY_ID.to_string(),
+        answer_policy: CALIBRATED_POLICY_ID.to_string(),
         max_tokens: config.max_tokens,
         top_k: config.top_k,
         candidate_pool_k: (config.top_k as usize * 8).max(STAGE_K_40),

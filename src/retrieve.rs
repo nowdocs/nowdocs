@@ -355,7 +355,7 @@ fn search_impl(
             dense_rank: dr,
             lexical_rank: lr,
         };
-        confidence::decide_binary(&ev)
+        confidence::decide_calibrated(&ev)
     };
 
     if decision.state == AnswerState::NoAnswer {
