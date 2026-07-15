@@ -10,9 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use nowdocs::confidence::AnswerState;
 use nowdocs::eval::{
-    rate_estimate, AnswerStateMetrics, CorpusIdentity, EvalReportV1, EvalSplit, MetricBucket,
-    QueryClass, QueryForm, QueryReport, ReportDecisionReason, RetrievalEvalArgs,
-    RetrievalParameters, StageMetrics, StageMetricsSet, StageRanks,
+    answer_state_to_report, rate_estimate, validate_evidence_output_path, AnswerStateMetrics,
+    CorpusIdentity, DecisionEvidenceRow, EvalReportV1, EvalSplit, MetricBucket, QueryClass,
+    QueryForm, QueryReport, ReportDecisionReason, RetrievalEvalArgs, RetrievalParameters,
+    StageMetrics, StageMetricsSet, StageRanks,
 };
 
 fn sample_stage(k: usize) -> StageMetrics {
@@ -351,4 +352,289 @@ fn cli_rejects_invalid_code_commit_without_model_initialization() {
         RetrievalEvalArgs::try_parse_args(&excessive_runs).is_err(),
         "--benchmark-runs above the supported maximum must be rejected"
     );
+}
+
+// ---------------------------------------------------------------------------
+// C06: answer_state_to_report mapping tests
+// ---------------------------------------------------------------------------
+
+/// Regression: the report mapping must follow `SearchResult.answer_state`,
+/// not the trace `gate_passed` bit. This test supplies a `NoAnswer` state
+/// with an empty fused trace and expects `NoCandidates`.
+#[test]
+fn answer_state_no_answer_empty_fused_is_no_candidates() {
+    let (state, reason) = answer_state_to_report(AnswerState::NoAnswer, true);
+    assert_eq!(state, AnswerState::NoAnswer);
+    assert_eq!(reason, ReportDecisionReason::NoCandidates);
+}
+
+/// Regression: `NoAnswer` with a non-empty fused trace maps to
+/// `CurrentGateReject` (gate saw candidates but rejected them).
+#[test]
+fn answer_state_no_answer_non_empty_fused_is_gate_reject() {
+    let (state, reason) = answer_state_to_report(AnswerState::NoAnswer, false);
+    assert_eq!(state, AnswerState::NoAnswer);
+    assert_eq!(reason, ReportDecisionReason::CurrentGateReject);
+}
+
+/// Regression: `Confident` always maps to `CurrentGatePass` regardless of
+/// the trace's fused-pool contents.
+#[test]
+fn answer_state_confident_is_gate_pass() {
+    let (state, reason) = answer_state_to_report(AnswerState::Confident, true);
+    assert_eq!(state, AnswerState::Confident);
+    assert_eq!(reason, ReportDecisionReason::CurrentGatePass);
+
+    let (state, reason) = answer_state_to_report(AnswerState::Confident, false);
+    assert_eq!(state, AnswerState::Confident);
+    assert_eq!(reason, ReportDecisionReason::CurrentGatePass);
+}
+
+/// Regression: `Borderline` is reserved for calibrated policies; the mapping
+/// returns `CalibratedBorderline` without panic. C06 must not make the runtime
+/// return `Borderline`.
+#[test]
+fn answer_state_borderline_is_reserved_calibrated() {
+    let (state, reason) = answer_state_to_report(AnswerState::Borderline, false);
+    assert_eq!(state, AnswerState::Borderline);
+    assert_eq!(reason, ReportDecisionReason::CalibratedBorderline);
+}
+
+/// Key regression: when `SearchResult.answer_state` contradicts the trace
+/// `gate_passed` bit, the report must follow the result state. Here the
+/// result says `NoAnswer` but the trace gate would say passed — the report
+/// must reflect `NoAnswer`.
+#[test]
+fn answer_state_follows_result_not_trace_gate() {
+    // Simulate: trace.gate_passed = true (fused non-empty, gate passed),
+    // but result.answer_state = NoAnswer. The report must follow the result.
+    let (state, reason) = answer_state_to_report(AnswerState::NoAnswer, false);
+    assert_eq!(
+        state,
+        AnswerState::NoAnswer,
+        "report must use result.answer_state, not trace.gate_passed"
+    );
+    assert_eq!(
+        reason,
+        ReportDecisionReason::CurrentGateReject,
+        "non-empty fused + NoAnswer must be CurrentGateReject"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// C07a: decision-evidence sidecar tests
+// ---------------------------------------------------------------------------
+
+/// `--evidence-output` accepts an absolute path at parse time.
+#[test]
+fn cli_accepts_absolute_evidence_output() {
+    let args = RetrievalEvalArgs::try_parse_args(&[
+        "retrieval_eval",
+        "--fixtures-dir",
+        "tests/fixtures/eval",
+        "--split",
+        "development",
+        "--output",
+        "/tmp/report.json",
+        "--code-commit",
+        "2539729d317def57fee4e30cb6cea8172f1d02aa",
+        "--evidence-output",
+        "/tmp/evidence.json",
+    ])
+    .expect("--evidence-output with absolute path must parse");
+    assert_eq!(
+        args.evidence_output,
+        Some(std::path::PathBuf::from("/tmp/evidence.json"))
+    );
+}
+
+/// `--evidence-output` rejects a relative path at parse time, before any
+/// model or store work.
+#[test]
+fn cli_rejects_relative_evidence_output() {
+    let result = RetrievalEvalArgs::try_parse_args(&[
+        "retrieval_eval",
+        "--fixtures-dir",
+        "tests/fixtures/eval",
+        "--split",
+        "development",
+        "--output",
+        "/tmp/report.json",
+        "--code-commit",
+        "2539729d317def57fee4e30cb6cea8172f1d02aa",
+        "--evidence-output",
+        "relative/path.json",
+    ]);
+    assert!(
+        result.is_err(),
+        "--evidence-output with relative path must be rejected"
+    );
+}
+
+#[test]
+fn evidence_output_must_differ_from_report_output() {
+    let path = std::path::Path::new("/tmp/eval.json");
+    assert!(
+        validate_evidence_output_path(path, Some(path)).is_err(),
+        "sidecar must not overwrite the primary report"
+    );
+    assert!(
+        validate_evidence_output_path(path, Some(std::path::Path::new("/tmp/evidence.json")))
+            .is_ok()
+    );
+}
+
+/// `DecisionEvidenceRow` serializes with exactly the required keys.
+#[test]
+fn evidence_row_keys_are_exact() {
+    let row = DecisionEvidenceRow {
+        id: "q1".to_string(),
+        docset: "nextjs".to_string(),
+        split: EvalSplit::Development,
+        form: QueryForm::NaturalLanguage,
+        class: QueryClass::Positive,
+        answer_state: AnswerState::Confident,
+        decision_reason: ReportDecisionReason::CurrentGatePass,
+        top_selected_cosine: Some(0.85),
+        top_selected_rrf: Some(0.03),
+        pre_mmr_top_cosine: Some(0.90),
+        pre_mmr_second_cosine: Some(0.80),
+        pre_mmr_cosine_margin: Some(0.10),
+        dense_rank: Some(2),
+        lexical_rank: Some(5),
+    };
+    let value = serde_json::to_value(&row).expect("serialize DecisionEvidenceRow");
+    let expected: BTreeSet<&str> = [
+        "id",
+        "docset",
+        "split",
+        "form",
+        "class",
+        "answer_state",
+        "decision_reason",
+        "top_selected_cosine",
+        "top_selected_rrf",
+        "pre_mmr_top_cosine",
+        "pre_mmr_second_cosine",
+        "pre_mmr_cosine_margin",
+        "dense_rank",
+        "lexical_rank",
+    ]
+    .into_iter()
+    .collect();
+    let actual: BTreeSet<&str> = value
+        .as_object()
+        .expect("row is an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(actual, expected, "evidence row key set must be exact");
+}
+
+/// Null values serialize as JSON `null`, not omitted or zero.
+#[test]
+fn evidence_row_nulls_serialize_correctly() {
+    let row = DecisionEvidenceRow {
+        id: "q1".to_string(),
+        docset: "nextjs".to_string(),
+        split: EvalSplit::Development,
+        form: QueryForm::NaturalLanguage,
+        class: QueryClass::Positive,
+        answer_state: AnswerState::NoAnswer,
+        decision_reason: ReportDecisionReason::NoCandidates,
+        top_selected_cosine: None,
+        top_selected_rrf: None,
+        pre_mmr_top_cosine: None,
+        pre_mmr_second_cosine: None,
+        pre_mmr_cosine_margin: None,
+        dense_rank: None,
+        lexical_rank: None,
+    };
+    let value = serde_json::to_value(&row).expect("serialize DecisionEvidenceRow");
+    for field in [
+        "top_selected_cosine",
+        "top_selected_rrf",
+        "pre_mmr_top_cosine",
+        "pre_mmr_second_cosine",
+        "pre_mmr_cosine_margin",
+        "dense_rank",
+        "lexical_rank",
+    ] {
+        assert!(
+            value[field].is_null(),
+            "{field} must serialize as null when absent"
+        );
+    }
+}
+
+/// Evidence rows must never contain query text or chunk text.
+#[test]
+fn evidence_row_contains_no_query_or_chunk_text() {
+    let row = DecisionEvidenceRow {
+        id: "q1".to_string(),
+        docset: "nextjs".to_string(),
+        split: EvalSplit::Development,
+        form: QueryForm::NaturalLanguage,
+        class: QueryClass::Positive,
+        answer_state: AnswerState::Confident,
+        decision_reason: ReportDecisionReason::CurrentGatePass,
+        top_selected_cosine: Some(0.85),
+        top_selected_rrf: Some(0.03),
+        pre_mmr_top_cosine: Some(0.90),
+        pre_mmr_second_cosine: Some(0.80),
+        pre_mmr_cosine_margin: Some(0.10),
+        dense_rank: Some(2),
+        lexical_rank: Some(5),
+    };
+    let value = serde_json::to_value(&row).expect("serialize DecisionEvidenceRow");
+    assert_no_field_named(&value, "query");
+    assert_no_field_named(&value, "text");
+    assert_no_field_named(&value, "url");
+    assert_no_field_named(&value, "heading");
+    assert_no_field_named(&value, "vector");
+    assert_no_field_named(&value, "credential");
+}
+
+/// Evidence sidecar rows are ordered by query ID.
+#[test]
+fn evidence_rows_are_ordered_by_id() {
+    let mut rows = vec![
+        DecisionEvidenceRow {
+            id: "q2".to_string(),
+            docset: "nextjs".to_string(),
+            split: EvalSplit::Development,
+            form: QueryForm::NaturalLanguage,
+            class: QueryClass::Positive,
+            answer_state: AnswerState::Confident,
+            decision_reason: ReportDecisionReason::CurrentGatePass,
+            top_selected_cosine: Some(0.85),
+            top_selected_rrf: Some(0.03),
+            pre_mmr_top_cosine: Some(0.90),
+            pre_mmr_second_cosine: Some(0.80),
+            pre_mmr_cosine_margin: Some(0.10),
+            dense_rank: Some(2),
+            lexical_rank: Some(5),
+        },
+        DecisionEvidenceRow {
+            id: "q1".to_string(),
+            docset: "nextjs".to_string(),
+            split: EvalSplit::Test,
+            form: QueryForm::Short,
+            class: QueryClass::NearDomainNegative,
+            answer_state: AnswerState::NoAnswer,
+            decision_reason: ReportDecisionReason::CurrentGateReject,
+            top_selected_cosine: None,
+            top_selected_rrf: None,
+            pre_mmr_top_cosine: None,
+            pre_mmr_second_cosine: None,
+            pre_mmr_cosine_margin: None,
+            dense_rank: None,
+            lexical_rank: None,
+        },
+    ];
+    rows.sort_by(|a, b| a.id.cmp(&b.id));
+    let value = serde_json::to_value(&rows).expect("serialize evidence rows");
+    let arr = value.as_array().expect("rows is an array");
+    assert_eq!(arr[0]["id"], serde_json::json!("q1"));
+    assert_eq!(arr[1]["id"], serde_json::json!("q2"));
 }

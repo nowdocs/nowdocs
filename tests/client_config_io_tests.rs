@@ -236,11 +236,11 @@ fn config_io_preserves_restrictive_permissions() {
 }
 
 // ---------------------------------------------------------------------------
-// Task 2: typed adapter model and generation-only adapters
+// Task 2: typed adapter model and staged execution capabilities
 // ---------------------------------------------------------------------------
 
 #[test]
-fn adapter_capability_matrix_matches_n1() {
+fn adapter_capability_matrix_tracks_staged_execution_capabilities() {
     let adapters = all_adapters();
     assert_eq!(adapters.len(), 4);
 
@@ -253,8 +253,14 @@ fn adapter_capability_matrix_matches_n1() {
     let cc = by_id[&ClientId::ClaudeCode].capabilities();
     assert_eq!(cc.detect, CapabilitySupport::Supported);
     assert_eq!(cc.generate, CapabilitySupport::Supported);
-    assert_eq!(cc.apply, CapabilitySupport::Unsupported);
-    assert_eq!(cc.verify, CapabilitySupport::Unsupported);
+    assert!(matches!(
+        cc.apply,
+        CapabilitySupport::Unsupported | CapabilitySupport::Conditional
+    ));
+    assert!(matches!(
+        cc.verify,
+        CapabilitySupport::Unsupported | CapabilitySupport::Conditional
+    ));
 
     let cd = by_id[&ClientId::ClaudeDesktop].capabilities();
     assert_eq!(cd.detect, CapabilitySupport::Supported);
@@ -265,8 +271,10 @@ fn adapter_capability_matrix_matches_n1() {
     let cu = by_id[&ClientId::Cursor].capabilities();
     assert_eq!(cu.detect, CapabilitySupport::Supported);
     assert_eq!(cu.generate, CapabilitySupport::Supported);
-    assert_eq!(cu.apply, CapabilitySupport::Unsupported);
-    assert_eq!(cu.verify, CapabilitySupport::Unsupported);
+    // Cursor's C6 implementation is present, so its conditional execution
+    // support is an exact current-state assertion.
+    assert_eq!(cu.apply, CapabilitySupport::Conditional);
+    assert_eq!(cu.verify, CapabilitySupport::Conditional);
 
     let gen = by_id[&ClientId::Generic].capabilities();
     assert_eq!(gen.detect, CapabilitySupport::Unsupported);
