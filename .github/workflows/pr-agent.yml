@@ -21,7 +21,7 @@ jobs:
       - name: PR Agent Action Step
         id: pragent
         timeout-minutes: 15
-        uses: KaigeGao1110/pr-agent@84c1245bb19b8f8d56fd65ba677366f86735d823
+        uses: KaigeGao1110/pr-agent@e65902db084c4947f923b077c922d8624a5c3a4e
         env:
           OPENAI_KEY: ${{ secrets.KIMI_API_KEY }}
           OPENAI__API_BASE: "https://api.kimi.com/coding/v1"
