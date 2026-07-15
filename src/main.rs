@@ -7,12 +7,49 @@ use nowdocs::cli::{CacheCommands, Cli, Commands, RegistryCommands, SetupCommands
 
 fn main() -> ExitCode {
     let args = Cli::parse();
+    let cmd_name = command_name(&args.command);
     match run(args.command) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => {
+            // After a successful eligible command, check for a binary update
+            // and print any reminder to stderr. Failures are silent and never
+            // change the exit code.
+            if nowdocs::update::test_util::is_eligible_command(cmd_name) {
+                if let Ok(Some(reminder)) =
+                    nowdocs::update::UpdateService::new(env!("CARGO_PKG_VERSION"))
+                        .and_then(|svc| svc.check_and_notify())
+                {
+                    eprintln!("{reminder}");
+                }
+            }
+            ExitCode::SUCCESS
+        }
         Err(e) => {
             eprintln!("error: {e:#}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Map a `Commands` variant to its CLI subcommand name string (e.g. "install",
+/// "serve"). Used for update-check eligibility.
+fn command_name(cmd: &Commands) -> &'static str {
+    match cmd {
+        Commands::Serve => "serve",
+        Commands::Capabilities { .. } => "capabilities",
+        Commands::Status { .. } => "status",
+        Commands::Install { .. } => "install",
+        Commands::Ingest { .. } => "ingest",
+        Commands::Share { .. } => "share",
+        Commands::Uninstall { .. } => "uninstall",
+        Commands::ListInstalled => "list-installed",
+        Commands::Update { .. } => "update",
+        Commands::Ensure { .. } => "ensure",
+        Commands::Setup { .. } => "setup",
+        Commands::Registry { .. } => "registry",
+        Commands::Rebuild { .. } => "rebuild",
+        Commands::Smoke { .. } => "smoke",
+        Commands::Doctor { .. } => "doctor",
+        Commands::Cache { .. } => "cache",
     }
 }
 

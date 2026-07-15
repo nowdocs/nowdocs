@@ -131,3 +131,21 @@ nowdocs doctor --repair
 ```
 
 `doctor --repair` and `cache clean-staging` must not remove active docsets.
+
+## 8. Binary update reminders
+
+After a successful `install`, `update`, `ensure`, `registry`, `smoke`, or `doctor` command, nowdocs checks GitHub for a newer binary release at most once every 24 hours. If a newer version is found, it prints a package-manager-neutral reminder to stderr:
+
+```
+A newer version of nowdocs is available (<version>).
+Update using the package manager you used to install nowdocs.
+https://github.com/nowdocs/nowdocs/releases/latest
+```
+
+nowdocs never downloads or installs a binary update automatically. `nowdocs serve` may also display a previously discovered reminder from the local cache on stderr, but it never makes a network request for this purpose.
+
+To disable all version checks and reminders, set the environment variable:
+
+```bash
+export NOWDOCS_UPDATE_CHECK=0
+```

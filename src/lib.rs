@@ -19,9 +19,14 @@ pub mod eval;
 pub mod ingest;
 pub mod registry;
 pub mod registry_build;
+// C08a foundation: C08b/C08c consume this crate-private module. Remove the
+// temporary dead-code allowance when runtime wiring makes every item live.
+#[allow(dead_code)]
+pub(crate) mod rerank;
 pub mod retrieve;
 pub mod smoke;
 pub mod store;
 pub mod tools;
+pub mod update;
 
 // ---- Module stubs (1b-1h fill these) ----

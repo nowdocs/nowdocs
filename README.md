@@ -112,6 +112,8 @@ Before documentation reaches an LLM, nowdocs sanitizes returned text and metadat
 
 See the [Privacy Policy](docs/PRIVACY.md), [Threat Model](docs/THREAT_MODEL.md), and [Security Policy](.github/SECURITY.md) for details.
 
+After a successful `install`, `update`, `ensure`, `registry`, `smoke`, or `doctor` command, nowdocs checks GitHub for a newer binary release at most once every 24 hours and prints a reminder to stderr. It never downloads or installs an update automatically. Set `NOWDOCS_UPDATE_CHECK=0` to disable the check.
+
 ## Current scope and limitations
 
 - The curated registry currently provides Next.js, React, and Vue docsets.
