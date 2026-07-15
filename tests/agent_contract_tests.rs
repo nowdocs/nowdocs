@@ -290,7 +290,7 @@ fn capabilities_data_is_deterministically_ordered() {
         ("setup.rollback", true, false, false),
         ("ensure.plan", true, false, true),
         ("ensure.apply", true, false, true),
-        ("verify", false, true, false),
+        ("verify", true, true, false),
     ];
     assert_eq!(data.commands.len(), expected_commands.len());
     for (command, (id, implemented, read_only, network_access)) in

@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use candle_core::{DType, Device, Module, Tensor};
 use candle_transformers::models::jina_bert::{BertModel, Config, PositionEmbeddingType};
 use hf_hub::api::sync::ApiBuilder;
-use hf_hub::{Repo, RepoType};
+use hf_hub::{Cache, Repo, RepoType};
 use sha2::{Digest, Sha256};
 use tokenizers::Tokenizer;
 
@@ -145,6 +145,7 @@ impl Embedder {
 
         let config_path = repo.get("config.json").context("fetch config.json")?;
         sanitize_config(&config_path).context("sanitize config.json (remove auto_map)")?;
+        let config_json_bytes = std::fs::read(&config_path).context("read config.json")?;
 
         let tok_path = repo.get("tokenizer.json").context("fetch tokenizer.json")?;
 
@@ -161,43 +162,7 @@ impl Embedder {
             );
         }
 
-        // Build candle model. Weights load as F32 (candle 0.11 ALiBi bias is hardcoded F32).
-        let config = Config::new(
-            30528,
-            VECTOR_DIM,
-            4,
-            8,
-            2048,
-            candle_nn::Activation::Gelu,
-            8192,
-            2,
-            0.02,
-            1e-12,
-            0,
-            PositionEmbeddingType::Alibi,
-        );
-
-        let vb = if weights.extension().is_some_and(|e| e == "safetensors") {
-            // SAFETY: mmap of a read-only model file in the HF cache.
-            unsafe {
-                candle_nn::VarBuilder::from_mmaped_safetensors(
-                    std::slice::from_ref(&weights),
-                    DType::F32,
-                    &Device::Cpu,
-                )
-                .context("mmap safetensors")?
-            }
-        } else {
-            candle_nn::VarBuilder::from_pth(&weights, DType::F32, &Device::Cpu)
-                .context("load pytorch_model.bin")?
-        };
-
-        let model = BertModel::new(vb, &config).context("load jina-bert")?;
-
-        let tokenizer =
-            Tokenizer::from_file(tok_path).map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
-
-        Ok(Inner { model, tokenizer })
+        build_inner_from_paths(&weights, &config_json_bytes, &tok_path)
     }
 
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
@@ -234,6 +199,61 @@ impl Embedder {
     }
 }
 
+/// Build the candle `Config` for jina-embeddings-v2-small-en (pinned).
+fn jina_config() -> Config {
+    Config::new(
+        30528,
+        VECTOR_DIM,
+        4,
+        8,
+        2048,
+        candle_nn::Activation::Gelu,
+        8192,
+        2,
+        0.02,
+        1e-12,
+        0,
+        PositionEmbeddingType::Alibi,
+    )
+}
+
+/// Build an `Inner` (model + tokenizer) from already-resolved local file paths.
+/// Shared by the normal downloader path (`load_uncached`) and the cached-only
+/// path (`load_default_cached_only`). The config JSON is parsed and validated
+/// in memory here; callers decide whether to persist a sanitized copy.
+fn build_inner_from_paths(
+    weights: &std::path::PathBuf,
+    config_json_bytes: &[u8],
+    tok_path: &std::path::PathBuf,
+) -> Result<Inner> {
+    let config = jina_config();
+    let _config_json: serde_json::Value =
+        serde_json::from_slice(config_json_bytes).context("parse config.json")?;
+    // Validate the config is a JSON object (defense-in-depth; the candle Config
+    // is hardcoded for the pinned model, so we only confirm the file is valid
+    // JSON, not that it matches specific fields).
+
+    let vb = if weights.extension().is_some_and(|e| e == "safetensors") {
+        // SAFETY: mmap of a read-only model file in the HF cache.
+        unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                std::slice::from_ref(weights),
+                DType::F32,
+                &Device::Cpu,
+            )
+            .context("mmap safetensors")?
+        }
+    } else {
+        candle_nn::VarBuilder::from_pth(weights, DType::F32, &Device::Cpu)
+            .context("load pytorch_model.bin")?
+    };
+
+    let model = BertModel::new(vb, &config).context("load jina-bert")?;
+    let tokenizer =
+        Tokenizer::from_file(tok_path).map_err(|e| anyhow::anyhow!("tokenizer: {e}"))?;
+    Ok(Inner { model, tokenizer })
+}
+
 /// Best-effort warmup of the default embedder for the MCP `serve` loop (N3).
 ///
 /// To keep `nowdocs serve` hermetic and offline-safe — and to avoid a surprise
@@ -256,32 +276,114 @@ pub fn preload_default_embedder() {
 /// layout): weights (safetensors *or* pytorch bin) + `config.json` +
 /// `tokenizer.json`.
 ///
+/// C8-R1: this shares the same `CacheRepo::get` resolution rules as
+/// [`load_default_cached_only`], so the predicate cannot approve a state that
+/// the loader treats as a download miss. Both resolve `refs/<revision>` to a
+/// commit hash and then check `snapshots/<commit_hash>/<filename>`.
+///
 /// Used to decide whether `serve`-time preloading is free (warm) or would need a
-/// download (cold — skip and load lazily instead). Requiring ALL files, not just
+/// download (cold - skip and load lazily instead). Requiring ALL files, not just
 /// the weights, keeps an interrupted earlier load (weights written but config/
 /// tokenizer missing) from tricking preload into a surprise network fetch on an
 /// offline or restricted server.
 pub fn default_model_cached() -> bool {
-    let Some(snapshots) = default_snapshot_dir() else {
+    let Some(repo) = default_cache_repo() else {
         return false;
     };
-    let has_weights = ["model.safetensors", "pytorch_model.bin"]
-        .iter()
-        .any(|name| snapshots.join(name).exists());
-    has_weights
-        && snapshots.join("config.json").exists()
-        && snapshots.join("tokenizer.json").exists()
+    let has_weights = repo
+        .get("model.safetensors")
+        .or_else(|| repo.get("pytorch_model.bin"))
+        .is_some();
+    has_weights && repo.get("config.json").is_some() && repo.get("tokenizer.json").is_some()
 }
 
-fn default_snapshot_dir() -> Option<std::path::PathBuf> {
-    let cache = crate::cache::model_path(DEFAULT_MODEL_ID);
-    let repo_dir = cache.join(format!("models--{}", DEFAULT_MODEL_ID.replace('/', "--")));
-    let snapshots = repo_dir.join("snapshots").join(DEFAULT_REVISION);
-    if snapshots.is_dir() {
-        Some(snapshots)
-    } else {
-        None
+/// Build the local-only `hf_hub::Cache` + `CacheRepo` for the default model,
+/// rooted under the nowdocs model cache. Returns `None` if the cache root cannot
+/// be determined. This is pure local resolution: it never constructs
+/// `ApiBuilder`, never downloads, and never writes.
+fn default_cache_repo() -> Option<hf_hub::CacheRepo> {
+    let cache_root = crate::cache::model_path(DEFAULT_MODEL_ID);
+    let cache = Cache::new(cache_root);
+    let repo = cache.repo(Repo::with_revision(
+        DEFAULT_MODEL_ID.to_string(),
+        RepoType::Model,
+        DEFAULT_REVISION.to_string(),
+    ));
+    Some(repo)
+}
+
+/// Load the default embedder using **only** the local hf-hub cache, with no
+/// network access and no writes.
+///
+/// C8-R1: this resolves the pinned revision exclusively through
+/// `hf_hub::Cache` / `CacheRepo::get`, which reads `refs/<revision>` to a
+/// commit hash and then checks `snapshots/<commit_hash>/<filename>`. It never
+/// constructs `ApiBuilder`, never calls `ApiRepo::get`/`download`, never changes
+/// endpoint/proxy environment variables, never creates cache directories, and
+/// never falls back to the normal downloader. The `config.json` is parsed and
+/// validated in memory (the `auto_map` key is ignored at parse time); the
+/// existing rewriting `sanitize_config()` is **not** called, so no model-cache
+/// bytes, modes, mtimes, refs, snapshots, or blobs are mutated.
+///
+/// On success the loaded handle enters the existing in-process embedder cache,
+/// so a subsequent `Embedder::load()` is a cache hit and cannot reach its
+/// downloader. If any required local file/ref is missing, malformed, changed,
+/// or unreadable, this returns an error with no network fallback and no write.
+pub fn load_default_cached_only() -> Result<Embedder> {
+    let spec = EmbedderSpec {
+        model_id: DEFAULT_MODEL_ID.to_string(),
+        model_revision: DEFAULT_REVISION.to_string(),
+        model_sha256: DEFAULT_SHA256.to_string(),
+    };
+    // In-process cache hit: a prior load (cached-only or normal) already
+    // materialized the handle.
+    if let Some(hit) = embedder_cache().lock().unwrap().get(&spec).cloned() {
+        return Ok(hit);
     }
+
+    let repo = default_cache_repo()
+        .context("cannot resolve default model cache root for cached-only load")?;
+
+    // Resolve all required files locally. CacheRepo::get returns None (no
+    // error) when the ref or file is absent -- this is the local-only miss.
+    let weights = repo
+        .get("model.safetensors")
+        .or_else(|| repo.get("pytorch_model.bin"))
+        .context("cached-only model weights not present locally")?;
+    let config_path = repo
+        .get("config.json")
+        .context("cached-only config.json not present locally")?;
+    let tok_path = repo
+        .get("tokenizer.json")
+        .context("cached-only tokenizer.json not present locally")?;
+
+    // Preserve the pinned-model integrity policy without mutating a bad cache.
+    // The normal downloader deletes mismatched bytes so a later fetch can
+    // repair them; cached-only verification must remain read-only and simply
+    // refuse the tampered local file.
+    let actual_sha = sha256_hex(&weights)?;
+    if actual_sha != DEFAULT_SHA256 {
+        anyhow::bail!("cached-only model integrity check failed");
+    }
+
+    // Read config.json in memory; do NOT call sanitize_config (no writes).
+    let config_json_bytes = std::fs::read(&config_path).context("read cached config.json")?;
+
+    // Build the model from the resolved local paths. This mmaps the weights
+    // read-only and constructs the candle model + tokenizer. It performs no
+    // network access and no writes.
+    let loaded = build_inner_from_paths(&weights, &config_json_bytes, &tok_path)?;
+
+    let handle = Embedder {
+        inner: Arc::new(loaded),
+    };
+    // Insert into the in-process cache so retrieve's subsequent Embedder::load()
+    // is a cache hit and never reaches its downloader.
+    embedder_cache()
+        .lock()
+        .unwrap()
+        .insert(spec, handle.clone());
+    Ok(handle)
 }
 
 /// Remove `auto_map` from the HF config.json to prevent arbitrary code execution (A3).

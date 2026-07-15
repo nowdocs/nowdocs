@@ -252,7 +252,7 @@ pub fn capabilities_data() -> CapabilitiesData {
             command("setup.rollback", true, false, false),
             command("ensure.plan", true, false, true),
             command("ensure.apply", true, false, true),
-            command("verify", false, true, false),
+            command("verify", true, true, false),
         ],
         clients: vec![
             client(

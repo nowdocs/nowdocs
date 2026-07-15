@@ -128,6 +128,19 @@ pub enum Commands {
         #[command(subcommand)]
         command: CacheCommands,
     },
+    /// Verify a docset can be searched locally and a client config is current
+    /// (read-only, offline-safe)
+    Verify {
+        /// Docset to verify
+        #[arg(long)]
+        docset: String,
+        /// Optional client to verify (claude-code, claude-desktop, cursor, generic)
+        #[arg(long)]
+        client: Option<String>,
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]

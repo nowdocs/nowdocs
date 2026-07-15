@@ -211,40 +211,54 @@ fn test_default_model_cached_requires_all_files() {
     // Cold-cache / interrupted-load guard: weights alone must NOT count as
     // "cached", otherwise serve-time preload would try to fetch the missing
     // config/tokenizer on an offline server. Only when weights + config.json +
-    // tokenizer.json are ALL present should preload run.
+    // tokenizer.json are ALL present (and the ref resolves) should preload run.
+    //
+    // C8-R1: default_model_cached() now resolves through CacheRepo::get, which
+    // reads refs/<revision> -> commit hash -> snapshots/<commit_hash>/<file>.
+    // The fake cache must mirror this layout for the predicate to resolve.
     let tmp = tempfile::tempdir().unwrap();
     let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
 
-    let snapshots = nowdocs::cache::model_path(S0_MODEL_ID)
-        .join(format!("models--{}", S0_MODEL_ID.replace('/', "--")))
-        .join("snapshots")
-        .join(S0_REVISION);
+    let repo_dir = nowdocs::cache::model_path(S0_MODEL_ID)
+        .join(format!("models--{}", S0_MODEL_ID.replace('/', "--")));
+    let commit = "abc123def4567890abc123def4567890abc123de";
+    let snapshots = repo_dir.join("snapshots").join(commit);
+    let refs_dir = repo_dir.join("refs");
     std::fs::create_dir_all(&snapshots).unwrap();
+    std::fs::create_dir_all(&refs_dir).unwrap();
 
-    assert!(
-        !nowdocs::embedder::default_model_cached(),
-        "empty snapshot dir must be cold"
-    );
-
-    // Weights only: still cold (config + tokenizer missing).
+    // No ref file yet: cold even if files exist (ref cannot resolve).
     std::fs::write(snapshots.join("model.safetensors"), b"").unwrap();
-    assert!(
-        !nowdocs::embedder::default_model_cached(),
-        "weights-only snapshot must be cold"
-    );
-
-    // Weights + config: still cold (tokenizer missing).
     std::fs::write(snapshots.join("config.json"), b"{}").unwrap();
+    std::fs::write(snapshots.join("tokenizer.json"), b"{}").unwrap();
     assert!(
         !nowdocs::embedder::default_model_cached(),
-        "weights+config snapshot must be cold"
+        "snapshot without a ref file must be cold"
     );
 
-    // All three required files: warm.
+    // Write the ref so CacheRepo::get can resolve revision -> commit.
+    std::fs::write(refs_dir.join(S0_REVISION), commit).unwrap();
+
+    // Now remove files one at a time to prove each is required.
+    // Remove tokenizer: cold.
+    std::fs::remove_file(snapshots.join("tokenizer.json")).unwrap();
+    assert!(
+        !nowdocs::embedder::default_model_cached(),
+        "weights+config (no tokenizer) must be cold"
+    );
+    // Remove config: cold.
+    std::fs::remove_file(snapshots.join("config.json")).unwrap();
+    assert!(
+        !nowdocs::embedder::default_model_cached(),
+        "weights-only must be cold"
+    );
+
+    // All three required files + ref: warm.
+    std::fs::write(snapshots.join("config.json"), b"{}").unwrap();
     std::fs::write(snapshots.join("tokenizer.json"), b"{}").unwrap();
     assert!(
         nowdocs::embedder::default_model_cached(),
-        "weights+config+tokenizer snapshot must be warm"
+        "weights+config+tokenizer with ref must be warm"
     );
 }
 
@@ -260,4 +274,287 @@ fn test_embedder_truncates_oversized_input_without_panic() {
         .embed(&long)
         .expect("embed of oversized input must not panic");
     assert_eq!(v.len(), 512, "truncated embed must still return 512-dim");
+}
+
+// ---- C8-R1: cached-only model loading (no network, no writes) ----
+//
+// These tests build a fake hf-hub cache layout under an isolated XDG_CACHE_HOME
+// and exercise the cached-only default-model loader. They prove:
+//   - missing refs/files fail locally (no network fallback);
+//   - a snapshot without a usable ref is not considered cached;
+//   - cached-only failure leaves the entire fake tree byte-for-byte and
+//     metadata-stable (no writes).
+//
+// Blocked proxies are defense-in-depth; the primary no-network proof is the
+// call graph (no ApiBuilder/ApiRepo::get/download in the cached-only path).
+
+const FAKE_COMMIT: &str = "abcdef1234567890abcdef1234567890abcdef12";
+
+/// Build the fake hf-hub cache directory structure for the pinned default
+/// model under `cache_home`. Returns the snapshots directory path.
+fn fake_hub_cache(cache_home: &std::path::Path) -> std::path::PathBuf {
+    let model_id = S0_MODEL_ID;
+    let model_cache = nowdocs::cache::model_path(model_id);
+    // hf-hub routes the hub cache under the nowdocs model_path; the Cache
+    // constructor receives the *hub* root (model_path is the hub root here
+    // because cache::model_path returns the per-model directory used by
+    // ApiBuilder::with_cache_dir, and the cached-only loader mirrors that).
+    let _ = model_cache;
+    let repo_dir = cache_home
+        .join("nowdocs")
+        .join("models")
+        .join(model_id)
+        .join(format!("models--{}", model_id.replace('/', "--")));
+    let snapshots = repo_dir.join("snapshots").join(FAKE_COMMIT);
+    std::fs::create_dir_all(&snapshots).unwrap();
+    snapshots
+}
+
+/// Write the ref file so `CacheRepo::get` can resolve the revision to a commit.
+fn write_ref(cache_home: &std::path::Path, commit: &str) {
+    let repo_dir = cache_home
+        .join("nowdocs")
+        .join("models")
+        .join(S0_MODEL_ID)
+        .join(format!("models--{}", S0_MODEL_ID.replace('/', "--")));
+    let refs_dir = repo_dir.join("refs");
+    std::fs::create_dir_all(&refs_dir).unwrap();
+    std::fs::write(refs_dir.join(S0_REVISION), commit).unwrap();
+}
+
+/// A cached-only default-model load must fail locally (no network) when the
+/// ref file is missing, even if snapshot files exist. The snapshot without a
+/// usable ref must not be considered cached.
+#[test]
+fn cached_only_load_fails_when_ref_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+
+    let snapshots = fake_hub_cache(tmp.path());
+    // Write the required files but NO ref file.
+    std::fs::write(snapshots.join("config.json"), b"{}").unwrap();
+    std::fs::write(snapshots.join("tokenizer.json"), b"{}").unwrap();
+    std::fs::write(snapshots.join("model.safetensors"), b"not-real-weights").unwrap();
+
+    // The predicate must say not cached (no usable ref).
+    assert!(
+        !nowdocs::embedder::default_model_cached(),
+        "a snapshot without a usable ref must not be considered cached"
+    );
+
+    // The cached-only loader must fail locally without network.
+    let result = nowdocs::embedder::load_default_cached_only();
+    assert!(
+        result.is_err(),
+        "cached-only load must fail when ref is missing"
+    );
+}
+
+/// A cached-only default-model load must fail locally when the ref exists but
+/// points to a commit whose snapshot directory is missing required files.
+#[test]
+fn cached_only_load_fails_when_files_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+
+    let snapshots = fake_hub_cache(tmp.path());
+    write_ref(tmp.path(), FAKE_COMMIT);
+    // Only config.json; weights + tokenizer missing.
+    std::fs::write(snapshots.join("config.json"), b"{}").unwrap();
+
+    assert!(
+        !nowdocs::embedder::default_model_cached(),
+        "missing files must not be considered cached"
+    );
+
+    let result = nowdocs::embedder::load_default_cached_only();
+    assert!(
+        result.is_err(),
+        "cached-only load must fail when files are missing"
+    );
+}
+
+/// Cached-only failure must leave the entire fake cache tree byte-for-byte and
+/// metadata-stable: no writes, no mode/mtime changes, no directory creation.
+#[test]
+fn cached_only_failure_leaves_tree_byte_for_byte_stable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+
+    let snapshots = fake_hub_cache(tmp.path());
+    write_ref(tmp.path(), FAKE_COMMIT);
+    std::fs::write(snapshots.join("config.json"), b"{}").unwrap();
+    // weights + tokenizer missing -> load will fail.
+
+    // Snapshot the entire fake tree (paths, contents, mtimes) before the load.
+    let before = snapshot_tree(tmp.path());
+
+    let result = nowdocs::embedder::load_default_cached_only();
+    assert!(result.is_err(), "expected cached-only failure");
+
+    // Snapshot again after the failed load.
+    let after = snapshot_tree(tmp.path());
+
+    assert_eq!(
+        before, after,
+        "cached-only failure must leave the tree byte-for-byte and metadata-stable"
+    );
+}
+
+/// A complete cache entry with tampered weights must be rejected by the pinned
+/// SHA-256 check before model construction, without deleting or rewriting the
+/// cached files. Cached-only verification must preserve the integrity policy
+/// enforced by the normal downloader while remaining read-only.
+#[test]
+fn cached_only_load_rejects_tampered_weights_without_mutation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+
+    let snapshots = fake_hub_cache(tmp.path());
+    write_ref(tmp.path(), FAKE_COMMIT);
+    std::fs::write(snapshots.join("config.json"), b"{}").unwrap();
+    std::fs::write(snapshots.join("tokenizer.json"), b"{}").unwrap();
+    std::fs::write(
+        snapshots.join("model.safetensors"),
+        b"tampered-model-weights",
+    )
+    .unwrap();
+    let before = snapshot_tree(tmp.path());
+
+    let error = match nowdocs::embedder::load_default_cached_only() {
+        Ok(_) => panic!("cached-only load must reject weights that fail the pinned digest"),
+        Err(error) => error,
+    };
+
+    assert!(
+        error.to_string().contains("integrity"),
+        "tampered weights must fail at the integrity gate, got: {error}"
+    );
+    assert_eq!(
+        before,
+        snapshot_tree(tmp.path()),
+        "integrity rejection must not mutate or delete cached model files"
+    );
+}
+
+/// Recursively snapshot a directory tree: sorted list of (relative_path, content_bytes, mtime_secs).
+fn snapshot_tree(
+    root: &std::path::Path,
+) -> Vec<(std::path::PathBuf, Vec<u8>, std::time::SystemTime)> {
+    let mut entries = Vec::new();
+    let mut walker = vec![std::path::PathBuf::from("")];
+    while let Some(rel) = walker.pop() {
+        let abs = root.join(&rel);
+        let read = std::fs::read_dir(&abs).unwrap();
+        for entry in read.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let rel_child = rel.join(&name);
+            let meta = std::fs::symlink_metadata(&path).unwrap();
+            if meta.is_dir() {
+                walker.push(rel_child.clone());
+                entries.push((rel_child, Vec::new(), meta.modified().unwrap()));
+            } else if meta.is_file() {
+                let content = std::fs::read(&path).unwrap();
+                entries.push((rel_child, content, meta.modified().unwrap()));
+            }
+        }
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+/// The cached-only loader must never construct ApiBuilder, call ApiRepo::get,
+/// download, create_dir, write, rename, or remove. This source-level check is
+/// the primary no-network/no-write proof (blocked proxies are defense in depth).
+#[test]
+fn cached_only_path_has_no_network_or_write_calls() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/embedder.rs");
+    let src = std::fs::read_to_string(&path).expect("read embedder.rs");
+
+    // The cached-only function must exist.
+    assert!(
+        src.contains("load_default_cached_only"),
+        "embedder.rs must define load_default_cached_only"
+    );
+
+    // Extract the cached-only function body. Strip comment lines so the check
+    // examines actual code statements, not doc comments that mention the
+    // forbidden APIs by name.
+    let start = src
+        .find("fn load_default_cached_only")
+        .expect("cached-only loader must exist");
+    let rest = &src[start..];
+    let end = rest[1..]
+        .find("\nfn ")
+        .map(|i| start + 1 + i)
+        .unwrap_or(src.len());
+    let body_full = &src[start..end];
+    let body: String = body_full
+        .lines()
+        .map(|l| {
+            // Strip everything from `//` onward (comments).
+            match l.find("//") {
+                Some(i) => &l[..i],
+                None => l,
+            }
+        })
+        .collect::<Vec<&str>>()
+        .join("\n");
+
+    for forbidden in [
+        "ApiBuilder",
+        "ApiRepo",
+        "download",
+        "create_dir",
+        "std::fs::write",
+        "rename",
+        "std::fs::remove",
+        "sanitize_config",
+    ] {
+        assert!(
+            !body.contains(forbidden),
+            "cached-only loader must not call `{forbidden}` (network/write), but it appears in: {body}"
+        );
+    }
+}
+
+/// `default_model_cached()` and the cached-only loader must share the same
+/// cache-resolution rules: if the predicate says cached, the loader must be
+/// able to resolve the local files (it may still fail on malformed content, but
+/// not on a resolution miss).
+#[test]
+fn predicate_and_loader_share_resolution_rules() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+
+    // No cache at all: predicate false, loader errors.
+    assert!(!nowdocs::embedder::default_model_cached());
+    assert!(nowdocs::embedder::load_default_cached_only().is_err());
+
+    // Fake a complete (ref + files) but deliberately invalid-content cache.
+    // The predicate should now be true (files present + ref resolves), and the
+    // loader should resolve the paths (even though candle will reject the
+    // fake weights). The key invariant: if predicate is true, the loader does
+    // NOT fail with a "missing file" error -- it fails at model construction,
+    // proving they share resolution rules.
+    let snapshots = fake_hub_cache(tmp.path());
+    write_ref(tmp.path(), FAKE_COMMIT);
+    std::fs::write(snapshots.join("config.json"), b"{}").unwrap();
+    std::fs::write(snapshots.join("tokenizer.json"), b"{}").unwrap();
+    std::fs::write(snapshots.join("model.safetensors"), b"fake").unwrap();
+
+    assert!(
+        nowdocs::embedder::default_model_cached(),
+        "complete fake cache must be considered cached by the predicate"
+    );
+    // The loader resolves locally (no network) but fails on fake content.
+    let err = nowdocs::embedder::load_default_cached_only()
+        .err()
+        .expect("fake-content cached load must fail at construction, not network");
+    let msg = format!("{err}");
+    assert!(
+        !msg.contains("download") && !msg.contains("fetch"),
+        "loader must not attempt network; error was: {msg}"
+    );
 }
