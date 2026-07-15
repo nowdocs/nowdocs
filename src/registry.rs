@@ -3,6 +3,7 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use fs2::FileExt;
@@ -1507,6 +1508,131 @@ pub fn fetch_selected_package_from(docset: &str, index_url: &str) -> Result<Regi
             "docset {docset} not found in the registry index; run `nowdocs registry list` to see available docsets"
         ),
     }
+}
+
+/// Maximum response size for the bounded update-index reader (2 MiB).
+const UPDATE_INDEX_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+/// Default User-Agent for the bounded update-index reader.
+const UPDATE_USER_AGENT: &str = concat!("nowdocs/", env!("CARGO_PKG_VERSION"));
+
+/// Fetch and parse the registry catalog index for automatic update checks.
+///
+/// Uses in-process `ureq` with HTTPS-only, an 800 ms global timeout, a 2 MiB
+/// response cap, and manual redirect handling (`max_redirects(0)`). At most one
+/// validated GitHub raw-content hop is allowed. Does not write to disk.
+///
+/// For `file://` test fixtures, reads directly from disk.
+pub fn fetch_index_for_update(timeout: Duration) -> Result<RegistryIndex> {
+    fetch_index_for_update_from(&index_url(), timeout)
+}
+
+/// Fetch the registry catalog index for automatic update checks from an
+/// explicit URL.
+pub fn fetch_index_for_update_from(url: &str, timeout: Duration) -> Result<RegistryIndex> {
+    if is_test_file_url(url) {
+        if !is_test_mode() {
+            anyhow::bail!("file:// URLs are not allowed in production builds");
+        }
+        let path = url.strip_prefix("file://").unwrap_or(url);
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading registry index at {path}"))?;
+        let idx: RegistryIndex =
+            serde_json::from_str(&text).context("parsing registry index.json")?;
+        validate_registry_index(&idx)?;
+        return Ok(idx);
+    }
+
+    if !is_allowed_registry_url(url) {
+        anyhow::bail!("registry index URL not in allowed domains: {}", url);
+    }
+
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .https_only(true)
+        .max_redirects(0)
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
+
+    let mut response = agent
+        .get(url)
+        .header("User-Agent", UPDATE_USER_AGENT)
+        .header("Accept", "application/json")
+        .call()
+        .context("fetch registry index for update")?;
+
+    let status = response.status();
+    if (301..400).contains(&status.as_u16()) {
+        // Redirect response — validate and follow exactly one hop.
+        let location = response
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        validate_update_index_redirect(url, &location)?;
+
+        let config2 = ureq::Agent::config_builder()
+            .timeout_global(Some(timeout))
+            .https_only(true)
+            .max_redirects(0)
+            .build();
+        let agent2 = ureq::Agent::new_with_config(config2);
+        let mut resp2 = agent2
+            .get(&location)
+            .header("User-Agent", UPDATE_USER_AGENT)
+            .header("Accept", "application/json")
+            .call()
+            .context("follow redirect for registry index")?;
+        let body = resp2
+            .body_mut()
+            .read_to_string()
+            .context("read registry index body")?;
+        if body.len() > UPDATE_INDEX_MAX_BYTES {
+            anyhow::bail!(
+                "registry index response exceeds {} byte limit",
+                UPDATE_INDEX_MAX_BYTES
+            );
+        }
+        let idx: RegistryIndex =
+            serde_json::from_str(&body).context("parsing registry index.json")?;
+        validate_registry_index(&idx)?;
+        return Ok(idx);
+    }
+
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .context("read registry index body")?;
+    if body.len() > UPDATE_INDEX_MAX_BYTES {
+        anyhow::bail!(
+            "registry index response exceeds {} byte limit",
+            UPDATE_INDEX_MAX_BYTES
+        );
+    }
+    let idx: RegistryIndex = serde_json::from_str(&body).context("parsing registry index.json")?;
+    validate_registry_index(&idx)?;
+    Ok(idx)
+}
+
+/// Validate that a redirect from `from_url` to `to_url` is allowed for the
+/// update-index reader. Only the configured GitHub index URL to its exact
+/// raw.githubusercontent.com equivalent is permitted.
+pub fn validate_update_index_redirect(from_url: &str, to_url: &str) -> Result<()> {
+    // Only allow redirect from the configured GitHub /raw/ URL to its
+    // raw.githubusercontent.com equivalent.
+    let expected_from = "https://github.com/nowdocs-registry/registry-index/raw/main/index.json";
+    let expected_to =
+        "https://raw.githubusercontent.com/nowdocs-registry/registry-index/main/index.json";
+
+    if from_url == expected_from && to_url == expected_to {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "redirect from {} to {} is not allowed for update-index reader",
+        from_url,
+        to_url
+    )
 }
 
 /// Filter catalog packages by a case-insensitive substring match on name + description.
