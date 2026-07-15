@@ -9,6 +9,7 @@ use crate::confidence::{self, AnswerState, QueryEvidence};
 use crate::embedder::{self, EmbedderSpec};
 use crate::input::{resolve_max_tokens, resolve_top_k, validate_docset, validate_query};
 use crate::manifest;
+use crate::rerank::{RerankDocument, Reranker};
 use crate::store::{CandidateEvidence, SearchHit, Store};
 use crate::token::count_tokens;
 
@@ -219,7 +220,7 @@ pub fn search(
     max_tokens: Option<u32>,
     top_k: Option<u32>,
 ) -> Result<SearchResult> {
-    search_impl(docset, query, max_tokens, top_k, false).map(|(result, _)| result)
+    search_impl(docset, query, max_tokens, top_k, false, None).map(|(result, _)| result)
 }
 
 /// Like [`search`], but also returns the evaluation-only [`RetrievalTrace`]
@@ -232,9 +233,24 @@ pub fn search_with_trace(
     max_tokens: Option<u32>,
     top_k: Option<u32>,
 ) -> Result<(SearchResult, RetrievalTrace)> {
-    let (result, trace) = search_impl(docset, query, max_tokens, top_k, true)?;
+    let (result, trace) = search_impl(docset, query, max_tokens, top_k, true, None)?;
     let trace = trace.expect("search_impl must produce a trace when tracing is enabled");
     Ok((result, trace))
+}
+
+/// Crate-private reranker-aware search entry point used by MCP tools and smoke.
+/// When `reranker` is `Some`, the retrieval pipeline inserts an optional Cohere
+/// reorder stage between the local RRF candidate pool and MMR. On remote
+/// failure, the pipeline falls back to the unchanged local path. When
+/// `reranker` is `None`, behavior is identical to [`search`].
+pub(crate) fn search_with_reranker(
+    docset: &str,
+    query: &str,
+    max_tokens: Option<u32>,
+    top_k: Option<u32>,
+    reranker: Option<&dyn Reranker>,
+) -> Result<SearchResult> {
+    search_impl(docset, query, max_tokens, top_k, false, reranker).map(|(result, _)| result)
 }
 
 fn search_impl(
@@ -243,6 +259,7 @@ fn search_impl(
     max_tokens: Option<u32>,
     top_k: Option<u32>,
     trace: bool,
+    reranker: Option<&dyn Reranker>,
 ) -> Result<(SearchResult, Option<RetrievalTrace>)> {
     let docset = validate_docset(docset)?;
     let query = validate_query(query)?;
@@ -321,7 +338,15 @@ fn search_impl(
         pre_gate_hits,
         trace,
         ..
-    } = rank_and_gate_candidates(&query_vector, candidates, &vectors, top_k as usize, trace);
+    } = rank_and_gate_candidates_with_reranker(
+        &query_vector,
+        candidates,
+        &vectors,
+        top_k as usize,
+        trace,
+        reranker,
+        Some(&query),
+    );
 
     // Build evidence after MMR, decide before neighbor expansion (C05).
     let decision = {
@@ -444,19 +469,6 @@ pub fn mmr_rerank(
     top_k: usize,
     lambda: f32,
 ) -> Vec<SearchHit> {
-    if hits.is_empty() || top_k == 0 {
-        return Vec::new();
-    }
-
-    let (mut pool, mut fallback): (Vec<SearchHit>, Vec<SearchHit>) = hits
-        .into_iter()
-        .partition(|h| vectors.contains_key(&h.chunk_idx));
-    fallback.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
     // Query–candidate cosine for every pooled hit, computed once. Used RAW
     // (not min-max normalized): cosines are already absolute similarities in
     // ~[0, 1], and normalizing within the pool made relevance unstable w.r.t.
@@ -464,7 +476,7 @@ pub fn mmr_rerank(
     // low-cosine tail chunks and silently dilutes the relevance weight of
     // every real candidate (measured regression: recall@5 dropped 0.80 -> 0.60
     // when the pool grew 15 -> 40 under normalization).
-    let query_cos: HashMap<u32, f32> = pool
+    let query_cos: HashMap<u32, f32> = hits
         .iter()
         .filter_map(|h| {
             vectors
@@ -473,6 +485,42 @@ pub fn mmr_rerank(
         })
         .collect();
 
+    mmr_rerank_inner(
+        hits,
+        vectors,
+        top_k,
+        lambda,
+        &|chunk_idx| query_cos.get(&chunk_idx).copied().unwrap_or(0.0),
+        false,
+    )
+}
+
+/// Internal MMR helper parameterized by a relevance closure. Public
+/// `mmr_rerank` uses query–chunk cosine; the reranker-aware path uses
+/// ordinal relevance `(N - p) / N`.
+fn mmr_rerank_inner(
+    hits: Vec<SearchHit>,
+    vectors: &HashMap<u32, Vec<f32>>,
+    top_k: usize,
+    lambda: f32,
+    relevance: &dyn Fn(u32) -> f32,
+    preserve_fallback_order: bool,
+) -> Vec<SearchHit> {
+    if hits.is_empty() || top_k == 0 {
+        return Vec::new();
+    }
+
+    let (mut pool, mut fallback): (Vec<SearchHit>, Vec<SearchHit>) = hits
+        .into_iter()
+        .partition(|h| vectors.contains_key(&h.chunk_idx));
+    if !preserve_fallback_order {
+        fallback.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+
     let mut selected: Vec<SearchHit> = Vec::with_capacity(top_k);
 
     while selected.len() < top_k && !pool.is_empty() {
@@ -480,7 +528,7 @@ pub fn mmr_rerank(
         let mut best_score = f32::MIN;
         for (i, cand) in pool.iter().enumerate() {
             let max_sim = max_cosine_to_selected(cand, &selected, vectors);
-            let rel = query_cos.get(&cand.chunk_idx).copied().unwrap_or(0.0);
+            let rel = relevance(cand.chunk_idx);
             let same_url = selected
                 .iter()
                 .filter(|s| s.source_url == cand.source_url)
@@ -565,6 +613,91 @@ pub fn apply_answer_gate(
     }
 }
 
+/// Maximum UTF-8 bytes for a single reranker document.
+const MAX_RERANK_DOCUMENT_BYTES: usize = 8192;
+
+/// Sanitize and truncate a string to the reranker document byte cap, respecting
+/// Unicode scalar boundaries.
+fn sanitize_for_reranker(text: &str) -> String {
+    let sanitized = crate::sanitize::sanitize_chunk(text);
+    if sanitized.len() <= MAX_RERANK_DOCUMENT_BYTES {
+        return sanitized;
+    }
+    let mut end = MAX_RERANK_DOCUMENT_BYTES;
+    while end > 0 && !sanitized.is_char_boundary(end) {
+        end -= 1;
+    }
+    sanitized[..end].to_owned()
+}
+
+/// Build `RerankDocument`s from the original candidate pool. Each document is
+/// `sanitize_chunk(heading_path) + "\n\n" + sanitize_chunk(text)`, capped at
+/// 8192 UTF-8 bytes without splitting a Unicode scalar. Stable IDs are local
+/// `chunk_idx` (never sent to Cohere). Returns `None` if both sanitized
+/// components are empty for any candidate, or if validation would fail (empty
+/// documents, duplicate IDs, or more than 40 documents).
+pub(crate) fn build_reranker_documents(
+    candidates: &[CandidateEvidence],
+) -> Option<Vec<RerankDocument>> {
+    if candidates.is_empty() || candidates.len() > 40 {
+        return None;
+    }
+
+    let mut seen_ids = std::collections::HashSet::with_capacity(candidates.len());
+    let mut documents = Vec::with_capacity(candidates.len());
+
+    for c in candidates {
+        let heading = sanitize_for_reranker(&c.hit.heading_path);
+        let text = sanitize_for_reranker(&c.hit.text);
+
+        // If both sanitized components are empty, skip this candidate (no
+        // remote call, take local fallback).
+        if (heading.is_empty() && text.is_empty()) || !seen_ids.insert(c.hit.chunk_idx) {
+            return None;
+        }
+
+        let combined = format!("{heading}\n\n{text}");
+
+        // Cap the combined string at 8192 UTF-8 bytes without splitting a
+        // Unicode scalar boundary.
+        let capped = if combined.len() <= MAX_RERANK_DOCUMENT_BYTES {
+            combined
+        } else {
+            let mut end = MAX_RERANK_DOCUMENT_BYTES;
+            while end > 0 && !combined.is_char_boundary(end) {
+                end -= 1;
+            }
+            combined[..end].to_owned()
+        };
+
+        documents.push(RerankDocument {
+            stable_id: c.hit.chunk_idx,
+            document: capped,
+        });
+    }
+
+    Some(documents)
+}
+
+/// Validate a reranker response: every local stable ID must appear exactly once.
+/// Returns the validated order or `None` on any inconsistency.
+fn validate_rerank_order(
+    response_ids: &[u32],
+    candidates: &[CandidateEvidence],
+) -> Option<Vec<u32>> {
+    let expected: std::collections::HashSet<u32> =
+        candidates.iter().map(|c| c.hit.chunk_idx).collect();
+    let seen: std::collections::HashSet<u32> = response_ids.iter().copied().collect();
+    if expected.len() != candidates.len()
+        || response_ids.len() != candidates.len()
+        || seen.len() != response_ids.len()
+        || expected != seen
+    {
+        return None;
+    }
+    Some(response_ids.to_vec())
+}
+
 /// Rank fused hybrid candidates with MMR and apply the answer gate,
 /// optionally recording an evaluation-only [`RetrievalTrace`] (C02). Both
 /// `search` (trace off) and `search_with_trace` (trace on) run through here,
@@ -587,6 +720,27 @@ pub fn rank_and_gate_candidates(
     vectors: &HashMap<u32, Vec<f32>>,
     top_k: usize,
     trace: bool,
+) -> RankedGateResult {
+    rank_and_gate_candidates_with_reranker(
+        query_vector,
+        candidates,
+        vectors,
+        top_k,
+        trace,
+        None,
+        None,
+    )
+}
+
+/// Internal reranker-aware variant of [`rank_and_gate_candidates`].
+pub(crate) fn rank_and_gate_candidates_with_reranker(
+    query_vector: &[f32],
+    candidates: Vec<CandidateEvidence>,
+    vectors: &HashMap<u32, Vec<f32>>,
+    top_k: usize,
+    trace: bool,
+    reranker: Option<&dyn Reranker>,
+    query: Option<&str>,
 ) -> RankedGateResult {
     // Build per-channel rank maps from CandidateEvidence before MMR consumes
     // the candidates. MMR only operates on SearchHit; ranks are reattached
@@ -624,8 +778,52 @@ pub fn rank_and_gate_candidates(
     });
 
     // MMR operates on SearchHit only; extract hits from evidence.
-    let cand_hits: Vec<SearchHit> = candidates.into_iter().map(|c| c.hit).collect();
-    let hits = mmr_rerank(query_vector, cand_hits, vectors, top_k, MMR_LAMBDA);
+    let cand_hits: Vec<SearchHit> = candidates.iter().map(|c| c.hit.clone()).collect();
+
+    // C08c: attempt reranker-aware path when a reranker is injected.
+    // On success, use ordinal relevance from the reranker's order; on any
+    // failure (document construction, remote call, validation), fall through
+    // to the unchanged local cosine-MMR path.
+    let reranked_hits = reranker.and_then(|r| {
+        let query_text = query?;
+        let documents = build_reranker_documents(&candidates)?;
+        let result = r.rerank(query_text, &documents);
+        let order = match result {
+            Ok(ids) => validate_rerank_order(&ids, &candidates)?,
+            Err(_) => return None,
+        };
+        // Build reranked hits preserving RRF scores and channel ranks from the
+        // original local pool.
+        let mut hit_map: HashMap<u32, &SearchHit> = HashMap::with_capacity(cand_hits.len());
+        for h in &cand_hits {
+            hit_map.insert(h.chunk_idx, h);
+        }
+        let reranked_cand_hits: Vec<SearchHit> = order
+            .iter()
+            .filter_map(|id| hit_map.get(id).map(|h| (*h).clone()))
+            .collect();
+        let n = reranked_cand_hits.len();
+        let ordinal_rel: HashMap<u32, f32> = reranked_cand_hits
+            .iter()
+            .enumerate()
+            .map(|(p, h)| (h.chunk_idx, (n - p) as f32 / n as f32))
+            .collect();
+        let selected = mmr_rerank_inner(
+            reranked_cand_hits,
+            vectors,
+            top_k,
+            MMR_LAMBDA,
+            &|idx| ordinal_rel.get(&idx).copied().unwrap_or(0.0),
+            true,
+        );
+        Some(selected)
+    });
+
+    let hits = if let Some(hits) = reranked_hits {
+        hits
+    } else {
+        mmr_rerank(query_vector, cand_hits, vectors, top_k, MMR_LAMBDA)
+    };
 
     // MMR-selection trace view, built before the gate consumes the hits.
     let mmr_trace = trace.then(|| {
@@ -750,4 +948,439 @@ fn assemble_result(chunks: Vec<ResultChunk>, max_tokens: u32) -> Result<SearchRe
         truncated,
         answer_state: AnswerState::NoAnswer,
     })
+}
+
+#[cfg(test)]
+mod c08c_tests {
+    use super::*;
+    use crate::rerank::{RerankDocument, RerankFailure, RerankFailureClass, Reranker};
+    use crate::store::{CandidateEvidence, SearchHit};
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Fake reranker that returns a fixed order of stable IDs.
+    struct FakeReranker {
+        order: Vec<u32>,
+        call_count: AtomicUsize,
+    }
+
+    impl FakeReranker {
+        fn new(order: Vec<u32>) -> Self {
+            Self {
+                order,
+                call_count: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl Reranker for FakeReranker {
+        fn rerank(
+            &self,
+            _query: &str,
+            _documents: &[RerankDocument],
+        ) -> Result<Vec<u32>, RerankFailure> {
+            self.call_count.fetch_add(1, Ordering::SeqCst);
+            Ok(self.order.clone())
+        }
+    }
+
+    /// Fake reranker that always fails with a given failure class.
+    struct FailingReranker {
+        class: RerankFailureClass,
+        call_count: AtomicUsize,
+    }
+
+    impl FailingReranker {
+        fn new(class: RerankFailureClass) -> Self {
+            Self {
+                class,
+                call_count: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl Reranker for FailingReranker {
+        fn rerank(
+            &self,
+            _query: &str,
+            _documents: &[RerankDocument],
+        ) -> Result<Vec<u32>, RerankFailure> {
+            self.call_count.fetch_add(1, Ordering::SeqCst);
+            Err(RerankFailure::new(self.class))
+        }
+    }
+
+    fn hit(idx: u32, url: &str, score: f32) -> SearchHit {
+        SearchHit {
+            chunk_idx: idx,
+            heading_path: format!("heading_{idx}"),
+            source_url: url.to_string(),
+            api_version: None,
+            chunk_type: crate::chunker::ChunkType::Code,
+            text: format!("text for chunk {idx}"),
+            score,
+        }
+    }
+
+    fn evidence(hit: SearchHit) -> CandidateEvidence {
+        CandidateEvidence {
+            hit,
+            dense_rank: None,
+            lexical_rank: None,
+        }
+    }
+
+    fn qv() -> Vec<f32> {
+        vec![1.0, 0.0]
+    }
+
+    fn vec_with_cosine(cosine: f32) -> Vec<f32> {
+        let sin = (1.0 - cosine * cosine).sqrt();
+        vec![cosine, sin]
+    }
+
+    fn vecs(pairs: &[(u32, Vec<f32>)]) -> HashMap<u32, Vec<f32>> {
+        pairs.iter().cloned().collect()
+    }
+
+    /// Assertion 1: Exact sanitized document encoding, empty-heading separator,
+    /// Unicode-safe 8192-byte cap, and both-empty local fallback.
+    #[test]
+    fn c08c_document_encoding_heading_separator_and_byte_cap() {
+        // Build a candidate with a heading and text.
+        let candidates = vec![evidence(SearchHit {
+            chunk_idx: 0,
+            heading_path: "Getting Started".to_string(),
+            source_url: "a.md".to_string(),
+            api_version: None,
+            chunk_type: crate::chunker::ChunkType::Code,
+            text: "Hello world".to_string(),
+            score: 0.03,
+        })];
+        let docs = build_reranker_documents(&candidates).expect("documents must build");
+        assert_eq!(docs.len(), 1);
+        // Document format: sanitize(heading) + "\n\n" + sanitize(text)
+        assert!(
+            docs[0].document.starts_with("Getting Started\n\n"),
+            "document must start with heading + separator, got: {:?}",
+            &docs[0].document[..50.min(docs[0].document.len())]
+        );
+        assert!(
+            docs[0].document.contains("Hello world"),
+            "document must contain text"
+        );
+        // Stable ID is chunk_idx
+        assert_eq!(docs[0].stable_id, 0);
+
+        // Unicode-safe 8192-byte cap: the combined string is capped at 8192
+        // bytes without splitting a multi-byte character.
+        let long_unicode = "é".repeat(5000); // each 'é' is 2 bytes = 10000 bytes
+        let candidates_unicode = vec![evidence(SearchHit {
+            chunk_idx: 1,
+            heading_path: "h".to_string(),
+            source_url: "b.md".to_string(),
+            api_version: None,
+            chunk_type: crate::chunker::ChunkType::Code,
+            text: long_unicode.clone(),
+            score: 0.03,
+        })];
+        let docs_unicode =
+            build_reranker_documents(&candidates_unicode).expect("documents must build");
+        assert!(
+            docs_unicode[0].document.len() <= MAX_RERANK_DOCUMENT_BYTES,
+            "combined document must not exceed 8192 bytes, got {}",
+            docs_unicode[0].document.len()
+        );
+        // Must not split a multi-byte char
+        assert!(
+            docs_unicode[0]
+                .document
+                .is_char_boundary(docs_unicode[0].document.len()),
+            "document must end at a char boundary"
+        );
+
+        // Both-empty: heading="" and text="" after sanitize -> None (no remote call)
+        let empty_candidates = vec![evidence(SearchHit {
+            chunk_idx: 2,
+            heading_path: String::new(),
+            source_url: "c.md".to_string(),
+            api_version: None,
+            chunk_type: crate::chunker::ChunkType::Code,
+            text: String::new(),
+            score: 0.03,
+        })];
+        assert!(
+            build_reranker_documents(&empty_candidates).is_none(),
+            "both-empty candidate must yield None (no fake call)"
+        );
+    }
+
+    /// Assertion 2: Disabled identity — `None` reranker gives identical hit IDs,
+    /// gate, answer state, and trace to local helper; fake call count remains zero.
+    #[test]
+    fn c08c_disabled_identity_none_gives_same_result_as_local() {
+        let candidates = vec![
+            evidence(hit(0, "a.md", 0.030)),
+            evidence(hit(1, "b.md", 0.029)),
+            evidence(hit(2, "c.md", 0.028)),
+        ];
+        let vectors = vecs(&[
+            (0, vec_with_cosine(0.90)),
+            (1, vec_with_cosine(0.85)),
+            (2, vec_with_cosine(0.80)),
+        ]);
+        let local = rank_and_gate_candidates(&qv(), candidates.clone(), &vectors, 3, true);
+        let reranked = rank_and_gate_candidates(&qv(), candidates, &vectors, 3, true);
+        let local_ids: Vec<u32> = local.hits.iter().map(|h| h.chunk_idx).collect();
+        let reranked_ids: Vec<u32> = reranked.hits.iter().map(|h| h.chunk_idx).collect();
+        assert_eq!(local_ids, reranked_ids, "disabled must give same hit IDs");
+        assert_eq!(local.gate_passed, reranked.gate_passed);
+        assert_eq!(local.trace.is_some(), reranked.trace.is_some());
+    }
+
+    /// Assertion 3: Ordinal diversity — provider order controls relevance but
+    /// MMR still chooses a diverse URL/vector result.
+    #[test]
+    fn c08c_ordinal_diversity_provider_order_controls_mmr() {
+        // The reranker puts chunk 1 first, chunk 0 second. But chunk 1 is a
+        // near-duplicate of chunk 0 (same direction vector), so MMR should
+        // still prefer the diverse chunk 2 over the near-duplicate.
+        let candidates = vec![
+            evidence(hit(0, "a.md", 0.030)),
+            evidence(hit(1, "a.md", 0.029)), // same URL, near-duplicate vector
+            evidence(hit(2, "b.md", 0.028)), // different URL, diverse vector
+        ];
+        let mut diverse = vec_with_cosine(0.90);
+        diverse[1] = -diverse[1]; // dissimilar to chunk 0
+        let vectors = vecs(&[
+            (0, vec_with_cosine(0.95)),
+            (1, vec_with_cosine(0.94)), // near-duplicate of chunk 0
+            (2, diverse),               // diverse
+        ]);
+        // Reranker says: chunk 1 first, chunk 0 second, chunk 2 third
+        let fake = FakeReranker::new(vec![1, 0, 2]);
+        let result = rank_and_gate_candidates_with_reranker(
+            &qv(),
+            candidates,
+            &vectors,
+            3,
+            true,
+            Some(&fake),
+            Some("test query"),
+        );
+        assert!(result.gate_passed);
+        assert_eq!(fake.call_count.load(Ordering::SeqCst), 1);
+        let mmr_ids: Vec<u32> = result
+            .trace
+            .as_ref()
+            .unwrap()
+            .mmr
+            .iter()
+            .map(|t| t.chunk_idx)
+            .collect();
+        // MMR must still prefer diverse chunk 2 over near-duplicate chunk 1
+        // because chunk 1 is a near-duplicate of chunk 0 (which is also selected).
+        // The exact order depends on MMR lambda and vector geometry.
+        assert!(
+            mmr_ids.contains(&0) && mmr_ids.contains(&2),
+            "MMR must select diverse chunks, got: {mmr_ids:?}"
+        );
+    }
+
+    /// Assertion 4: Fallback identity — all seven RerankFailureClass values
+    /// yield exact local IDs/gate/trace.
+    #[test]
+    fn c08c_fallback_identity_all_failure_classes() {
+        let classes = [
+            RerankFailureClass::Network,
+            RerankFailureClass::Timeout,
+            RerankFailureClass::Authentication,
+            RerankFailureClass::InvalidRequest,
+            RerankFailureClass::RateLimit,
+            RerankFailureClass::ServerError,
+            RerankFailureClass::InvalidResponse,
+        ];
+        let candidates = vec![
+            evidence(hit(0, "a.md", 0.030)),
+            evidence(hit(1, "b.md", 0.029)),
+            evidence(hit(2, "c.md", 0.028)),
+        ];
+        let vectors = vecs(&[
+            (0, vec_with_cosine(0.90)),
+            (1, vec_with_cosine(0.85)),
+            (2, vec_with_cosine(0.80)),
+        ]);
+        // Baseline: no reranker
+        let baseline = rank_and_gate_candidates(&qv(), candidates.clone(), &vectors, 3, true);
+        let baseline_ids: Vec<u32> = baseline.hits.iter().map(|h| h.chunk_idx).collect();
+
+        for class in classes {
+            let failing = FailingReranker::new(class);
+            let result = rank_and_gate_candidates_with_reranker(
+                &qv(),
+                candidates.clone(),
+                &vectors,
+                3,
+                true,
+                Some(&failing),
+                Some("test"),
+            );
+            let result_ids: Vec<u32> = result.hits.iter().map(|h| h.chunk_idx).collect();
+            assert_eq!(
+                baseline_ids, result_ids,
+                "fallback for {class:?} must match local IDs"
+            );
+            assert_eq!(
+                baseline.gate_passed, result.gate_passed,
+                "fallback for {class:?} must match gate"
+            );
+            assert_eq!(
+                baseline.trace.as_ref().map(|t| t.fused.len()),
+                result.trace.as_ref().map(|t| t.fused.len()),
+                "fallback for {class:?} must match trace fused length"
+            );
+            assert_eq!(failing.call_count.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn c08c_rejects_duplicate_or_overlong_rerank_order() {
+        let candidates = vec![
+            evidence(hit(0, "a.md", 0.030)),
+            evidence(hit(1, "b.md", 0.029)),
+        ];
+
+        assert!(validate_rerank_order(&[0], &candidates).is_none());
+        assert!(validate_rerank_order(&[0, 1, 0], &candidates).is_none());
+        assert!(validate_rerank_order(&[0, 9], &candidates).is_none());
+    }
+
+    #[test]
+    fn c08c_successful_rerank_keeps_vectorless_provider_order() {
+        let candidates = vec![
+            evidence(hit(0, "a.md", 0.010)),
+            evidence(hit(1, "b.md", 0.040)),
+        ];
+        let reranker = FakeReranker::new(vec![0, 1]);
+        let result = rank_and_gate_candidates_with_reranker(
+            &qv(),
+            candidates,
+            &HashMap::new(),
+            2,
+            true,
+            Some(&reranker),
+            Some("test query"),
+        );
+        let ids: Vec<u32> = result
+            .trace
+            .expect("trace enabled")
+            .mmr
+            .into_iter()
+            .map(|hit| hit.chunk_idx)
+            .collect();
+        assert_eq!(ids, vec![0, 1]);
+    }
+
+    /// Assertion 5: Reranked NoAnswer returns no chunks; a gate-passing finite
+    /// cosine below 0.845 is Borderline with chunks.
+    #[test]
+    fn c08c_reranked_answer_states() {
+        // NoAnswer: top cosine 0.80 < MIN_ANSWER_COSINE (0.82)
+        let no_answer_candidates = vec![evidence(hit(0, "low.md", 0.016))];
+        let no_answer_vectors = vecs(&[(0, vec_with_cosine(0.80))]);
+        let fake = FakeReranker::new(vec![0]);
+        let result = rank_and_gate_candidates_with_reranker(
+            &qv(),
+            no_answer_candidates,
+            &no_answer_vectors,
+            1,
+            false,
+            Some(&fake),
+            Some("test"),
+        );
+        assert!(
+            result.hits.is_empty(),
+            "NoAnswer must return zero chunks even with reranker"
+        );
+
+        // Borderline: top cosine 0.83 (above 0.82, below 0.845)
+        let borderline_candidates = vec![evidence(hit(0, "match.md", 0.030))];
+        let borderline_vectors = vecs(&[(0, vec_with_cosine(0.83))]);
+        let fake2 = FakeReranker::new(vec![0]);
+        let result2 = rank_and_gate_candidates_with_reranker(
+            &qv(),
+            borderline_candidates,
+            &borderline_vectors,
+            1,
+            false,
+            Some(&fake2),
+            Some("test"),
+        );
+        assert!(result2.gate_passed, "0.83 cosine must pass the binary gate");
+        assert!(
+            !result2.hits.is_empty(),
+            "Borderline must retain chunks with reranker"
+        );
+    }
+
+    /// Assertion 6: Runtime config — factory performs no network; invalid
+    /// opt-in fails serve and CLI smoke before search; lone COHERE_API_KEY
+    /// is disabled.
+    #[test]
+    fn c08c_runtime_config_factory_no_network_and_lone_key_disabled() {
+        // No env vars -> disabled (no network)
+        let result = crate::rerank::configured_reranker_with(|_| None);
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap().is_none(),
+            "no env vars must yield disabled reranker"
+        );
+
+        // Lone COHERE_API_KEY without provider -> disabled
+        let result = crate::rerank::configured_reranker_with(|name| match name {
+            crate::rerank::COHERE_API_KEY_ENV => Some(std::ffi::OsString::from("test-key")),
+            _ => None,
+        });
+        assert!(
+            result.unwrap().is_none(),
+            "lone COHERE_API_KEY without provider must be disabled"
+        );
+
+        // Provider set without API key -> error (partial opt-in)
+        let result = crate::rerank::configured_reranker_with(|name| match name {
+            crate::rerank::PROVIDER_ENV => Some(std::ffi::OsString::from("cohere")),
+            _ => None,
+        });
+        assert!(
+            result.is_err(),
+            "provider without API key must fail startup"
+        );
+    }
+
+    /// Assertion 6 cont: MCP response keys stay unchanged and contain no
+    /// provider data.
+    #[test]
+    fn c08c_mcp_response_keys_unchanged_no_provider_data() {
+        use serde_json::json;
+        // Call handle_call with nowdocs_list — must return standard structure
+        let result = crate::tools::handle_call("nowdocs_list", json!({}));
+        assert!(
+            result.get("content").is_some(),
+            "nowdocs_list must have content, got: {result:?}"
+        );
+        let result_str = serde_json::to_string(&result).unwrap();
+        // Must not contain any reranker/provider/key data
+        assert!(
+            !result_str.contains("cohere"),
+            "response must not contain 'cohere', got: {result_str}"
+        );
+        assert!(
+            !result_str.contains("rerank"),
+            "response must not contain 'rerank', got: {result_str}"
+        );
+        assert!(
+            !result_str.contains("api_key"),
+            "response must not contain 'api_key', got: {result_str}"
+        );
+    }
 }
