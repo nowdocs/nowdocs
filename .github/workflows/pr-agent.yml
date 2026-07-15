@@ -2,7 +2,7 @@ name: Codium PR Agent
 
 on:
   issue_comment:
-    types: [created, edited]
+    types: [created]
 
 jobs:
   pr_agent_job:
@@ -13,14 +13,15 @@ jobs:
       contents: write
       actions: read
     name: Run PR Agent
-    if: ${{ github.event.sender.type != 'Bot' && github.event.issue.pull_request }}
+    if: ${{ github.event.sender.type != 'Bot' && github.event.issue.pull_request && github.event.comment.body == '/improve' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
 
       - name: PR Agent Action Step
         id: pragent
-        uses: Codium-ai/pr-agent@bd09b6cf89c6d6f3d16b159fa7603fa0e7768cf2 # main
+        timeout-minutes: 15
+        uses: KaigeGao1110/pr-agent@84c1245bb19b8f8d56fd65ba677366f86735d823
         env:
           OPENAI_KEY: ${{ secrets.KIMI_API_KEY }}
           OPENAI__API_BASE: "https://api.kimi.com/coding/v1"
@@ -29,8 +30,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CONFIG__USE_REPO_SETTINGS_FILE: "true"
           CONFIG__MODEL: "moonshot/kimi2.7"
-          LITELLM_REQUEST_TIMEOUT: "120"
-          CONFIG__LITELLM__TIMEOUT: "120"
-          CONFIG__LITELLM__NUM_RETRIES: "5"
+          CONFIG__AI_TIMEOUT: "870"
+          CONFIG__DISABLE_FALLBACK_MODELS: "true"
           CONFIG__CUSTOM_MODEL_MAX_TOKENS: 100000
           CONFIG__TEMPERATURE: 1
