@@ -1516,6 +1516,26 @@ const UPDATE_INDEX_MAX_BYTES: usize = 2 * 1024 * 1024;
 /// Default User-Agent for the bounded update-index reader.
 const UPDATE_USER_AGENT: &str = concat!("nowdocs/", env!("CARGO_PKG_VERSION"));
 
+/// Read one update-index response without allocating beyond the hard limit.
+///
+/// Reading one extra byte distinguishes an exact-limit response from an
+/// oversized one while keeping both file fixtures and HTTP responses bounded.
+fn read_update_index_body(mut reader: impl Read) -> Result<String> {
+    let mut bytes = Vec::with_capacity(UPDATE_INDEX_MAX_BYTES.min(64 * 1024));
+    reader
+        .by_ref()
+        .take((UPDATE_INDEX_MAX_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .context("read registry index body")?;
+    if bytes.len() > UPDATE_INDEX_MAX_BYTES {
+        anyhow::bail!(
+            "registry index response exceeds {} byte limit",
+            UPDATE_INDEX_MAX_BYTES
+        );
+    }
+    String::from_utf8(bytes).context("registry index body is not UTF-8")
+}
+
 /// Fetch and parse the registry catalog index for automatic update checks.
 ///
 /// Uses in-process `ureq` with HTTPS-only, an 800 ms global timeout, a 2 MiB
@@ -1535,8 +1555,8 @@ pub fn fetch_index_for_update_from(url: &str, timeout: Duration) -> Result<Regis
             anyhow::bail!("file:// URLs are not allowed in production builds");
         }
         let path = url.strip_prefix("file://").unwrap_or(url);
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading registry index at {path}"))?;
+        let file = File::open(path).with_context(|| format!("reading registry index at {path}"))?;
+        let text = read_update_index_body(file)?;
         let idx: RegistryIndex =
             serde_json::from_str(&text).context("parsing registry index.json")?;
         validate_registry_index(&idx)?;
@@ -1584,32 +1604,14 @@ pub fn fetch_index_for_update_from(url: &str, timeout: Duration) -> Result<Regis
             .header("Accept", "application/json")
             .call()
             .context("follow redirect for registry index")?;
-        let body = resp2
-            .body_mut()
-            .read_to_string()
-            .context("read registry index body")?;
-        if body.len() > UPDATE_INDEX_MAX_BYTES {
-            anyhow::bail!(
-                "registry index response exceeds {} byte limit",
-                UPDATE_INDEX_MAX_BYTES
-            );
-        }
+        let body = read_update_index_body(resp2.body_mut().as_reader())?;
         let idx: RegistryIndex =
             serde_json::from_str(&body).context("parsing registry index.json")?;
         validate_registry_index(&idx)?;
         return Ok(idx);
     }
 
-    let body = response
-        .body_mut()
-        .read_to_string()
-        .context("read registry index body")?;
-    if body.len() > UPDATE_INDEX_MAX_BYTES {
-        anyhow::bail!(
-            "registry index response exceeds {} byte limit",
-            UPDATE_INDEX_MAX_BYTES
-        );
-    }
+    let body = read_update_index_body(response.body_mut().as_reader())?;
     let idx: RegistryIndex = serde_json::from_str(&body).context("parsing registry index.json")?;
     validate_registry_index(&idx)?;
     Ok(idx)
