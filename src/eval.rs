@@ -586,6 +586,28 @@ pub struct MetricBucket {
     pub answer_states: AnswerStateMetrics,
 }
 
+/// One query's row in the internal decision-evidence sidecar (C07a). Contains
+/// only IDs, labels, answer decision, and C05 evidence reconstructed from the
+/// pre-gate MMR trace — never query text, chunk text, URLs, headings, vectors,
+/// or credentials. This is calibration telemetry, not a public protocol.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct DecisionEvidenceRow {
+    pub id: String,
+    pub docset: String,
+    pub split: EvalSplit,
+    pub form: QueryForm,
+    pub class: QueryClass,
+    pub answer_state: AnswerState,
+    pub decision_reason: ReportDecisionReason,
+    pub top_selected_cosine: Option<f32>,
+    pub top_selected_rrf: Option<f32>,
+    pub pre_mmr_top_cosine: Option<f32>,
+    pub pre_mmr_second_cosine: Option<f32>,
+    pub pre_mmr_cosine_margin: Option<f32>,
+    pub dense_rank: Option<u32>,
+    pub lexical_rank: Option<u32>,
+}
+
 /// Command/retrieval parameters the report was produced with, recorded so a
 /// metric change can be attributed to a parameter change.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -716,6 +738,10 @@ pub struct RetrievalEvalArgs {
     /// query once unmeasured first. Default 1 disables benchmarking.
     #[arg(long, default_value_t = 1, value_parser = parse_benchmark_runs)]
     pub benchmark_runs: u32,
+    /// Optional absolute path for the internal decision-evidence sidecar JSON.
+    /// When supplied, writes C05 calibration telemetry per query.
+    #[arg(long, value_parser = parse_evidence_output)]
+    pub evidence_output: Option<PathBuf>,
 }
 
 impl RetrievalEvalArgs {
@@ -758,6 +784,30 @@ fn parse_code_commit(raw: &str) -> Result<String, String> {
     Ok(raw.to_string())
 }
 
+fn parse_evidence_output(raw: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err(format!(
+            "--evidence-output must be an absolute path, got {raw:?}"
+        ))
+    }
+}
+
+/// Ensure the optional evidence sidecar cannot overwrite the primary report.
+/// Kept separate from clap parsing because it needs both output paths.
+pub fn validate_evidence_output_path(
+    output: &Path,
+    evidence_output: Option<&Path>,
+) -> Result<(), String> {
+    if evidence_output == Some(output) {
+        Err("--evidence-output must differ from --output".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 fn parse_benchmark_runs(raw: &str) -> Result<u32, String> {
     let runs: u32 = raw
         .parse()
@@ -796,11 +846,13 @@ pub struct LatencySummary {
     pub p95_ms: f64,
 }
 
-/// Outcome of [`run_evaluation`]: the report plus optional latency telemetry.
+/// Outcome of [`run_evaluation`]: the report, optional latency telemetry, and
+/// the decision-evidence sidecar rows (one per evaluated query, sorted by ID).
 #[derive(Debug, Clone)]
 pub struct EvalRunOutcome {
     pub report: EvalReportV1,
     pub latency: Option<LatencySummary>,
+    pub evidence_rows: Vec<DecisionEvidenceRow>,
 }
 
 /// Load a single JSON file as an array of [`EvalQuery`] records and validate
@@ -942,6 +994,11 @@ pub fn run_evaluation(config: &EvalRunConfig) -> Result<EvalRunOutcome> {
         None
     };
 
+    // C07a: collect decision-evidence rows, sorted by query ID for stable output.
+    let mut evidence_rows: Vec<DecisionEvidenceRow> =
+        evidence.iter().filter_map(|e| e.evidence.clone()).collect();
+    evidence_rows.sort_by(|a, b| a.id.cmp(&b.id));
+
     let overall_bucket = overall.finish();
     let report = EvalReportV1 {
         schema_version: EVAL_REPORT_SCHEMA_VERSION,
@@ -953,14 +1010,20 @@ pub fn run_evaluation(config: &EvalRunConfig) -> Result<EvalRunOutcome> {
         by_query_class: finish_map(by_class),
         queries: evidence.into_iter().map(|e| e.report).collect(),
     };
-    Ok(EvalRunOutcome { report, latency })
+    Ok(EvalRunOutcome {
+        report,
+        latency,
+        evidence_rows,
+    })
 }
 
-/// Per-query evidence: the report row, per-stage ranking metrics, and the
-/// median measured latency (only with benchmarking enabled).
+/// Per-query evidence: the report row, per-stage ranking metrics, the optional
+/// decision-evidence sidecar row, and the median measured latency (only with
+/// benchmarking enabled).
 struct QueryEvidence {
     report: QueryReport,
     stage_metrics: [RankingMetrics; 5],
+    evidence: Option<DecisionEvidenceRow>,
     latency_ms: Option<f64>,
 }
 
@@ -1050,6 +1113,14 @@ fn evaluate_query(
     let (answer_state, decision_reason) =
         answer_state_to_report(result.answer_state, trace.fused.is_empty());
 
+    // C07a: build decision-evidence from the pre-gate MMR trace.
+    let evidence = Some(build_evidence_row(
+        query,
+        &trace,
+        answer_state,
+        decision_reason,
+    ));
+
     // Benchmark: the warm run above produced this query's metrics; measured
     // repeats re-run the full per-query retrieval in-process.
     let latency_ms = if config.benchmark_runs > 1 {
@@ -1086,8 +1157,53 @@ fn evaluate_query(
             decision_reason,
         },
         stage_metrics,
+        evidence,
         latency_ms,
     })
+}
+
+/// Build a [`DecisionEvidenceRow`] from the traced pre-gate MMR selection.
+///
+/// Faithfully describes the trace's selected pre-gate candidate even when the
+/// final answer is `NoAnswer`. Missing cosines, ranks, or margin are `null`.
+fn build_evidence_row(
+    query: &EvalQuery,
+    trace: &crate::retrieve::RetrievalTrace,
+    answer_state: AnswerState,
+    decision_reason: ReportDecisionReason,
+) -> DecisionEvidenceRow {
+    let top = trace.mmr.first();
+    // C02 traces can defensively carry a non-finite cosine from malformed
+    // vectors. JSON has no NaN representation, so sidecar telemetry records
+    // it as absent just like any unavailable cosine.
+    let top_selected_cosine = top.and_then(|t| t.cosine).filter(|v| v.is_finite());
+    let top_selected_rrf = top.map(|t| t.rrf_score);
+    let dense_rank = top.and_then(|t| t.dense_rank);
+    let lexical_rank = top.and_then(|t| t.lexical_rank);
+
+    let pre_mmr_top_cosine = trace.pre_mmr_top_cosines.first().copied();
+    let pre_mmr_second_cosine = trace.pre_mmr_top_cosines.get(1).copied();
+    let pre_mmr_cosine_margin = match (pre_mmr_top_cosine, pre_mmr_second_cosine) {
+        (Some(top), Some(second)) => Some(top - second),
+        _ => None,
+    };
+
+    DecisionEvidenceRow {
+        id: query.id.clone(),
+        docset: query.docset.clone(),
+        split: query.split.clone(),
+        form: query.query_form.clone(),
+        class: query.query_class.clone(),
+        answer_state,
+        decision_reason,
+        top_selected_cosine,
+        top_selected_rrf,
+        pre_mmr_top_cosine,
+        pre_mmr_second_cosine,
+        pre_mmr_cosine_margin,
+        dense_rank,
+        lexical_rank,
+    }
 }
 
 /// Project trace hits (chunk_idx + source_url) into ranked chunks for metric
