@@ -87,3 +87,80 @@ pub fn decide_binary(evidence: &QueryEvidence) -> AnswerDecision {
         reason: DecisionReason::CurrentDualRankPass,
     }
 }
+
+// ---------------------------------------------------------------------------
+// C07b: calibrated three-state decision
+// ---------------------------------------------------------------------------
+
+/// Calibrated confidence floor: a selected hit whose raw cosine to the query
+/// reaches this value (inclusive) is `Confident` under the calibrated policy.
+/// Below it, a binary-gate-accepted hit is `Borderline`.
+///
+/// Selected on the development split only (C07a evidence) and must not be
+/// tuned against the test split. Ownership lives beside the calibrated decision
+/// so retrieval and tests reference this constant rather than copying the
+/// literal.
+pub const CALIBRATED_CONFIDENT_COSINE: f32 = 0.845;
+
+/// Calibrated three-state decision (C07b): derives the existing binary
+/// decision first, then lowers the certainty of accepted results below the
+/// calibrated confidence floor.
+///
+/// The policy is:
+///
+/// ```text
+/// no candidates                                        -> NoAnswer / NoCandidates
+/// existing binary gate rejects                         -> NoAnswer / CalibratedNoAnswer
+/// existing binary gate accepts; finite cosine >= floor -> Confident / CalibratedConfident
+/// all other existing-binary-gate accepts               -> Borderline / CalibratedBorderline
+/// ```
+///
+/// `CALIBRATED_CONFIDENT_COSINE` is inclusive. A non-finite selected cosine
+/// is never `Confident`: if the legacy binary gate accepts that defensive
+/// IEEE-754 path (NaN is not `<` the floor, so it is accepted), the calibrated
+/// decision labels it `Borderline`. Only `NoAnswer` returns an empty chunk
+/// list; `Borderline` retains the selected chunks and neighbor context.
+///
+/// This function does not duplicate or reimplement the binary gate constants:
+/// it delegates to [`decide_binary`] and only relabels the accepted states.
+pub fn decide_calibrated(evidence: &QueryEvidence) -> AnswerDecision {
+    let binary = decide_binary(evidence);
+    match binary.state {
+        AnswerState::NoAnswer => {
+            // Preserve the no-candidates distinction; a gate reject becomes
+            // CalibratedNoAnswer (nonempty-fused) rather than CurrentGateReject.
+            let reason = if binary.reason == DecisionReason::NoCandidates {
+                DecisionReason::NoCandidates
+            } else {
+                DecisionReason::CalibratedNoAnswer
+            };
+            AnswerDecision {
+                state: AnswerState::NoAnswer,
+                reason,
+            }
+        }
+        AnswerState::Confident => {
+            // The binary gate accepted. Only a finite cosine at or above the
+            // floor is Confident; everything else (including NaN and the
+            // dual-rank-1 bypass below the floor) is Borderline.
+            let top_cosine = evidence.top_selected_cosine.unwrap_or(f32::NAN);
+            if top_cosine.is_finite() && top_cosine >= CALIBRATED_CONFIDENT_COSINE {
+                AnswerDecision {
+                    state: AnswerState::Confident,
+                    reason: DecisionReason::CalibratedConfident,
+                }
+            } else {
+                AnswerDecision {
+                    state: AnswerState::Borderline,
+                    reason: DecisionReason::CalibratedBorderline,
+                }
+            }
+        }
+        // decide_binary never returns Borderline, but cover the case for
+        // completeness: a future caller cannot reach here.
+        AnswerState::Borderline => AnswerDecision {
+            state: AnswerState::Borderline,
+            reason: DecisionReason::CalibratedBorderline,
+        },
+    }
+}

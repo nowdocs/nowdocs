@@ -13,7 +13,7 @@ use nowdocs::eval::{
     answer_state_to_report, rate_estimate, validate_evidence_output_path, AnswerStateMetrics,
     CorpusIdentity, DecisionEvidenceRow, EvalReportV1, EvalSplit, MetricBucket, QueryClass,
     QueryForm, QueryReport, ReportDecisionReason, RetrievalEvalArgs, RetrievalParameters,
-    StageMetrics, StageMetricsSet, StageRanks,
+    StageMetrics, StageMetricsSet, StageRanks, CALIBRATED_POLICY_ID,
 };
 
 fn sample_stage(k: usize) -> StageMetrics {
@@ -355,7 +355,7 @@ fn cli_rejects_invalid_code_commit_without_model_initialization() {
 }
 
 // ---------------------------------------------------------------------------
-// C06: answer_state_to_report mapping tests
+// C06/C07b: answer_state_to_report mapping tests
 // ---------------------------------------------------------------------------
 
 /// Regression: the report mapping must follow `SearchResult.answer_state`,
@@ -369,30 +369,30 @@ fn answer_state_no_answer_empty_fused_is_no_candidates() {
 }
 
 /// Regression: `NoAnswer` with a non-empty fused trace maps to
-/// `CurrentGateReject` (gate saw candidates but rejected them).
+/// `CalibratedNoAnswer` under the C07b calibrated policy (gate saw candidates
+/// but rejected them).
 #[test]
-fn answer_state_no_answer_non_empty_fused_is_gate_reject() {
+fn answer_state_no_answer_non_empty_fused_is_calibrated_no_answer() {
     let (state, reason) = answer_state_to_report(AnswerState::NoAnswer, false);
     assert_eq!(state, AnswerState::NoAnswer);
-    assert_eq!(reason, ReportDecisionReason::CurrentGateReject);
+    assert_eq!(reason, ReportDecisionReason::CalibratedNoAnswer);
 }
 
-/// Regression: `Confident` always maps to `CurrentGatePass` regardless of
-/// the trace's fused-pool contents.
+/// Regression: `Confident` always maps to `CalibratedConfident` regardless of
+/// the trace's fused-pool contents under the C07b calibrated policy.
 #[test]
-fn answer_state_confident_is_gate_pass() {
+fn answer_state_confident_is_calibrated_confident() {
     let (state, reason) = answer_state_to_report(AnswerState::Confident, true);
     assert_eq!(state, AnswerState::Confident);
-    assert_eq!(reason, ReportDecisionReason::CurrentGatePass);
+    assert_eq!(reason, ReportDecisionReason::CalibratedConfident);
 
     let (state, reason) = answer_state_to_report(AnswerState::Confident, false);
     assert_eq!(state, AnswerState::Confident);
-    assert_eq!(reason, ReportDecisionReason::CurrentGatePass);
+    assert_eq!(reason, ReportDecisionReason::CalibratedConfident);
 }
 
-/// Regression: `Borderline` is reserved for calibrated policies; the mapping
-/// returns `CalibratedBorderline` without panic. C06 must not make the runtime
-/// return `Borderline`.
+/// Regression: `Borderline` maps to `CalibratedBorderline` under the C07b
+/// calibrated policy.
 #[test]
 fn answer_state_borderline_is_reserved_calibrated() {
     let (state, reason) = answer_state_to_report(AnswerState::Borderline, false);
@@ -402,7 +402,7 @@ fn answer_state_borderline_is_reserved_calibrated() {
 
 /// Key regression: when `SearchResult.answer_state` contradicts the trace
 /// `gate_passed` bit, the report must follow the result state. Here the
-/// result says `NoAnswer` but the trace gate would say passed — the report
+/// result says `NoAnswer` but the trace gate would say passed - the report
 /// must reflect `NoAnswer`.
 #[test]
 fn answer_state_follows_result_not_trace_gate() {
@@ -416,8 +416,8 @@ fn answer_state_follows_result_not_trace_gate() {
     );
     assert_eq!(
         reason,
-        ReportDecisionReason::CurrentGateReject,
-        "non-empty fused + NoAnswer must be CurrentGateReject"
+        ReportDecisionReason::CalibratedNoAnswer,
+        "non-empty fused + NoAnswer must be CalibratedNoAnswer under the calibrated policy"
     );
 }
 
@@ -637,4 +637,23 @@ fn evidence_rows_are_ordered_by_id() {
     let arr = value.as_array().expect("rows is an array");
     assert_eq!(arr[0]["id"], serde_json::json!("q1"));
     assert_eq!(arr[1]["id"], serde_json::json!("q2"));
+}
+
+// ---------------------------------------------------------------------------
+// C07b: calibrated evaluator-contract tests
+// ---------------------------------------------------------------------------
+
+/// The calibrated policy identifier is the exact public constant.
+#[test]
+fn calibrated_policy_id_is_exact() {
+    assert_eq!(CALIBRATED_POLICY_ID, "calibrated-cosine-0.845-v1");
+}
+
+/// The binary gate policy identifier is preserved (historical reports).
+#[test]
+fn binary_gate_policy_id_is_preserved() {
+    assert_eq!(
+        nowdocs::eval::BINARY_GATE_POLICY_ID,
+        "binary-current-gate-v1"
+    );
 }
