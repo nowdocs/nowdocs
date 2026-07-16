@@ -52,7 +52,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::agent_contract::{self, AGENT_CONTRACT_SCHEMA_VERSION};
+use crate::agent_contract::AGENT_CONTRACT_SCHEMA_VERSION;
+// Keep agent_contract import for potential future use by C4+.
+#[allow(unused_imports)]
+use crate::agent_contract as _agent_contract;
 use crate::cache;
 use crate::input;
 
@@ -835,7 +838,3 @@ mod error_mapping_tests {
         );
     }
 }
-
-// Keep agent_contract import for potential future use by C4+.
-#[allow(unused_imports)]
-use agent_contract as _agent_contract;
