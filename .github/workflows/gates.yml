@@ -59,6 +59,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: protoc-v1
+          cache-on-failure: true
       - name: Check formatting
         run: cargo fmt --check
       - name: Run clippy
@@ -80,6 +81,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: protoc-v1
+          cache-on-failure: true
       - run: cargo test --locked -- --test-threads=1
 
   build:
@@ -97,6 +99,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: protoc-v1
+          cache-on-failure: true
       - run: cargo build --locked --release
 
   # --- Cross-platform automation contract (C9) ---
@@ -130,6 +133,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: cross-platform-${{ matrix.os }}
+          cache-on-failure: true
       - name: Run focused automation contract tests
         run: cargo test --locked --test automation_plan_tests --test automation_lock_tests --test automation_operation_tests --test automation_docset_tests --test client_config_io_tests --test client_execution_contract_tests --test setup_tests --test verify_tests --test agent_setup_e2e_tests --test test_isolation_tests -- --test-threads=1
 
