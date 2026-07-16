@@ -378,11 +378,12 @@ fn approved_root_refuses_symlink_root() {
 #[test]
 fn adapter_capability_matrix_tracks_staged_execution_capabilities() {
     let adapters = all_adapters();
-    assert_eq!(adapters.len(), 4);
+    assert_eq!(adapters.len(), 5);
 
     let by_id: std::collections::HashMap<_, _> = adapters.iter().map(|a| (a.id(), a)).collect();
     assert!(by_id.contains_key(&ClientId::ClaudeCode));
     assert!(by_id.contains_key(&ClientId::ClaudeDesktop));
+    assert!(by_id.contains_key(&ClientId::Codex));
     assert!(by_id.contains_key(&ClientId::Cursor));
     assert!(by_id.contains_key(&ClientId::Generic));
 
@@ -403,6 +404,12 @@ fn adapter_capability_matrix_tracks_staged_execution_capabilities() {
     assert_eq!(cd.generate, CapabilitySupport::Supported);
     assert_eq!(cd.apply, CapabilitySupport::Unsupported);
     assert_eq!(cd.verify, CapabilitySupport::Unsupported);
+
+    let cx = by_id[&ClientId::Codex].capabilities();
+    assert_eq!(cx.detect, CapabilitySupport::Supported);
+    assert_eq!(cx.generate, CapabilitySupport::Supported);
+    assert_eq!(cx.apply, CapabilitySupport::Conditional);
+    assert_eq!(cx.verify, CapabilitySupport::Conditional);
 
     let cu = by_id[&ClientId::Cursor].capabilities();
     assert_eq!(cu.detect, CapabilitySupport::Supported);
