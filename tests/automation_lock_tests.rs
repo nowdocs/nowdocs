@@ -41,9 +41,10 @@ impl Drop for EnvGuard {
     }
 }
 
-// --- Test 5: second operation lock is refused until the first drops ---
+// --- Test 5: second operation lock is refused until the first drops (Unix) ---
 
 #[test]
+#[cfg(unix)]
 fn second_operation_lock_is_refused_until_first_drops() {
     let dir = tempfile::tempdir().unwrap();
     let _g = EnvGuard::set("XDG_CACHE_HOME", dir.path().to_str().unwrap());
@@ -74,6 +75,7 @@ fn second_operation_lock_is_refused_until_first_drops() {
 // --- Test 6: operation lock does not follow a symlink (open-time O_NOFOLLOW) ---
 
 #[test]
+#[cfg(unix)]
 fn operation_lock_does_not_follow_symlink() {
     let dir = tempfile::tempdir().unwrap();
     let _g = EnvGuard::set("XDG_CACHE_HOME", dir.path().to_str().unwrap());
@@ -84,38 +86,58 @@ fn operation_lock_does_not_follow_symlink() {
     let lock_file = root.join("operation.lock");
 
     // Plant a symlink pointing at an external target.
-    #[cfg(unix)]
-    {
-        let external = dir.path().join("external-op-target");
-        std::fs::write(&external, b"external").unwrap();
-        std::os::unix::fs::symlink(&external, &lock_file).unwrap();
+    let external = dir.path().join("external-op-target");
+    std::fs::write(&external, b"external").unwrap();
+    std::os::unix::fs::symlink(&external, &lock_file).unwrap();
 
-        let err = lock::acquire_operation_lock("op-symlink").unwrap_err();
-        let msg = format!("{err}");
-        assert!(
-            msg.starts_with("OPERATION_LOCK_UNSAFE"),
-            "symlinked operation.lock must yield OPERATION_LOCK_UNSAFE, got: {msg}"
-        );
+    let err = lock::acquire_operation_lock("op-symlink").unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.starts_with("OPERATION_LOCK_UNSAFE"),
+        "symlinked operation.lock must yield OPERATION_LOCK_UNSAFE, got: {msg}"
+    );
 
-        // The external target must be unchanged (never followed/written).
-        let after = std::fs::read_to_string(&external).unwrap();
-        assert_eq!(after, "external", "external target must be untouched");
-        // Remove the symlink so non-Unix-equivalent cleanup is consistent.
-        std::fs::remove_file(&lock_file).unwrap();
-    }
-    #[cfg(not(unix))]
-    {
-        // On Windows the no-follow path fails closed. Create a directory where
-        // the lock file should be to exercise the non-regular refusal (if the
-        // platform even reaches that check before the fail-closed error).
-        std::fs::create_dir_all(&lock_file).unwrap();
-        let err = lock::acquire_operation_lock("op-symlink").unwrap_err();
-        let msg = format!("{err}");
-        assert!(
-            msg.starts_with("OPERATION_LOCK_UNSAFE"),
-            "non-regular operation.lock must yield OPERATION_LOCK_UNSAFE, got: {msg}"
-        );
-    }
+    // The external target must be unchanged (never followed/written).
+    let after = std::fs::read_to_string(&external).unwrap();
+    assert_eq!(after, "external", "external target must be untouched");
+    // Remove the symlink so cleanup is consistent.
+    std::fs::remove_file(&lock_file).unwrap();
+}
+
+// --- Test 6 (non-Unix): valid ID returns the stable unsafe-platform error
+//     without creating or changing a lock file ---
+
+#[test]
+#[cfg(not(unix))]
+fn operation_lock_fails_closed_on_unsupported_platform() {
+    let dir = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", dir.path().to_str().unwrap());
+
+    // A valid operation id must still be rejected: the no-follow open path
+    // fails closed on the unsupported platform before any lock file is touched.
+    let err = lock::acquire_operation_lock("valid-op").unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.starts_with("OPERATION_LOCK_UNSAFE"),
+        "valid id must yield OPERATION_LOCK_UNSAFE on unsupported platform, got: {msg}"
+    );
+    assert!(
+        msg.contains("unsupported platform for no-follow I/O"),
+        "error must carry the stable platform prefix, got: {msg}"
+    );
+
+    // Zero payload mutation: the initializer may create empty automation
+    // directories, but the unsupported file open must not create a lock file
+    // or any other regular payload.
+    let auto_root = nowdocs::cache::automation_root();
+    assert!(
+        !auto_root.join("operation.lock").exists(),
+        "no lock file may be created on the unsupported platform"
+    );
+    assert!(
+        count_regular_files_recursive(&auto_root) == 0,
+        "no lock or other payload file may appear under the automation root"
+    );
 }
 
 // --- Supplementary: invalid operation_id is rejected before path construction ---
@@ -126,6 +148,8 @@ fn operation_lock_rejects_invalid_operation_id() {
     let _g = EnvGuard::set("XDG_CACHE_HOME", dir.path().to_str().unwrap());
 
     // Uppercase, separators, path traversal, and too-long ids are all invalid.
+    // This validation is pure and cross-platform: it rejects before any
+    // no-follow I/O is attempted.
     for bad in ["BadID", "has/slash", "..", "has space", &"a".repeat(65)] {
         let err = lock::acquire_operation_lock(bad).unwrap_err();
         let msg = format!("{err}");
@@ -134,7 +158,15 @@ fn operation_lock_rejects_invalid_operation_id() {
             "invalid operation_id {bad:?} must be rejected, got: {msg}"
         );
     }
-    // A valid id acquires.
+}
+
+// --- Supplementary (Unix): a valid id acquires the operation lock ---
+
+#[test]
+#[cfg(unix)]
+fn operation_lock_valid_id_acquires() {
+    let dir = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", dir.path().to_str().unwrap());
     let _g2 = lock::acquire_operation_lock("valid-op-1").expect("valid id acquires");
 }
 
@@ -167,4 +199,31 @@ fn operation_lock_refuses_symlinked_automation_root() {
         !external.join("operation.lock").exists(),
         "external symlink target must not have operation.lock created inside it"
     );
+}
+
+/// Count regular payload files recursively while allowing empty initializer
+/// directory scaffolding.
+#[cfg(not(unix))]
+fn count_regular_files_recursive(path: &std::path::Path) -> usize {
+    if !path.exists() {
+        return 0;
+    }
+    std::fs::read_dir(path)
+        .map(|it| {
+            it.flatten()
+                .map(|entry| {
+                    let file_type = entry
+                        .file_type()
+                        .expect("inspect automation entry without following symlinks");
+                    if file_type.is_dir() {
+                        count_regular_files_recursive(&entry.path())
+                    } else {
+                        // Regular files, symlinks/reparse points, and every
+                        // other non-directory entry are all payload.
+                        1
+                    }
+                })
+                .sum()
+        })
+        .unwrap_or(0)
 }

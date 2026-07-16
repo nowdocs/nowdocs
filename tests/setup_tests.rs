@@ -323,6 +323,7 @@ fn offline_missing_docset_returns_registry_metadata_required_and_creates_no_file
 // ---- 2. Online planning: one hash, prescribed action ordering, no absolute/secret fields ----
 
 #[test]
+#[cfg(unix)]
 fn online_planning_produces_one_hash_with_prescribed_action_ordering() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -420,6 +421,7 @@ fn online_planning_produces_one_hash_with_prescribed_action_ordering() {
 // ---- 2b. Already satisfied docset + canonical client ----
 
 #[test]
+#[cfg(unix)]
 fn already_satisfied_docset_returns_already_satisfied() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -457,6 +459,7 @@ fn already_satisfied_docset_returns_already_satisfied() {
 // ---- 2c. Healthy docset alone (no canonical client) is NOT already_satisfied ----
 
 #[test]
+#[cfg(unix)]
 fn healthy_docset_without_canonical_client_is_not_already_satisfied() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -483,6 +486,7 @@ fn healthy_docset_without_canonical_client_is_not_already_satisfied() {
 // ---- 3. Tampered, expired, stale plans are refused ----
 
 #[test]
+#[cfg(unix)]
 fn apply_refuses_tampered_plan() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -513,6 +517,7 @@ fn apply_refuses_tampered_plan() {
 }
 
 #[test]
+#[cfg(unix)]
 fn apply_refuses_expired_plan() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -535,6 +540,7 @@ fn apply_refuses_expired_plan() {
 }
 
 #[test]
+#[cfg(unix)]
 fn apply_refuses_stale_plan_when_docset_state_drifts() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -562,6 +568,7 @@ fn apply_refuses_stale_plan_when_docset_state_drifts() {
 // ---- 4. Claude Desktop/Generic produce manual-only actions and no write ----
 
 #[test]
+#[cfg(unix)]
 fn claude_desktop_plan_produces_manual_only_and_no_write() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -595,6 +602,7 @@ fn claude_desktop_plan_produces_manual_only_and_no_write() {
 }
 
 #[test]
+#[cfg(unix)]
 fn generic_plan_produces_manual_only_and_no_write() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -630,6 +638,7 @@ fn generic_plan_produces_manual_only_and_no_write() {
 // ---- 5. Cursor conflict, missing config, malformed JSON ----
 
 #[test]
+#[cfg(unix)]
 fn cursor_apply_returns_partial_when_nowdocs_already_exists() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -663,6 +672,7 @@ fn cursor_apply_returns_partial_when_nowdocs_already_exists() {
 }
 
 #[test]
+#[cfg(unix)]
 fn cursor_apply_returns_action_required_for_missing_cursor_config() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -694,6 +704,7 @@ fn cursor_apply_returns_action_required_for_missing_cursor_config() {
 }
 
 #[test]
+#[cfg(unix)]
 fn cursor_apply_returns_action_required_for_malformed_json() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -734,6 +745,7 @@ fn setup_plan_refuses_symlinked_cursor_target() {
 }
 
 #[test]
+#[cfg(unix)]
 fn cursor_apply_succeeds_and_verifies() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -769,6 +781,7 @@ fn cursor_apply_succeeds_and_verifies() {
 // ---- 6b. client_reload_required result ----
 
 #[test]
+#[cfg(unix)]
 fn cursor_apply_returns_client_reload_required_when_verified() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -793,6 +806,7 @@ fn cursor_apply_returns_client_reload_required_when_verified() {
 // ---- 6c. Partial: docset succeeded but client application could not start ----
 
 #[test]
+#[cfg(unix)]
 fn partial_result_when_docset_succeeds_but_client_fails() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -819,6 +833,7 @@ fn partial_result_when_docset_succeeds_but_client_fails() {
 // ---- 6d. Exact rollback ----
 
 #[test]
+#[cfg(unix)]
 fn rollback_restores_cursor_config() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -862,6 +877,7 @@ fn rollback_restores_cursor_config() {
 // ---- 6e. Later user edit refusal ----
 
 #[test]
+#[cfg(unix)]
 fn rollback_refuses_after_later_user_edit() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -904,6 +920,7 @@ fn rollback_refuses_after_later_user_edit() {
 // ---- 7. Plan hash is an integrity/scope check ----
 
 #[test]
+#[cfg(unix)]
 fn setup_apply_rejects_unknown_plan_hash() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -921,6 +938,7 @@ fn setup_apply_rejects_unknown_plan_hash() {
 // ---- 8. One plan, no nested ensure plan ----
 
 #[test]
+#[cfg(unix)]
 fn setup_plan_creates_exactly_one_plan_file() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -948,6 +966,7 @@ fn setup_plan_creates_exactly_one_plan_file() {
 // ---- 9. Claude Code: manual-only in tests (no real claude CLI) ----
 
 #[test]
+#[cfg(unix)]
 fn claude_code_apply_returns_action_required_without_claude_cli() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -983,6 +1002,7 @@ fn claude_code_apply_returns_action_required_without_claude_cli() {
 // ---- 10. Operation id format ----
 
 #[test]
+#[cfg(unix)]
 fn operation_id_is_setup_prefixed_first_12_hash_chars() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -1049,6 +1069,7 @@ fn rollback_rejects_non_setup_operation_id() {
 }
 
 #[test]
+#[cfg(unix)]
 fn partial_no_rollback_has_no_operation_id() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -1081,6 +1102,7 @@ fn partial_no_rollback_has_no_operation_id() {
 // ---- 12. Redaction: observations contain no paths ----
 
 #[test]
+#[cfg(unix)]
 fn apply_result_observations_contain_no_absolute_paths() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -1140,6 +1162,7 @@ fn setup_plan_rejects_invalid_docset() {
 // ---- 14. Binary path resolution ----
 
 #[test]
+#[cfg(unix)]
 fn setup_apply_works_with_real_binary_path() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -1175,6 +1198,7 @@ fn setup_apply_works_with_real_binary_path() {
 // ---- Gate 1: healthy docset + absent Cursor config => persisted client plan ----
 
 #[test]
+#[cfg(unix)]
 fn gate1_healthy_docset_absent_cursor_config_produces_persisted_client_plan() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -1213,6 +1237,7 @@ fn gate1_healthy_docset_absent_cursor_config_produces_persisted_client_plan() {
 //      then apply leaves config byte-identical ----
 
 #[test]
+#[cfg(unix)]
 fn gate2_noncanonical_cursor_entry_produces_manual_guidance_and_no_mutation() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -1260,6 +1285,7 @@ fn gate2_noncanonical_cursor_entry_produces_manual_guidance_and_no_mutation() {
 //      registry fixture sees installation or adapter is invoked ----
 
 #[test]
+#[cfg(unix)]
 fn gate3_cursor_target_drift_returns_plan_stale_before_install_or_adapter() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -1304,6 +1330,7 @@ fn gate3_cursor_target_drift_returns_plan_stale_before_install_or_adapter() {
 //      calls an adapter ----
 
 #[test]
+#[cfg(unix)]
 fn gate4_manual_clients_retain_docset_plan_and_apply_never_calls_adapter() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -1363,6 +1390,7 @@ fn gate4_manual_clients_retain_docset_plan_and_apply_never_calls_adapter() {
 //      produces a redacted exit-21 outcome and no rollback object ----
 
 #[test]
+#[cfg(unix)]
 fn gate5_metadata_unsafe_produces_applied_but_unverified_no_rollback() {
     let root = tempfile::tempdir().unwrap();
     let _g = isolate(root.path());
@@ -1471,4 +1499,99 @@ fn gate7_offline_missing_docset_creates_no_files() {
         count_entries(root.path()) == 0,
         "offline refusal must create no files under isolated root"
     );
+}
+
+// ---- Non-Unix: a setup path that reaches secure persistence is rejected with
+//      the existing stable higher-level error and creates no plan, metadata,
+//      operation journal, client config, or installed docset ----
+
+#[test]
+#[cfg(not(unix))]
+fn online_setup_plan_fails_closed_without_persisting_or_installing() {
+    let root = tempfile::tempdir().unwrap();
+    let _g = isolate(root.path());
+    let ar = make_approved_root(root.path());
+
+    // Set up a trusted registry index fixture so setup_plan reaches the
+    // store_plan (secure persistence) step.
+    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
+    let package = package_for("nextjs", "14.2.5", &archive_path);
+    setup_index(root.path(), &package);
+
+    // setup_plan must fail closed when it reaches store_plan.
+    let result = setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000);
+    assert!(
+        result.is_err(),
+        "online setup plan must fail closed on unsupported platform"
+    );
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("PLAN_TAMPERED: unsupported platform for no-follow I/O"),
+        "setup_plan must fail closed with the stable platform prefix, got: {msg}"
+    );
+
+    // Zero payload mutation: store_plan initializes empty automation
+    // directories before the unsupported file open, but no plan is persisted.
+    let plans_dir = root.path().join("nowdocs").join("automation").join("plans");
+    assert!(
+        plans_dir.is_dir(),
+        "the existing automation initializer creates an empty plans directory"
+    );
+
+    // Empty operations scaffolding is allowed; no journal, backup, or metadata
+    // payload file may exist.
+    let ops_dir = root
+        .path()
+        .join("nowdocs")
+        .join("automation")
+        .join("operations");
+    assert!(
+        ops_dir.is_dir(),
+        "the existing automation initializer creates an empty operations directory"
+    );
+
+    // No docset was installed.
+    let db_dir = root.path().join("nowdocs").join("docsets").join("nextjs");
+    assert!(
+        !db_dir.exists(),
+        "no docset installation may appear on the unsupported platform"
+    );
+
+    // No client configuration was created.
+    assert!(
+        !root.path().join("client-root").join(".cursor").exists(),
+        "no client config may be created on the unsupported platform"
+    );
+
+    // No automation payload files under the cache root.
+    let auto_root = root.path().join("nowdocs").join("automation");
+    assert!(
+        count_regular_files_recursive(&auto_root) == 0,
+        "no automation payload file may appear under the cache root"
+    );
+}
+
+#[cfg(not(unix))]
+fn count_regular_files_recursive(path: &std::path::Path) -> usize {
+    if !path.exists() {
+        return 0;
+    }
+    std::fs::read_dir(path)
+        .map(|it| {
+            it.flatten()
+                .map(|entry| {
+                    let file_type = entry
+                        .file_type()
+                        .expect("inspect automation entry without following symlinks");
+                    if file_type.is_dir() {
+                        count_regular_files_recursive(&entry.path())
+                    } else {
+                        // Regular files, symlinks/reparse points, and every
+                        // other non-directory entry are all payload.
+                        1
+                    }
+                })
+                .sum()
+        })
+        .unwrap_or(0)
 }

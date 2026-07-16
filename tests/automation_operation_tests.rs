@@ -63,6 +63,7 @@ fn operation_dir_created_with_safe_permissions() {
 }
 
 #[test]
+#[cfg(unix)]
 fn journal_round_trip_excludes_backup_bytes() {
     let tmp = tempfile::tempdir().unwrap();
     let _g = tmp_cache_guard(&tmp);
@@ -113,6 +114,7 @@ fn journal_round_trip_excludes_backup_bytes() {
 }
 
 #[test]
+#[cfg(unix)]
 fn apply_with_backup_records_verified_state() {
     let tmp = tempfile::tempdir().unwrap();
     let _g = tmp_cache_guard(&tmp);
@@ -136,6 +138,7 @@ fn apply_with_backup_records_verified_state() {
 }
 
 #[test]
+#[cfg(unix)]
 fn apply_with_backup_refuses_unsafe_target() {
     let tmp = tempfile::tempdir().unwrap();
     let _g = tmp_cache_guard(&tmp);
@@ -160,10 +163,109 @@ fn apply_with_backup_refuses_unsafe_target() {
 }
 
 // ---------------------------------------------------------------------------
+// Task 3 (non-Unix): journal/private-file and apply persistence fail closed
+// without changing the target or creating operation artifacts
+// ---------------------------------------------------------------------------
+
+#[test]
+#[cfg(not(unix))]
+fn journal_write_fails_closed_without_creating_artifacts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = tmp_cache_guard(&tmp);
+
+    let id = OperationId::new("journal-op").unwrap();
+    let record = OperationRecord {
+        operation_id: id.clone(),
+        created_at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+        state: OperationState::AppliedVerified,
+        target_digest: Some("abcd".repeat(16)),
+        backup_path: Some(operations_root().join("journal-op/backup/original")),
+        logical_target: ".cursor/mcp.json".to_string(),
+    };
+
+    // write_journal must fail closed on the unsupported no-follow path.
+    let err = write_journal(&record).unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("unsupported platform for no-follow I/O"),
+        "write_journal must fail closed with the stable platform prefix, got: {msg}"
+    );
+
+    // read_journal must also fail closed.
+    let err = read_journal(&id).unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("unsupported platform for no-follow I/O"),
+        "read_journal must fail closed with the stable platform prefix, got: {msg}"
+    );
+
+    // Zero payload mutation: init_operation_dir runs before the file-level
+    // refusal, so empty operation/backup directories are expected. No journal,
+    // backup bytes, target metadata, or other regular file may be created.
+    let operation_dir = operations_root().join("journal-op");
+    assert!(
+        operation_dir.join("backup").is_dir(),
+        "the existing initializer creates an empty backup directory"
+    );
+    assert!(
+        !operation_dir.join("journal.json").exists(),
+        "no journal file may be created on the unsupported platform"
+    );
+    let auto_root = nowdocs::cache::automation_root();
+    assert!(
+        count_regular_files_recursive(&auto_root) == 0,
+        "no operation payload file may appear under the automation root"
+    );
+}
+
+#[test]
+#[cfg(not(unix))]
+fn apply_with_backup_fails_closed_without_changing_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = tmp_cache_guard(&tmp);
+
+    let root = approved_root(tmp.path()).unwrap();
+    let target = safe_target(&root, "config.json").unwrap();
+
+    // Pre-create the target with known content.
+    std::fs::write(tmp.path().join("config.json"), b"original content").unwrap();
+    let before = std::fs::read(tmp.path().join("config.json")).unwrap();
+
+    let id = OperationId::new("apply-op").unwrap();
+    let err = apply_with_backup(&id, &target, b"applied content").unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("unsupported platform for no-follow I/O"),
+        "apply_with_backup must fail closed with the stable platform prefix, got: {msg}"
+    );
+
+    // Zero-mutation: the target file is byte-for-byte unchanged.
+    let after = std::fs::read(tmp.path().join("config.json")).unwrap();
+    assert_eq!(
+        after, before,
+        "target file must remain byte-for-byte unchanged after fail-closed rejection"
+    );
+
+    // No operation payload files (journal, backup bytes, target metadata) were
+    // created. Empty initializer directories are allowed.
+    let operation_dir = operations_root().join("apply-op");
+    assert!(
+        operation_dir.join("backup").is_dir(),
+        "the existing initializer creates an empty backup directory"
+    );
+    let auto_root = nowdocs::cache::automation_root();
+    assert!(
+        count_regular_files_recursive(&auto_root) == 0,
+        "no operation payload file may appear under the automation root"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Task 4: digest-guarded rollback and retention metadata
 // ---------------------------------------------------------------------------
 
 #[test]
+#[cfg(unix)]
 fn rollback_restores_matching_digest_target() {
     let tmp = tempfile::tempdir().unwrap();
     let _g = tmp_cache_guard(&tmp);
@@ -183,6 +285,7 @@ fn rollback_restores_matching_digest_target() {
 }
 
 #[test]
+#[cfg(unix)]
 fn rollback_refuses_changed_target() {
     let tmp = tempfile::tempdir().unwrap();
     let _g = tmp_cache_guard(&tmp);
@@ -218,4 +321,31 @@ fn rollback_retention_7d_partial() {
     let t = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
     let expiry = retention_expiry(OperationState::AppliedButUnverified, Some(t)).unwrap();
     assert_eq!(expiry, t + Duration::from_secs(7 * 24 * 3600));
+}
+
+/// Count regular payload files recursively while allowing empty initializer
+/// directory scaffolding.
+#[cfg(not(unix))]
+fn count_regular_files_recursive(path: &std::path::Path) -> usize {
+    if !path.exists() {
+        return 0;
+    }
+    std::fs::read_dir(path)
+        .map(|it| {
+            it.flatten()
+                .map(|entry| {
+                    let file_type = entry
+                        .file_type()
+                        .expect("inspect automation entry without following symlinks");
+                    if file_type.is_dir() {
+                        count_regular_files_recursive(&entry.path())
+                    } else {
+                        // Regular files, symlinks/reparse points, and every
+                        // other non-directory entry are all payload.
+                        1
+                    }
+                })
+                .sum()
+        })
+        .unwrap_or(0)
 }

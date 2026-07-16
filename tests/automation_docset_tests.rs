@@ -273,6 +273,7 @@ fn offline_missing_docset_returns_registry_metadata_required_and_creates_no_file
 // ---- RED tests: online planning persists only selected metadata ----
 
 #[test]
+#[cfg(unix)]
 fn online_planning_creates_plan_and_leaves_no_index_bytes() {
     let root = tempfile::tempdir().unwrap();
     let _guards = isolate(root.path());
@@ -333,6 +334,7 @@ fn online_planning_creates_plan_and_leaves_no_index_bytes() {
 // ---- RED tests: already satisfied ----
 
 #[test]
+#[cfg(unix)]
 fn installed_docset_is_already_satisfied_offline() {
     let root = tempfile::tempdir().unwrap();
     let _guards = isolate(root.path());
@@ -353,6 +355,7 @@ fn installed_docset_is_already_satisfied_offline() {
 }
 
 #[test]
+#[cfg(unix)]
 fn installed_docset_is_already_satisfied_online() {
     let root = tempfile::tempdir().unwrap();
     let _guards = isolate(root.path());
@@ -421,6 +424,7 @@ fn online_planning_rejects_untrusted_catalog() {
 // ---- RED tests: exact apply and repeated apply ----
 
 #[test]
+#[cfg(unix)]
 fn apply_plan_installs_docset_exactly() {
     let root = tempfile::tempdir().unwrap();
     let _guards = isolate(root.path());
@@ -457,6 +461,7 @@ fn apply_plan_installs_docset_exactly() {
 }
 
 #[test]
+#[cfg(unix)]
 fn apply_refuses_archive_whose_installed_version_differs_from_the_plan() {
     let root = tempfile::tempdir().unwrap();
     let _guards = isolate(root.path());
@@ -500,6 +505,7 @@ fn apply_refuses_archive_whose_installed_version_differs_from_the_plan() {
 // ---- RED tests: stale/tampered/expired plan refusal ----
 
 #[test]
+#[cfg(unix)]
 fn apply_refuses_tampered_plan() {
     let root = tempfile::tempdir().unwrap();
     let _guards = isolate(root.path());
@@ -540,6 +546,7 @@ fn apply_refuses_tampered_plan() {
 }
 
 #[test]
+#[cfg(unix)]
 fn apply_refuses_expired_plan() {
     let root = tempfile::tempdir().unwrap();
     let _guards = isolate(root.path());
@@ -571,6 +578,7 @@ fn apply_refuses_expired_plan() {
 }
 
 #[test]
+#[cfg(unix)]
 fn apply_refuses_stale_plan_when_state_changes() {
     let root = tempfile::tempdir().unwrap();
     let _guards = isolate(root.path());
@@ -603,4 +611,86 @@ fn apply_refuses_stale_plan_when_state_changes() {
         msg.contains("PLAN_STALE"),
         "error must carry PLAN_STALE, got: {msg}"
     );
+}
+
+// ---- Non-Unix: a valid operation that reaches required secure persistence is
+//      rejected without installing a docset or leaving plan, staging, or
+//      temporary package bytes ----
+
+#[test]
+#[cfg(not(unix))]
+fn online_planning_fails_closed_without_persisting_or_installing() {
+    let root = tempfile::tempdir().unwrap();
+    let _guards = isolate(root.path());
+
+    // Set up a trusted registry index fixture pointing at a valid release
+    // archive so ensure_plan reaches the store_plan (secure persistence) step.
+    let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
+    let package = package_for("nextjs", "14.2.5", &archive_path);
+    let index_path = root.path().join("index.json");
+    std::fs::write(&index_path, make_index_json(&package)).unwrap();
+    std::env::set_var(
+        "NOWDOCS_REGISTRY_INDEX_URL",
+        format!("file://{}", index_path.display()),
+    );
+
+    // ensure_plan must fail closed when it reaches store_plan, because the
+    // no-follow I/O path is unsupported on this platform.
+    let result = ensure_plan("nextjs", true, 1_000_000_000);
+    assert!(
+        result.is_err(),
+        "online planning must fail closed on unsupported platform"
+    );
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("PLAN_TAMPERED: unsupported platform for no-follow I/O"),
+        "ensure_plan must fail closed with the stable platform prefix, got: {msg}"
+    );
+
+    // Zero payload mutation: store_plan initializes empty automation
+    // directories before the unsupported file open, but no plan is persisted.
+    let plans_dir = root.path().join("nowdocs").join("automation").join("plans");
+    assert!(
+        plans_dir.is_dir(),
+        "the existing automation initializer creates an empty plans directory"
+    );
+
+    // No docset was installed: no db, manifest, or staging bytes.
+    let db_dir = root.path().join("nowdocs").join("docsets").join("nextjs");
+    assert!(
+        !db_dir.exists(),
+        "no docset installation may appear on the unsupported platform"
+    );
+
+    // No plan or other automation payload under the cache root.
+    let auto_root = root.path().join("nowdocs").join("automation");
+    assert!(
+        count_regular_files_recursive(&auto_root) == 0,
+        "no automation payload file may appear under the cache root"
+    );
+}
+
+#[cfg(not(unix))]
+fn count_regular_files_recursive(path: &std::path::Path) -> usize {
+    if !path.exists() {
+        return 0;
+    }
+    std::fs::read_dir(path)
+        .map(|it| {
+            it.flatten()
+                .map(|entry| {
+                    let file_type = entry
+                        .file_type()
+                        .expect("inspect automation entry without following symlinks");
+                    if file_type.is_dir() {
+                        count_regular_files_recursive(&entry.path())
+                    } else {
+                        // Regular files, symlinks/reparse points, and every
+                        // other non-directory entry are all payload.
+                        1
+                    }
+                })
+                .sum()
+        })
+        .unwrap_or(0)
 }
