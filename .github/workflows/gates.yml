@@ -5,6 +5,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,9 +13,6 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_VERSION: 1.97.0
-  # prost-build (lance-encoding) needs protoc; apt installs to /usr/bin/protoc.
-  # Setting PROTOC explicitly avoids PATH-lookup flakiness in cargo subprocesses.
-  PROTOC: /usr/bin/protoc
 
 jobs:
   lockfile:
@@ -46,6 +44,10 @@ jobs:
   lint:
     name: Lint (fmt + clippy)
     runs-on: ubuntu-latest
+    env:
+      # prost-build (lance-encoding) needs protoc; apt installs to /usr/bin/protoc.
+      # Setting PROTOC explicitly avoids PATH-lookup flakiness in cargo subprocesses.
+      PROTOC: /usr/bin/protoc
     steps:
       - uses: actions/checkout@v7.0.0
       - uses: dtolnay/rust-toolchain@stable
@@ -57,6 +59,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: protoc-v1
+          cache-on-failure: true
       - name: Check formatting
         run: cargo fmt --check
       - name: Run clippy
@@ -66,6 +69,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    env:
+      PROTOC: /usr/bin/protoc
     steps:
       - uses: actions/checkout@v7.0.0
       - uses: dtolnay/rust-toolchain@stable
@@ -76,11 +81,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: protoc-v1
+          cache-on-failure: true
       - run: cargo test --locked -- --test-threads=1
 
   build:
     name: Build (release)
     runs-on: ubuntu-latest
+    env:
+      PROTOC: /usr/bin/protoc
     steps:
       - uses: actions/checkout@v7.0.0
       - uses: dtolnay/rust-toolchain@stable
@@ -91,7 +99,43 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: protoc-v1
+          cache-on-failure: true
       - run: cargo build --locked --release
+
+  # --- Cross-platform automation contract (C9) ---
+  # Focused Linux/macOS/Windows matrix that runs the agent-automation,
+  # safe-config, setup, verify, and spawned-NDJSON contract tests on every
+  # supported runner. No clippy, audit, release build, or artifacts here;
+  # those remain owned by the jobs above.
+  cross-platform:
+    name: Cross-Platform (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install protoc (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        run: choco install protoc --yes --no-progress
+      - name: Verify protoc
+        run: protoc --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: cross-platform-${{ matrix.os }}
+          cache-on-failure: true
+      - name: Run focused automation contract tests
+        run: cargo test --locked --test automation_plan_tests --test automation_lock_tests --test automation_operation_tests --test automation_docset_tests --test client_config_io_tests --test client_execution_contract_tests --test setup_tests --test verify_tests --test agent_setup_e2e_tests --test test_isolation_tests -- --test-threads=1
 
   # --- License and security audit ---
   deny:

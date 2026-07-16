@@ -72,18 +72,13 @@ fn config_io_refuses_traversal() {
 }
 
 #[test]
+#[cfg(unix)]
 fn config_io_refuses_symlinked_root() {
     let tmp = tempfile::tempdir().unwrap();
     let real = tmp.path().join("real");
     std::fs::create_dir(&real).unwrap();
     let link = tmp.path().join("link");
-    #[cfg(unix)]
     std::os::unix::fs::symlink(&real, &link).unwrap();
-    #[cfg(not(unix))]
-    {
-        // Symlink testing is Unix-specific; skip on Windows.
-        return;
-    }
     let err = approved_root(&link).unwrap_err();
     let msg = format!("{}", err);
     assert!(
@@ -94,6 +89,7 @@ fn config_io_refuses_symlinked_root() {
 }
 
 #[test]
+#[cfg(unix)]
 fn config_io_refuses_symlinked_target() {
     let tmp = tempfile::tempdir().unwrap();
     let _g = tmp_cache_guard(&tmp);
@@ -102,12 +98,7 @@ fn config_io_refuses_symlinked_target() {
     let real = tmp.path().join("real.txt");
     std::fs::write(&real, b"secret").unwrap();
     let link = tmp.path().join("link.txt");
-    #[cfg(unix)]
     std::os::unix::fs::symlink(&real, &link).unwrap();
-    #[cfg(not(unix))]
-    {
-        return;
-    }
 
     let target = safe_target(&root, "link.txt").unwrap();
     let err = read_target(&target).unwrap_err();
@@ -120,6 +111,7 @@ fn config_io_refuses_symlinked_target() {
 }
 
 #[test]
+#[cfg(unix)]
 fn config_io_refuses_symlinked_parent_component_for_reads_and_writes() {
     let tmp = tempfile::tempdir().unwrap();
     let _g = tmp_cache_guard(&tmp);
@@ -130,12 +122,7 @@ fn config_io_refuses_symlinked_parent_component_for_reads_and_writes() {
     std::fs::write(&external_target, b"outside").unwrap();
 
     let linked_parent = tmp.path().join("linked");
-    #[cfg(unix)]
     std::os::unix::fs::symlink(external.path(), &linked_parent).unwrap();
-    #[cfg(not(unix))]
-    {
-        return;
-    }
 
     let target = safe_target(&root, "linked/config.json").unwrap();
     assert!(
@@ -167,7 +154,49 @@ fn config_io_refuses_nonregular_file() {
     );
 }
 
+// --- Non-Unix: atomic replace/read fail closed; pre-existing target is
+//     byte-for-byte unchanged ---
+
 #[test]
+#[cfg(not(unix))]
+fn config_io_read_and_atomic_replace_fail_closed_on_unsupported_platform() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _g = tmp_cache_guard(&tmp);
+    let root = approved_root(tmp.path()).unwrap();
+
+    // Pre-create the target with known content via plain std::fs (bypassing
+    // the no-follow I/O path so the fixture exists on the unsupported platform).
+    let original = b"pre-existing content";
+    std::fs::write(tmp.path().join("config.json"), original).unwrap();
+
+    let target = safe_target(&root, "config.json").unwrap();
+
+    // read_target must fail closed on the unsupported no-follow path.
+    let err = read_target(&target).unwrap_err();
+    let msg = format!("{:#}", err);
+    assert!(
+        msg.contains("unsupported platform for no-follow I/O"),
+        "read_target must fail closed with the stable platform prefix, got: {msg}"
+    );
+
+    // atomic_replace must also fail closed.
+    let err = atomic_replace(&target, b"replacement").unwrap_err();
+    let msg = format!("{:#}", err);
+    assert!(
+        msg.contains("unsupported platform for no-follow I/O"),
+        "atomic_replace must fail closed with the stable platform prefix, got: {msg}"
+    );
+
+    // Zero-mutation: the pre-existing target is byte-for-byte unchanged.
+    let after = std::fs::read(tmp.path().join("config.json")).unwrap();
+    assert_eq!(
+        after, original,
+        "pre-existing target must remain byte-for-byte unchanged after fail-closed rejection"
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn config_io_atomic_replace_verifies_digest_and_reopens() {
     let tmp = tempfile::tempdir().unwrap();
     let _g = tmp_cache_guard(&tmp);
@@ -183,6 +212,7 @@ fn config_io_atomic_replace_verifies_digest_and_reopens() {
 }
 
 #[test]
+#[cfg(unix)]
 fn config_io_atomic_replace_refuses_changed_target() {
     let tmp = tempfile::tempdir().unwrap();
     let _g = tmp_cache_guard(&tmp);
@@ -197,12 +227,7 @@ fn config_io_atomic_replace_refuses_changed_target() {
     std::fs::write(&external, b"external").unwrap();
     let target_path = tmp.path().join("config.json");
     std::fs::remove_file(&target_path).unwrap();
-    #[cfg(unix)]
     std::os::unix::fs::symlink(&external, &target_path).unwrap();
-    #[cfg(not(unix))]
-    {
-        return;
-    }
 
     let err = atomic_replace(&target, b"second").unwrap_err();
     let msg = format!("{}", err);
@@ -214,6 +239,7 @@ fn config_io_atomic_replace_refuses_changed_target() {
 }
 
 #[test]
+#[cfg(unix)]
 fn config_io_preserves_restrictive_permissions() {
     let tmp = tempfile::tempdir().unwrap();
     let _g = tmp_cache_guard(&tmp);
@@ -223,16 +249,13 @@ fn config_io_preserves_restrictive_permissions() {
     let target = safe_target(&root, "config.json").unwrap();
     atomic_replace(&target, content).unwrap();
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(tmp.path().join("config.json"))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(mode, 0o600, "new file must be owner-only");
-    }
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(tmp.path().join("config.json"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "new file must be owner-only");
 }
 
 // ---------------------------------------------------------------------------
@@ -286,67 +309,59 @@ fn approved_root_accepts_0700_without_chmod() {
 }
 
 #[test]
+#[cfg(unix)]
 fn approved_root_refuses_0775_and_preserves_mode() {
     let tmp = tempfile::tempdir().unwrap();
     let root_dir = tmp.path().join("root_0775");
     std::fs::create_dir(&root_dir).unwrap();
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&root_dir, std::fs::Permissions::from_mode(0o775)).unwrap();
-        let err = approved_root(&root_dir).unwrap_err();
-        let msg = format!("{}", err);
-        assert!(
-            msg.contains("writable") || msg.contains("group") || msg.contains("other"),
-            "expected group/world-writable refusal, got: {}",
-            msg
-        );
-        let actual = std::fs::metadata(&root_dir).unwrap().permissions().mode() & 0o777;
-        assert_eq!(
-            actual, 0o775,
-            "mode must not be changed by failed validation"
-        );
-    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&root_dir, std::fs::Permissions::from_mode(0o775)).unwrap();
+    let err = approved_root(&root_dir).unwrap_err();
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("writable") || msg.contains("group") || msg.contains("other"),
+        "expected group/world-writable refusal, got: {}",
+        msg
+    );
+    let actual = std::fs::metadata(&root_dir).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        actual, 0o775,
+        "mode must not be changed by failed validation"
+    );
 }
 
 #[test]
+#[cfg(unix)]
 fn approved_root_refuses_0777_and_preserves_mode() {
     let tmp = tempfile::tempdir().unwrap();
     let root_dir = tmp.path().join("root_0777");
     std::fs::create_dir(&root_dir).unwrap();
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&root_dir, std::fs::Permissions::from_mode(0o777)).unwrap();
-        let err = approved_root(&root_dir).unwrap_err();
-        let msg = format!("{}", err);
-        assert!(
-            msg.contains("writable") || msg.contains("group") || msg.contains("other"),
-            "expected group/world-writable refusal, got: {}",
-            msg
-        );
-        let actual = std::fs::metadata(&root_dir).unwrap().permissions().mode() & 0o777;
-        assert_eq!(
-            actual, 0o777,
-            "mode must not be changed by failed validation"
-        );
-    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&root_dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let err = approved_root(&root_dir).unwrap_err();
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("writable") || msg.contains("group") || msg.contains("other"),
+        "expected group/world-writable refusal, got: {}",
+        msg
+    );
+    let actual = std::fs::metadata(&root_dir).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        actual, 0o777,
+        "mode must not be changed by failed validation"
+    );
 }
 
 #[test]
+#[cfg(unix)]
 fn approved_root_refuses_symlink_root() {
     let tmp = tempfile::tempdir().unwrap();
     let real = tmp.path().join("real");
     std::fs::create_dir(&real).unwrap();
     let link = tmp.path().join("link");
-    #[cfg(unix)]
     std::os::unix::fs::symlink(&real, &link).unwrap();
-    #[cfg(not(unix))]
-    {
-        return;
-    }
     let err = approved_root(&link).unwrap_err();
     let msg = format!("{}", err);
     assert!(

@@ -179,6 +179,7 @@ fn plan_id_is_deterministic_for_equivalent_semantics() {
 // --- Test 2: store/load round trip, no overwrite, 0600 on Unix ---
 
 #[test]
+#[cfg(unix)]
 fn plan_store_load_round_trip_and_no_overwrite() {
     let dir = tempfile::tempdir().unwrap();
     let _g = EnvGuard::set("XDG_CACHE_HOME", dir.path().to_str().unwrap());
@@ -249,9 +250,52 @@ fn plan_store_load_round_trip_and_no_overwrite() {
     );
 }
 
+// --- Test 2 (non-Unix): valid plan cannot be persisted/read through unsupported
+//     secure I/O; the cache tree is unchanged ---
+
+#[test]
+#[cfg(not(unix))]
+fn plan_store_and_load_fail_closed_on_unsupported_platform() {
+    let dir = tempfile::tempdir().unwrap();
+    let _g = EnvGuard::set("XDG_CACHE_HOME", dir.path().to_str().unwrap());
+
+    let p = sample_plan(1_700_000_000);
+
+    // store_plan must fail closed on the unsupported no-follow path.
+    let err = plan::store_plan(&p).unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("PLAN_TAMPERED: unsupported platform for no-follow I/O"),
+        "store_plan must fail closed with the stable platform prefix, got: {msg}"
+    );
+
+    // load_plan must also fail closed.
+    let fake_id = "0".repeat(64);
+    let err = plan::load_plan(&fake_id, 1_700_000_060).unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.starts_with("PLAN_TAMPERED"),
+        "load_plan must fail closed as PLAN_TAMPERED, got: {msg}"
+    );
+
+    // Zero payload mutation: the initializer may create empty private
+    // automation/plans/operations directories before the file-level refusal,
+    // but no plan or other regular file may be persisted.
+    let auto_root = nowdocs::cache::automation_root();
+    assert!(
+        auto_root.join("plans").is_dir(),
+        "the existing automation initializer creates an empty plans directory"
+    );
+    assert!(
+        count_regular_files_recursive(&auto_root) == 0,
+        "no plan or other payload file may appear under the automation root"
+    );
+}
+
 // --- Test 3: rejects tampering, expiry, and symlink ---
 
 #[test]
+#[cfg(unix)]
 fn plan_rejects_tampering_expiry_and_symlink() {
     let dir = tempfile::tempdir().unwrap();
     let _g = EnvGuard::set("XDG_CACHE_HOME", dir.path().to_str().unwrap());
@@ -750,4 +794,31 @@ fn normalize_preserves_valid_plan_and_canonicalizes_lists() {
         id, id_reversed,
         "reordered canonical lists must normalize to the same id"
     );
+}
+
+/// Count regular payload files recursively while allowing empty initializer
+/// directory scaffolding.
+#[cfg(not(unix))]
+fn count_regular_files_recursive(path: &std::path::Path) -> usize {
+    if !path.exists() {
+        return 0;
+    }
+    std::fs::read_dir(path)
+        .map(|it| {
+            it.flatten()
+                .map(|entry| {
+                    let file_type = entry
+                        .file_type()
+                        .expect("inspect automation entry without following symlinks");
+                    if file_type.is_dir() {
+                        count_regular_files_recursive(&entry.path())
+                    } else {
+                        // Regular files, symlinks/reparse points, and every
+                        // other non-directory entry are all payload.
+                        1
+                    }
+                })
+                .sum()
+        })
+        .unwrap_or(0)
 }

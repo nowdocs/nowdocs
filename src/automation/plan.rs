@@ -52,7 +52,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::agent_contract::{self, AGENT_CONTRACT_SCHEMA_VERSION};
+use crate::agent_contract::AGENT_CONTRACT_SCHEMA_VERSION;
+// Keep agent_contract import for potential future use by C4+.
+#[allow(unused_imports)]
+use crate::agent_contract as _agent_contract;
 use crate::cache;
 use crate::input;
 
@@ -666,7 +669,18 @@ pub fn store_plan(plan: &AutomationPlan) -> Result<String> {
                 );
             }
         }
-        Err(e) => Err(e).with_context(|| format!("create (O_NOFOLLOW) plan {}", path.display())),
+        Err(e) => Err(map_plan_create_error(e, &path)),
+    }
+}
+
+/// Add create-path context to ordinary I/O errors without obscuring a stable
+/// plan-integrity classification emitted by a fail-closed platform branch.
+fn map_plan_create_error(error: std::io::Error, path: &Path) -> anyhow::Error {
+    let message = error.to_string();
+    if message.starts_with("PLAN_TAMPERED:") {
+        anyhow::anyhow!("{message}")
+    } else {
+        anyhow::Error::new(error).context(format!("create (O_NOFOLLOW) plan {}", path.display()))
     }
 }
 
@@ -805,6 +819,22 @@ mod tests {
     }
 }
 
-// Keep agent_contract import for potential future use by C4+.
-#[allow(unused_imports)]
-use agent_contract as _agent_contract;
+#[cfg(test)]
+mod error_mapping_tests {
+    use std::path::Path;
+
+    use super::map_plan_create_error;
+
+    #[test]
+    fn create_error_preserves_plan_tampered_prefix() {
+        let error = map_plan_create_error(
+            std::io::Error::other("PLAN_TAMPERED: unsupported platform for no-follow I/O"),
+            Path::new("plans/plan.json"),
+        );
+
+        assert!(
+            error.to_string().starts_with("PLAN_TAMPERED:"),
+            "classification must survive create-path context: {error}"
+        );
+    }
+}
