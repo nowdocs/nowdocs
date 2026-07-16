@@ -173,7 +173,7 @@ fn config_io_read_and_atomic_replace_fail_closed_on_unsupported_platform() {
 
     // read_target must fail closed on the unsupported no-follow path.
     let err = read_target(&target).unwrap_err();
-    let msg = format!("{}", err);
+    let msg = format!("{:#}", err);
     assert!(
         msg.contains("unsupported platform for no-follow I/O"),
         "read_target must fail closed with the stable platform prefix, got: {msg}"
@@ -181,7 +181,7 @@ fn config_io_read_and_atomic_replace_fail_closed_on_unsupported_platform() {
 
     // atomic_replace must also fail closed.
     let err = atomic_replace(&target, b"replacement").unwrap_err();
-    let msg = format!("{}", err);
+    let msg = format!("{:#}", err);
     assert!(
         msg.contains("unsupported platform for no-follow I/O"),
         "atomic_replace must fail closed with the stable platform prefix, got: {msg}"
