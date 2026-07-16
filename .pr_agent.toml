@@ -1,10 +1,10 @@
 [config]
-model = "moonshot/kimi2.7"
+model = "moonshot/k3"
 max_model_tokens = 100000
 temperature = 1
 
 [litellm]
-timeout = 120
+timeout = 900
 num_retries = 5
 
 [pr_reviewer]

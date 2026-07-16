@@ -29,8 +29,8 @@ jobs:
           MOONSHOT_API_BASE: "https://api.kimi.com/coding/v1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CONFIG__USE_REPO_SETTINGS_FILE: "true"
-          CONFIG__MODEL: "moonshot/kimi2.7"
-          CONFIG__AI_TIMEOUT: "870"
+          CONFIG__MODEL: "moonshot/k3"
+          CONFIG__AI_TIMEOUT: "900"
           CONFIG__DISABLE_FALLBACK_MODELS: "true"
           CONFIG__CUSTOM_MODEL_MAX_TOKENS: 100000
           CONFIG__TEMPERATURE: 1
