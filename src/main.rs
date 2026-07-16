@@ -783,16 +783,20 @@ fn run_setup_plan(client: &str, docset: &str, online: bool, json: bool) -> anyho
             }
             Ok(())
         }
-        Ok(nowdocs::automation::setup::SetupPlanResult::PlanCreated { plan_hash, .. }) => {
+        Ok(nowdocs::automation::setup::SetupPlanResult::PlanCreated {
+            plan_hash,
+            disclosure,
+            ..
+        }) => {
             let next_actions = vec![nowdocs::agent_contract::NextAction {
                 id: "setup-apply".to_string(),
                 kind: "setup_apply".to_string(),
-                risk: nowdocs::agent_contract::RiskLevel::Additive,
+                risk: disclosure.risk,
                 summary: format!("Apply the setup plan for {client} + {docset}"),
                 changes_state: true,
-                network_access: false,
+                network_access: disclosure.network_access,
                 requires_confirmation: true,
-                reversible: true,
+                reversible: disclosure.reversible,
                 argv: Some(vec![
                     "setup".to_string(),
                     "apply".to_string(),

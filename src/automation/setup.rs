@@ -55,6 +55,45 @@ const CURSOR_TARGET_RELATIVE: &str = ".cursor/mcp.json";
 /// Logical id for the Cursor target file precondition.
 const CURSOR_TARGET_LOGICAL_ID: &str = "cursor-mcp-json";
 
+/// Redacted approval metadata for the combined `setup apply` action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetupApplyDisclosure {
+    pub risk: RiskLevel,
+    pub network_access: bool,
+    pub reversible: bool,
+}
+
+impl SetupApplyDisclosure {
+    fn from_actions(actions: &[PlannedAction]) -> Self {
+        let risk = actions
+            .iter()
+            .map(|action| action.risk)
+            .max_by_key(|risk| risk_precedence(*risk))
+            .unwrap_or(RiskLevel::ReadOnly);
+        let network_access = actions.iter().any(|action| action.network_access);
+        let includes_docset_change = actions
+            .iter()
+            .any(|action| action.kind == "registry_install" || action.kind == "registry_update");
+        let reversible = !includes_docset_change && actions.iter().all(|action| action.reversible);
+
+        Self {
+            risk,
+            network_access,
+            reversible,
+        }
+    }
+}
+
+fn risk_precedence(risk: RiskLevel) -> u8 {
+    match risk {
+        RiskLevel::ReadOnly => 0,
+        RiskLevel::InternalEphemeral => 1,
+        RiskLevel::Additive => 2,
+        RiskLevel::Mutating => 3,
+        RiskLevel::Destructive => 4,
+    }
+}
+
 /// Outcome of `setup_plan`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SetupPlanResult {
@@ -65,6 +104,7 @@ pub enum SetupPlanResult {
     PlanCreated {
         plan_hash: String,
         precondition: DocsetPrecondition,
+        disclosure: SetupApplyDisclosure,
     },
     /// Offline planning cannot determine registry state; run with `--online`.
     RegistryMetadataRequired { precondition: DocsetPrecondition },
@@ -181,10 +221,12 @@ pub fn setup_plan(
         cursor_noncanonical,
         now_unix_secs,
     )?;
+    let disclosure = SetupApplyDisclosure::from_actions(&plan.actions);
     let plan_hash = store_plan(&plan)?;
     Ok(SetupPlanResult::PlanCreated {
         plan_hash,
         precondition,
+        disclosure,
     })
 }
 
