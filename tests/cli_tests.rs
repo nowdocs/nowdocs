@@ -995,6 +995,112 @@ fn test_setup_plan_offline_missing_docset_returns_registry_metadata_required() {
         v["next_actions"].as_array().is_some_and(|a| !a.is_empty()),
         "setup plan must include a next action"
     );
+    let action = &v["next_actions"][0];
+    assert_eq!(action["risk"], "read_only");
+    assert_eq!(action["changes_state"], false);
+    assert_eq!(action["network_access"], true);
+    assert_eq!(action["requires_confirmation"], false);
+    assert_eq!(action["reversible"], true);
+}
+
+fn setup_plan_index_json(docset: &str, version: &str) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "generated_at": "2026-07-16T00:00:00Z",
+        "packages": [{
+            "docset": docset,
+            "version": version,
+            "license": "MIT",
+            "chunk_count": 2,
+            "freshness": "2026-07-16",
+            "download_url": format!(
+                "https://github.com/nowdocs-registry/{docset}/releases/download/{docset}-{version}/{docset}-{version}.lance.tar"
+            ),
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "description": "test package"
+        }]
+    })
+}
+
+fn run_setup_plan_online_with_index(
+    root: &std::path::Path,
+    docset: &str,
+    version: &str,
+) -> serde_json::Value {
+    let index_path = root.join("setup-index.json");
+    std::fs::write(
+        &index_path,
+        setup_plan_index_json(docset, version).to_string(),
+    )
+    .unwrap();
+    let index_url = format!("file://{}", index_path.display());
+    let _g = EnvGuard::set("NOWDOCS_REGISTRY_INDEX_URL", &index_url);
+    let out = run_nowdocs_isolated(
+        root,
+        &[
+            "setup", "plan", "--client", "cursor", "--docset", docset, "--online", "--json",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "online setup planning must succeed, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).expect("setup plan emits one JSON document")
+}
+
+fn assert_setup_apply_disclosure(v: &serde_json::Value, expected_risk: &str) {
+    assert_eq!(v["command"], "setup.plan");
+    assert_eq!(v["status"], "action_required");
+    assert_eq!(v["code"], "action_required");
+    let plan_hash = v["data"]["plan_hash"]
+        .as_str()
+        .expect("plan hash must be present");
+    let action = &v["next_actions"][0];
+    assert_eq!(action["id"], "setup-apply");
+    assert_eq!(action["kind"], "setup_apply");
+    assert_eq!(action["risk"], expected_risk);
+    assert_eq!(action["changes_state"], true);
+    assert_eq!(action["network_access"], true);
+    assert_eq!(action["requires_confirmation"], true);
+    assert_eq!(action["reversible"], false);
+    assert_eq!(
+        action["argv"],
+        serde_json::json!(["setup", "apply", "--plan-hash", plan_hash])
+    );
+    assert_eq!(action["target_paths"], serde_json::json!([]));
+
+    let serialized = action.to_string();
+    assert!(!serialized.contains("file://"));
+    assert!(!serialized.contains("github.com"));
+    assert!(!serialized.contains(&root_path_fragment()));
+}
+
+fn root_path_fragment() -> String {
+    std::env::temp_dir().to_string_lossy().into_owned()
+}
+
+#[test]
+#[cfg(unix)]
+fn test_setup_plan_fresh_install_discloses_network_and_partial_reversibility() {
+    let root = tempfile::tempdir().unwrap();
+    let v = run_setup_plan_online_with_index(root.path(), "nextjs", "14.2.5");
+    assert_setup_apply_disclosure(&v, "additive");
+}
+
+#[test]
+#[cfg(unix)]
+fn test_setup_plan_update_discloses_mutating_network_action() {
+    let root = tempfile::tempdir().unwrap();
+    let tar = write_tarball(root.path(), "react", "18.2.0");
+    let url = format!("file://{}", tar.display());
+    {
+        let _g = EnvGuard::set("XDG_CACHE_HOME", root.path().to_str().unwrap());
+        nowdocs::registry::install("react", &url).expect("install old fixture docset");
+    }
+
+    let v = run_setup_plan_online_with_index(root.path(), "react", "18.3.1");
+    assert_setup_apply_disclosure(&v, "mutating");
 }
 
 #[test]
