@@ -50,6 +50,7 @@ fn command_name(cmd: &Commands) -> &'static str {
         Commands::Smoke { .. } => "smoke",
         Commands::Doctor { .. } => "doctor",
         Commands::Cache { .. } => "cache",
+        Commands::Verify { .. } => "verify",
     }
 }
 
@@ -476,6 +477,11 @@ fn run(cmd: Commands) -> anyhow::Result<()> {
                 Ok(())
             }
         },
+        Commands::Verify {
+            docset,
+            client,
+            json,
+        } => run_verify(&docset, client.as_deref(), json),
     }
 }
 
@@ -666,6 +672,44 @@ fn ensure_error_mapping(
             msg,
         )
     }
+}
+
+// ---- C8: verify command ----
+
+/// Run `nowdocs verify --docset <DOCSET> [--client <CLIENT>] [--json]`.
+///
+/// The library entry point accepts only explicit validated inputs and never
+/// resolves HOME/XDG itself (contract §3). `main.rs` resolves an approved root
+/// only at the binary boundary when `--client` is present; an absent/unusable
+/// root is a redacted observation, never a path leak.
+fn run_verify(docset: &str, client: Option<&str>, json: bool) -> anyhow::Result<()> {
+    // Resolve the approved client root only when --client is present. An
+    // absent/unusable root is passed as None; the library reports a redacted
+    // action_required observation rather than leaking a path.
+    let root = if client.is_some() {
+        resolve_approved_root().ok()
+    } else {
+        None
+    };
+
+    let result = nowdocs::verify::verify(docset, client, root.as_deref());
+
+    if json {
+        let envelope = result.to_envelope();
+        println!("{}", serde_json::to_string_pretty(&envelope)?);
+    } else {
+        print!("{}", nowdocs::verify::format_human(&result));
+    }
+
+    // Exit with the result's authoritative exit code (derived only from
+    // code.exit_code()). 0 keeps the Ok(()) path (no update reminder: verify is
+    // read-only and not an eligible command). Non-zero codes exit the process
+    // directly to preserve the contract exit classes.
+    let exit = result.exit_code();
+    if exit != 0 {
+        std::process::exit(exit.into());
+    }
+    Ok(())
 }
 
 // ---- C7: setup orchestration ----

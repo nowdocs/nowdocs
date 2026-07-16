@@ -1265,3 +1265,236 @@ fn update_notification_opt_out_suppresses() {
         "opt-out must suppress the reminder, got stderr: {stderr}"
     );
 }
+
+// ---- C8: agent contract - verify command ----
+//
+// Read-only, offline-safe verification. All tests run under isolated
+// HOME/XDG/cwd roots with deliberately unusable proxy variables so any
+// accidental network attempt fails fast and nothing touches real user state.
+
+#[test]
+fn test_verify_help_lists_subcommand() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["verify", "--help"]);
+    assert!(
+        out.status.success(),
+        "verify --help should exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("--docset"),
+        "verify --help must mention --docset, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("--client"),
+        "verify --help must mention --client, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("--json"),
+        "verify --help must mention --json, got: {stdout}"
+    );
+}
+
+#[test]
+fn test_verify_help_lists_subcommand_at_top_level() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["--help"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("verify"),
+        "top-level --help must list `verify`, got: {stdout}"
+    );
+}
+
+#[test]
+fn test_verify_invalid_docset_returns_invalid_request_exit_2() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["verify", "--docset", "../etc", "--json"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "invalid docset must exit 2 (invalid_request), got {:?}; stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("verify emits one JSON document");
+    assert_eq!(v["schema_version"], 1);
+    assert_eq!(v["command"], "verify");
+    assert_eq!(v["status"], "action_required");
+    assert_eq!(v["code"], "invalid_request");
+    // Invalid input must not create any automation/cache/client directory.
+    let mut entries = std::fs::read_dir(root.path()).expect("read isolated root");
+    assert!(
+        entries.next().is_none(),
+        "invalid verify input must create no files or directories under isolated roots"
+    );
+}
+
+#[test]
+fn test_verify_invalid_client_returns_invalid_request_exit_2() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(
+        root.path(),
+        &[
+            "verify",
+            "--docset",
+            "nextjs",
+            "--client",
+            "Bad/Client",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "invalid client must exit 2 (invalid_request), got {:?}",
+        out.status.code()
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("verify emits one JSON document");
+    assert_eq!(v["command"], "verify");
+    assert_eq!(v["code"], "invalid_request");
+    let mut entries = std::fs::read_dir(root.path()).expect("read isolated root");
+    assert!(
+        entries.next().is_none(),
+        "invalid verify client must create no files or directories"
+    );
+}
+
+#[test]
+fn test_verify_absent_docset_returns_action_required_exit_20() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(
+        root.path(),
+        &["verify", "--docset", "absent-docset-xyz", "--json"],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(20),
+        "absent docset must exit 20, got {:?}; stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // stdout parses as exactly one JSON value (from_slice rejects trailing data).
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("verify emits exactly one JSON document");
+    assert_eq!(v["schema_version"], 1);
+    assert_eq!(v["nowdocs_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(v["command"], "verify");
+    assert_eq!(v["status"], "action_required");
+    assert_eq!(v["code"], "docset_missing");
+    assert!(
+        v["summary"].as_str().is_some_and(|s| !s.is_empty()),
+        "summary must be a non-empty English string"
+    );
+    assert_eq!(v["next_actions"], serde_json::json!([]));
+    assert!(v["rollback"].is_null());
+
+    // No path or raw error leaks: the isolated root path must not appear.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let root_str = root.path().to_string_lossy().to_string();
+    assert!(
+        !stdout.contains(&root_str),
+        "verify output must not contain the isolated root path, got: {stdout}"
+    );
+
+    // Offline and no-write proof: the absent-prerequisite path creates no files.
+    let mut entries = std::fs::read_dir(root.path()).expect("read isolated root");
+    assert!(
+        entries.next().is_none(),
+        "verify on absent docset must create no files or directories under isolated roots"
+    );
+}
+
+#[test]
+fn test_verify_absent_docset_human_output_is_concise_and_path_free() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["verify", "--docset", "absent-docset-xyz"]);
+    assert_eq!(
+        out.status.code(),
+        Some(20),
+        "absent docset must exit 20 in human mode too"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let root_str = root.path().to_string_lossy().to_string();
+    assert!(
+        !stdout.contains(&root_str),
+        "human verify output must not contain the isolated root path, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("/Users/"),
+        "human verify output must not contain user paths, got: {stdout}"
+    );
+    // Concise: at most a handful of lines.
+    let lines = stdout.lines().count();
+    assert!(
+        lines <= 6,
+        "human verify output must be concise (<= 6 lines), got {lines}: {stdout}"
+    );
+}
+
+#[test]
+fn test_verify_json_emits_exactly_one_document() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(
+        root.path(),
+        &["verify", "--docset", "absent-docset-xyz", "--json"],
+    );
+    // from_slice rejects trailing data, so this proves exactly one JSON document.
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("verify --json emits exactly one JSON document");
+    // A single document has exactly one top-level object; confirm no second doc.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let trimmed = stdout.trim();
+    let mut depth = 0i32;
+    let mut doc_ends = 0;
+    for ch in trimmed.chars() {
+        match ch {
+            '{' | '[' => depth += 1,
+            '}' | ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    doc_ends += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        doc_ends, 1,
+        "verify --json must emit exactly one JSON document, saw {doc_ends} top-level documents: {stdout}"
+    );
+    let _ = v;
+}
+
+#[test]
+fn test_capabilities_reports_verify_implemented() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["capabilities", "--json"]);
+    assert!(
+        out.status.success(),
+        "capabilities --json should exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("capabilities emits one JSON document");
+    let commands = v["data"]["commands"]
+        .as_array()
+        .expect("commands must be an array");
+    let verify = commands
+        .iter()
+        .find(|c| c["id"] == "verify")
+        .expect("verify command declaration must exist");
+    assert_eq!(
+        verify["implemented"], true,
+        "C8 implements verify: capabilities must say so"
+    );
+    assert_eq!(verify["read_only"], true, "verify must be read_only");
+    assert_eq!(
+        verify["network_access"], false,
+        "verify must have no network access"
+    );
+}

@@ -497,3 +497,34 @@ fn cached_update_reminder_no_duplicate_claim() {
         "second serve must not re-claim the reminder, got stderr: {stderr2}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// C8: the MCP tool surface stays read-only. `verify` is a CLI-only command and
+// must never appear as an MCP tool. tools/list continues to advertise exactly
+// the two read-only tools.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tools_list_does_not_advertise_verify_as_mcp_tool() {
+    let (mut s, _child) = spawn();
+    let _ = s.round_trip(&serde_json::json!({
+        "jsonrpc":"2.0","id":1,"method":"initialize",
+        "params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}
+    }));
+    let resp = s.round_trip(&serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
+    let tools = resp["result"]["tools"].as_array().expect("tools array");
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert!(
+        !names.contains(&"verify"),
+        "verify must not be an MCP tool, got: {names:?}"
+    );
+    assert_eq!(
+        nowdocs::mcp::MCP_TOOL_NAMES.len(),
+        2,
+        "exactly two read-only MCP tools"
+    );
+    assert!(
+        !nowdocs::mcp::MCP_TOOL_NAMES.contains(&"verify"),
+        "MCP_TOOL_NAMES must not contain verify"
+    );
+}
