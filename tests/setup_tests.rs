@@ -1512,10 +1512,13 @@ fn online_setup_plan_fails_closed_without_persisting_or_installing() {
     let _g = isolate(root.path());
     let ar = make_approved_root(root.path());
 
-    // Set up a trusted registry index fixture so setup_plan reaches the
-    // store_plan (secure persistence) step.
+    // Set up a trusted registry index fixture with a syntactically safe
+    // release URL. Planning never downloads this package; using HTTPS here
+    // avoids embedding Windows backslashes in the stored plan target path,
+    // so setup_plan reaches the store_plan (secure persistence) step.
     let archive_path = root.path().join("nextjs-14.2.5.lance.tar");
-    let package = package_for("nextjs", "14.2.5", &archive_path);
+    let mut package = package_for("nextjs", "14.2.5", &archive_path);
+    package.download_url = "https://github.com/nowdocs-registry/nextjs/releases/download/nextjs-14.2.5/nextjs-14.2.5.lance.tar".to_string();
     setup_index(root.path(), &package);
 
     // setup_plan must fail closed when it reaches store_plan.
