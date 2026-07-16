@@ -270,6 +270,13 @@ pub fn capabilities_data() -> CapabilitiesData {
                 CapabilitySupport::Unsupported,
             ),
             client(
+                "codex",
+                CapabilitySupport::Supported,
+                CapabilitySupport::Supported,
+                CapabilitySupport::Conditional,
+                CapabilitySupport::Conditional,
+            ),
+            client(
                 "cursor",
                 CapabilitySupport::Supported,
                 CapabilitySupport::Supported,

@@ -527,7 +527,13 @@ fn test_capabilities_json_uses_agent_envelope() {
         .collect();
     assert_eq!(
         client_ids,
-        ["claude-code", "claude-desktop", "cursor", "generic"]
+        [
+            "claude-code",
+            "claude-desktop",
+            "codex",
+            "cursor",
+            "generic"
+        ]
     );
     let boundaries = &data["security_boundaries"];
     assert_eq!(boundaries["mcp_read_only"], true);

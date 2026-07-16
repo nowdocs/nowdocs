@@ -1,9 +1,9 @@
 //! Typed client adapter model and generation-only configuration output.
 //!
-//! C5 adapters never write real client configuration files and never spawn
-//! client processes. They only report capabilities, detect markers, and emit
-//! deterministic, redacted stdio commands and JSON fragments for later manual
-//! or orchestrated application.
+//! The base adapter contract emits deterministic, redacted stdio commands and
+//! configuration fragments. Conditional C6 adapters may use their official
+//! client CLIs for explicitly approved apply, verify, and rollback actions;
+//! they must never edit client configuration files directly.
 
 use std::path::Path;
 use std::str::FromStr;
@@ -21,6 +21,7 @@ pub use config_io::{
 
 pub(crate) mod claude_code;
 pub(crate) mod claude_desktop;
+pub(crate) mod codex;
 pub(crate) mod cursor;
 pub(crate) mod generic;
 
@@ -30,6 +31,7 @@ pub(crate) mod generic;
 pub enum ClientId {
     ClaudeCode,
     ClaudeDesktop,
+    Codex,
     Cursor,
     Generic,
 }
@@ -40,6 +42,7 @@ impl ClientId {
         match self {
             Self::ClaudeCode => "claude-code",
             Self::ClaudeDesktop => "claude-desktop",
+            Self::Codex => "codex",
             Self::Cursor => "cursor",
             Self::Generic => "generic",
         }
@@ -53,6 +56,7 @@ impl FromStr for ClientId {
         match s {
             "claude-code" => Ok(Self::ClaudeCode),
             "claude-desktop" => Ok(Self::ClaudeDesktop),
+            "codex" => Ok(Self::Codex),
             "cursor" => Ok(Self::Cursor),
             "generic" => Ok(Self::Generic),
             _ => anyhow::bail!("unsupported client id: {s}"),
@@ -207,6 +211,7 @@ pub fn all_adapters() -> Vec<Box<dyn ClientAdapter>> {
     vec![
         Box::new(claude_code::ClaudeCodeAdapter),
         Box::new(claude_desktop::ClaudeDesktopAdapter),
+        Box::new(codex::CodexAdapter),
         Box::new(cursor::CursorAdapter),
         Box::new(generic::GenericAdapter),
     ]

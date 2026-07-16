@@ -308,7 +308,13 @@ fn capabilities_data_is_deterministically_ordered() {
     let client_ids: Vec<&str> = data.clients.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(
         client_ids,
-        ["claude-code", "claude-desktop", "cursor", "generic"]
+        [
+            "claude-code",
+            "claude-desktop",
+            "codex",
+            "cursor",
+            "generic"
+        ]
     );
 
     // Rebuilding yields byte-identical JSON: ordering is deterministic.
@@ -321,14 +327,15 @@ fn capabilities_data_is_deterministically_ordered() {
 fn capabilities_matrix_matches_researched_clients() {
     let data = capabilities_data();
 
-    // Matrix locked by client-adapter-research.md (2026-07-13).
+    // Matrix locked by client-adapter-research.md (2026-07-13) plus the C6E
+    // Codex CLI adapter contract (2026-07-16).
     let expected: [(
         &str,
         CapabilitySupport,
         CapabilitySupport,
         CapabilitySupport,
         CapabilitySupport,
-    ); 4] = [
+    ); 5] = [
         (
             "claude-code",
             CapabilitySupport::Supported,
@@ -342,6 +349,13 @@ fn capabilities_matrix_matches_researched_clients() {
             CapabilitySupport::Conditional,
             CapabilitySupport::Unsupported,
             CapabilitySupport::Unsupported,
+        ),
+        (
+            "codex",
+            CapabilitySupport::Supported,
+            CapabilitySupport::Supported,
+            CapabilitySupport::Conditional,
+            CapabilitySupport::Conditional,
         ),
         (
             "cursor",
