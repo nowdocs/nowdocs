@@ -30,7 +30,7 @@ use crate::automation::plan::{
 use crate::cache::{self, InstalledDocsetState};
 use crate::clients::{
     all_adapters, approved_root, compute_digest, read_target, safe_target, ApprovedRoot,
-    ClientExecutionOutcome, ClientExecutionRequest,
+    ClientAdapter, ClientExecutionOutcome, ClientExecutionRequest,
 };
 use crate::input;
 use crate::registry;
@@ -182,8 +182,13 @@ pub fn setup_plan(
     let state = cache::check_docset_state_pure(&docset_id);
     let precondition = docset::docset_precondition(&docset_id, &state);
 
-    // Capture the Cursor target fingerprint for conditional adapters.
-    let target_fingerprint = cursor_target_fingerprint(approved_root)?;
+    // Capture the Cursor target fingerprint only for Cursor. Codex is assessed
+    // through its CLI adapter, not by reading or fingerprinting Cursor files.
+    let target_fingerprint = if client_id == crate::clients::ClientId::Cursor {
+        cursor_target_fingerprint(approved_root)?
+    } else {
+        Vec::new()
+    };
 
     if !online {
         // Offline: already_satisfied requires BOTH healthy docset AND canonical
@@ -207,10 +212,10 @@ pub fn setup_plan(
         }
     }
 
-    // Check for noncanonical existing Cursor entry before building the plan.
-    // A noncanonical entry means we plan client_manual_guidance instead of
+    // Check for a noncanonical existing entry before building the plan. A
+    // noncanonical entry means we plan client_manual_guidance instead of
     // client_apply (contract 3).
-    let cursor_noncanonical = cursor_has_noncanonical_entry(&client_id, approved_root);
+    let client_noncanonical = client_has_noncanonical_entry(&client_id, approved_root);
 
     let plan = build_setup_plan(
         &docset_id,
@@ -218,7 +223,7 @@ pub fn setup_plan(
         &package,
         &precondition,
         &target_fingerprint,
-        cursor_noncanonical,
+        client_noncanonical,
         now_unix_secs,
     )?;
     let disclosure = SetupApplyDisclosure::from_actions(&plan.actions);
@@ -300,32 +305,36 @@ pub fn setup_apply(
 
     // --- Target fingerprint drift check (contract 2) ---
     // After the global lock and before docset installation or adapter
-    // invocation: verify the Cursor target fingerprint matches the plan.
+    // invocation: verify the Cursor target fingerprint matches the plan, but
+    // only if the plan actually carries target-file preconditions. Codex plans
+    // have no such preconditions and therefore never inspect Cursor files here.
     let root = approved_root(approved_root_path)?;
-    let current_fingerprint = cursor_target_fingerprint(&root)?;
     let planned_fingerprints: Vec<&TargetFilePrecondition> =
         plan.preconditions.target_files.iter().collect();
-    for planned_tf in &planned_fingerprints {
-        let current_tf = current_fingerprint
-            .iter()
-            .find(|tf| tf.logical_id == planned_tf.logical_id);
-        match (planned_tf, current_tf) {
-            (planned, Some(current)) => {
-                if planned.exists != current.exists || planned.sha256 != current.sha256 {
+    if !planned_fingerprints.is_empty() {
+        let current_fingerprint = cursor_target_fingerprint(&root)?;
+        for planned_tf in &planned_fingerprints {
+            let current_tf = current_fingerprint
+                .iter()
+                .find(|tf| tf.logical_id == planned_tf.logical_id);
+            match (planned_tf, current_tf) {
+                (planned, Some(current)) => {
+                    if planned.exists != current.exists || planned.sha256 != current.sha256 {
+                        anyhow::bail!(
+                            "PLAN_STALE: target file {} fingerprint drifted since plan creation",
+                            planned.logical_id
+                        );
+                    }
+                }
+                (planned, None) => {
+                    // Should not happen if the fingerprint was captured, but if the
+                    // plan has a target file precondition and we can't find the
+                    // current fingerprint, the plan is stale.
                     anyhow::bail!(
-                        "PLAN_STALE: target file {} fingerprint drifted since plan creation",
+                        "PLAN_STALE: target file {} fingerprint cannot be verified",
                         planned.logical_id
                     );
                 }
-            }
-            (planned, None) => {
-                // Should not happen if the fingerprint was captured, but if the
-                // plan has a target file precondition and we can't find the
-                // current fingerprint, the plan is stale.
-                anyhow::bail!(
-                    "PLAN_STALE: target file {} fingerprint cannot be verified",
-                    planned.logical_id
-                );
             }
         }
     }
@@ -569,8 +578,10 @@ fn error_is_not_found(error: &anyhow::Error) -> bool {
     })
 }
 
-/// True when the client's MCP configuration is canonically verified: the
-/// Cursor entry has the current absolute binary and exactly `args: ["serve"]`.
+/// True when the client's MCP configuration is canonically verified. For
+/// Cursor this inspects `.cursor/mcp.json`; for Codex it delegates to the
+/// read-only Codex CLI adapter. Manual-only clients are never canonically
+/// verified.
 fn is_client_canonically_verified(client: &crate::clients::ClientId, root: &ApprovedRoot) -> bool {
     match client {
         crate::clients::ClientId::Cursor => {
@@ -606,36 +617,82 @@ fn is_client_canonically_verified(client: &crate::clients::ClientId, root: &Appr
                 .unwrap_or(false);
             command_matches && args_match
         }
+        // Codex canonical state is assessed exclusively through the official
+        // `codex mcp` CLI; no Codex-owned configuration file is read.
+        crate::clients::ClientId::Codex => {
+            if let Some(request) = canonical_check_request(root) {
+                crate::clients::codex::CodexAdapter
+                    .verify(&request)
+                    .map(|result| result.outcome == ClientExecutionOutcome::Verified)
+                    .unwrap_or(false)
+            } else {
+                false
+            }
+        }
         // Manual-only clients are never "canonically verified" for
         // already_satisfied purposes (they don't have automatic apply).
         _ => false,
     }
 }
 
-/// True when the Cursor config has an existing `nowdocs` entry that is
-/// noncanonical (wrong binary or wrong args).
-fn cursor_has_noncanonical_entry(client: &crate::clients::ClientId, root: &ApprovedRoot) -> bool {
-    if *client != crate::clients::ClientId::Cursor {
-        return false;
+/// True when the client has an existing `nowdocs` entry that is noncanonical
+/// (wrong binary or wrong args). For Cursor this inspects the Cursor config
+/// file; for Codex it uses the read-only Codex CLI adapter. Other clients are
+/// never treated as having a noncanonical entry.
+fn client_has_noncanonical_entry(client: &crate::clients::ClientId, root: &ApprovedRoot) -> bool {
+    match client {
+        crate::clients::ClientId::Cursor => {
+            let target = match safe_target(root, CURSOR_TARGET_RELATIVE) {
+                Ok(t) => t,
+                Err(_) => return false,
+            };
+            let bytes = match read_target(&target) {
+                Ok(b) => b,
+                Err(_) => return false,
+            };
+            let config: serde_json::Value = match serde_json::from_slice(&bytes) {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+            let nowdocs = config.get("mcpServers").and_then(|s| s.get("nowdocs"));
+            if nowdocs.is_none() {
+                return false;
+            }
+            // An entry exists; check if it is canonical.
+            !is_client_canonically_verified(client, root)
+        }
+        crate::clients::ClientId::Codex => {
+            // A noncanonical Codex registration is one that the adapter detects
+            // as present but that does not verify as the exact canonical entry
+            // (name nowdocs, enabled, stdio, current binary, args ["serve"]).
+            if let Some(request) = canonical_check_request(root) {
+                let adapter = crate::clients::codex::CodexAdapter;
+                let detected = adapter
+                    .detect(root)
+                    .map(|result| result.detected)
+                    .unwrap_or(false);
+                let verified = adapter
+                    .verify(&request)
+                    .map(|result| result.outcome == ClientExecutionOutcome::Verified)
+                    .unwrap_or(false);
+                detected && !verified
+            } else {
+                false
+            }
+        }
+        _ => false,
     }
-    let target = match safe_target(root, CURSOR_TARGET_RELATIVE) {
-        Ok(t) => t,
-        Err(_) => return false,
-    };
-    let bytes = match read_target(&target) {
-        Ok(b) => b,
-        Err(_) => return false,
-    };
-    let config: serde_json::Value = match serde_json::from_slice(&bytes) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-    let nowdocs = config.get("mcpServers").and_then(|s| s.get("nowdocs"));
-    if nowdocs.is_none() {
-        return false;
+}
+
+/// Build a synthetic execution request for read-only canonical-state probes.
+/// This is not a real operation and is never persisted; it only supplies the
+/// absolute nowdocs binary path the adapter needs for `verify`.
+fn canonical_check_request(root: &ApprovedRoot) -> Option<ClientExecutionRequest> {
+    let binary_path = std::env::current_exe().ok()?;
+    if !binary_path.is_absolute() {
+        return None;
     }
-    // An entry exists; check if it is canonical.
-    !is_client_canonically_verified(client, root)
+    ClientExecutionRequest::new("setup-canonical-check", root.clone(), binary_path).ok()
 }
 
 /// Build a single `AutomationPlan` for a setup covering docset + client.
@@ -645,7 +702,7 @@ fn build_setup_plan(
     package: &registry::RegistryPackage,
     precondition: &DocsetPrecondition,
     target_fingerprint: &[TargetFilePrecondition],
-    cursor_noncanonical: bool,
+    client_noncanonical: bool,
     now_unix_secs: u64,
 ) -> Result<crate::automation::plan::AutomationPlan> {
     let (action_kind, risk, summary_verb) = if precondition.installed {
@@ -685,11 +742,12 @@ fn build_setup_plan(
     let caps = adapter.capabilities();
 
     if caps.apply == CapabilitySupport::Conditional {
-        // For conditional adapters (Cursor, Claude Code): check if the config
-        // has a noncanonical nowdocs entry. If so, plan manual guidance instead
-        // of client_apply (contract 3).
+        // For conditional adapters (Cursor, Claude Code, Codex): check if the
+        // config has a noncanonical nowdocs entry. If so, plan manual guidance
+        // instead of client_apply (contract 3).
         let needs_manual = match *client {
-            crate::clients::ClientId::Cursor => cursor_noncanonical,
+            crate::clients::ClientId::Cursor => client_noncanonical,
+            crate::clients::ClientId::Codex => client_noncanonical,
             _ => false,
         };
 
