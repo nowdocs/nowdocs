@@ -1,6 +1,6 @@
 # Agent Setup
 
-This guide defines the safe machine-to-machine setup flow for current builds from `main`. It is designed for coding agents that can run local commands but must leave state-changing decisions to the user.
+This guide defines the safe machine-to-machine setup flow introduced in nowdocs v0.2.0. It is designed for coding agents that can run local commands but must leave state-changing decisions to the user.
 
 ## Safety model
 
@@ -160,4 +160,4 @@ Safety rules:
 
 ### Manual fallback
 
-If the installed binary does not expose `capabilities` or `setup`, follow [Getting Started](GETTING_STARTED.md) and [MCP Clients](MCP_CLIENTS.md). Manual setup remains supported for published v0.1.2 binaries and clients that do not expose a managed adapter.
+If the installed binary does not expose `capabilities` or `setup`, follow [Getting Started](GETTING_STARTED.md) and [MCP Clients](MCP_CLIENTS.md). Manual setup remains supported for legacy v0.1.2 binaries and clients that do not expose a managed adapter.

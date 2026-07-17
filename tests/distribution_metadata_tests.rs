@@ -7,7 +7,7 @@ fn cargo_toml() -> String {
 #[test]
 fn release_metadata_matches_tar_gz_archive_layout() {
     let manifest = cargo_toml();
-    assert!(manifest.contains("version = \"0.1.2\""));
+    assert!(manifest.contains("version = \"0.2.0\""));
     assert!(manifest.contains("rust-version = \"1.97\""));
     assert!(manifest.contains(
         "pkg-url = \"{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.tar.gz\""

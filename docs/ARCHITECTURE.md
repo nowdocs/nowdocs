@@ -1,6 +1,6 @@
 # Architecture
 
-nowdocs is a local-first, single-binary Rust MCP server for retrieving current third-party documentation during coding-agent sessions. By default, it keeps query text, embeddings, and indexed document content on the user's device. Users can explicitly opt in to [native Cohere reranking](RERANKING.md), which sends disclosed search inputs to Cohere.
+nowdocs v0.2.0 is a local-first, single-binary Rust MCP server for retrieving current third-party documentation during coding-agent sessions. By default, it keeps query text, embeddings, and indexed document content on the user's device. Users can explicitly opt in to [native Cohere reranking](RERANKING.md), which sends disclosed search inputs to Cohere.
 
 ## Retrieval data flow
 

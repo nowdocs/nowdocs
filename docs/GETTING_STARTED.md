@@ -39,9 +39,9 @@ cargo build --release
 
 ## 2. Choose a setup method
 
-### Agent-first setup on current `main`
+### Agent-first setup in v0.2.0
 
-Current builds from `main` let an agent discover capabilities, inspect state, prepare one plan, wait for approval, apply it, and verify the result:
+nowdocs v0.2.0 lets an agent discover capabilities, inspect state, prepare one plan, wait for approval, apply it, and verify the result:
 
 ```bash
 nowdocs capabilities --json
@@ -60,7 +60,7 @@ Use [Agent Setup](AGENT_SETUP.md) for the required confirmation, result handling
 
 ### Manual setup
 
-The manual path works with the current v0.1.2 release and remains useful for advanced workflows.
+The manual path remains supported in v0.2.0 and is also the compatibility path for v0.1.2 binaries.
 
 ## 3. Diagnose the environment and prepare the model
 
@@ -102,7 +102,7 @@ nowdocs ingest ./my-docs my-docset \
 
 ## 5. Verify retrieval before configuring a client
 
-Current builds from `main` provide read-only, offline verification:
+v0.2.0 provides read-only, offline verification:
 
 ```bash
 nowdocs verify --docset nextjs --json
@@ -110,7 +110,7 @@ nowdocs verify --docset nextjs --json
 
 `verify` never downloads the model. If it reports `model_missing`, run `nowdocs doctor --model` explicitly and retry.
 
-The v0.1.2 manual retrieval check is:
+For v0.1.2 compatibility or a manual end-to-end retrieval check, use:
 
 ```bash
 nowdocs smoke nextjs "middleware matcher configuration"
@@ -178,9 +178,14 @@ nowdocs doctor --repair
 
 For an agent-managed client change, use `setup rollback` only when the apply response supplied a rollback object and operation id. Rollback restores only the operation-owned client configuration change; it does not uninstall or downgrade a docset, and it refuses to overwrite later user edits. A successful rollback consumes its setup-owned authorization, so the same operation id cannot be replayed against a registration the user creates later.
 
-## 9. Binary update reminders
+## 9. Binary and docset update reminders
 
-After a successful `install`, `update`, `ensure`, `registry`, `smoke`, or `doctor` command, nowdocs checks GitHub for a newer binary release at most once every 24 hours. If a newer version is found, it prints a package-manager-neutral reminder to stderr:
+After a successful `install`, `update`, `ensure`, `registry`, `smoke`, or `doctor` command, nowdocs may perform two best-effort, time-bounded checks:
+
+- GitHub latest-release metadata for a newer nowdocs binary;
+- trusted registry metadata for updates to installed registry docsets.
+
+Each channel is checked at most once every 24 hours. Failures are silent and never change the primary command result. If a newer binary is found, nowdocs prints a package-manager-neutral reminder to stderr:
 
 ```text
 A newer version of nowdocs is available (<version>).
@@ -188,9 +193,9 @@ Update using the package manager you used to install nowdocs.
 https://github.com/nowdocs/nowdocs/releases/latest
 ```
 
-nowdocs never downloads or installs a binary update automatically. `nowdocs serve` may also display a previously discovered reminder from the local cache on stderr, but it never makes a network request for this purpose.
+Available docset updates are also listed on stderr with explicit `nowdocs update <docset>` commands. nowdocs never downloads or installs either kind of update automatically. `nowdocs serve` may display a previously discovered cached reminder, but it never initiates a binary or registry update check.
 
-To disable all version checks and reminders, set:
+To disable both update-check channels and all cached reminders, set:
 
 ```bash
 export NOWDOCS_UPDATE_CHECK=0

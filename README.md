@@ -6,7 +6,7 @@ Coding agents can confidently suggest APIs that have changed since their trainin
 
 ![Architecture overview: documentation sources are ingested, embedded, indexed locally, retrieved through hybrid search, sanitized, and served to MCP clients over stdio.](docs/assets/architecture.png)
 
-**Current published release:** [v0.1.2](https://github.com/nowdocs/nowdocs/releases/tag/v0.1.2). The agent-first commands documented on `main` are planned for the next release; use the [v0.1.2 documentation](https://github.com/nowdocs/nowdocs/tree/v0.1.2) with the published binary. nowdocs is free to run, has no telemetry, and by default keeps queries, embeddings, and indexed documentation on your device.
+**Version 0.2.0:** This documentation describes the v0.2.0 release. Prebuilt assets appear on the [v0.2.0 release page](https://github.com/nowdocs/nowdocs/releases/tag/v0.2.0) after the release workflow finishes; until then, [v0.1.2](https://github.com/nowdocs/nowdocs/releases/tag/v0.1.2) remains the latest published binary. nowdocs is free to run, has no telemetry, and by default keeps queries, embeddings, and indexed documentation on your device.
 
 ## Why nowdocs
 
@@ -81,7 +81,7 @@ Client-specific behavior for Codex CLI, Claude Code, Cursor, Claude Desktop, and
 
 ## Agent-first setup
 
-Current builds from `main` expose a deterministic JSON contract so an agent can inspect first, propose one plan, wait for explicit approval, apply it, and verify the result:
+v0.2.0 exposes a deterministic JSON contract so an agent can inspect first, propose one plan, wait for explicit approval, apply it, and verify the result:
 
 ```bash
 # Read-only and offline-safe.
@@ -151,7 +151,7 @@ Before documentation reaches an LLM, nowdocs sanitizes returned text and metadat
 
 See the [Privacy Policy](docs/PRIVACY.md), [Threat Model](docs/THREAT_MODEL.md), and [Security Policy](.github/SECURITY.md) for details.
 
-After a successful `install`, `update`, `ensure`, `registry`, `smoke`, or `doctor` command, nowdocs checks GitHub for a newer binary release at most once every 24 hours and prints a reminder to stderr. It never downloads or installs an update automatically. Set `NOWDOCS_UPDATE_CHECK=0` to disable the check.
+After a successful `install`, `update`, `ensure`, `registry`, `smoke`, or `doctor` command, nowdocs may perform two best-effort checks: GitHub latest-release metadata for a newer binary and trusted registry metadata for updates to installed registry docsets. Each channel is time-bounded and checked at most once every 24 hours; failures are silent and never change the primary command result. Reminders are printed to stderr, and nowdocs never downloads or installs an update automatically. Set `NOWDOCS_UPDATE_CHECK=0` to disable both checks and their cached reminders. `nowdocs serve` remains cache-only and never initiates either check.
 
 ## Current scope and limitations
 
