@@ -965,7 +965,10 @@ fn run_setup_apply(plan_hash: &str, json: bool) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Ok(nowdocs::automation::setup::SetupApplyResult::ActionRequired { observations }) => {
+        Ok(nowdocs::automation::setup::SetupApplyResult::ActionRequired {
+            observations,
+            manual_guidance: _,
+        }) => {
             if json {
                 print_setup_json(
                     "setup.apply",
@@ -987,7 +990,10 @@ fn run_setup_apply(plan_hash: &str, json: bool) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Ok(nowdocs::automation::setup::SetupApplyResult::PartialNoRollback { observations }) => {
+        Ok(nowdocs::automation::setup::SetupApplyResult::PartialNoRollback {
+            observations,
+            manual_guidance: _,
+        }) => {
             // Docset succeeded but client apply could not start. No client
             // change committed, so no rollback metadata is retained.
             if json {

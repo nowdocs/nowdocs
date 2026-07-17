@@ -78,6 +78,29 @@ fn make_approved_root(path: &std::path::Path) -> ApprovedRoot {
     approved_root(path).expect("approved root")
 }
 
+fn assert_manual_guidance_redacted(
+    guidance: &nowdocs::automation::setup::ClientManualGuidance,
+    forbidden_root: &std::path::Path,
+) {
+    let rendered = format!("{guidance:?}");
+    assert!(
+        !rendered.contains(&forbidden_root.to_string_lossy().to_string()),
+        "manual guidance must not expose the approved root: {rendered}"
+    );
+    if let Ok(exe) = std::env::current_exe() {
+        assert!(
+            !rendered.contains(&exe.to_string_lossy().to_string()),
+            "manual guidance must not expose the current executable: {rendered}"
+        );
+    }
+    for forbidden in ["TOKEN", "token", "secret", "HOME"] {
+        assert!(
+            !rendered.contains(forbidden),
+            "manual guidance must not expose {forbidden}: {rendered}"
+        );
+    }
+}
+
 fn two_chunks() -> Vec<Chunk> {
     vec![
         Chunk {
@@ -599,6 +622,30 @@ fn claude_desktop_plan_produces_manual_only_and_no_write() {
             .any(|a| a.kind == "client_manual_guidance"),
         "claude-desktop must have client_manual_guidance action"
     );
+
+    let result = setup_apply(&plan_hash, root.path(), 1_000_000_001).unwrap();
+    let guidance = match result {
+        SetupApplyResult::ActionRequired {
+            observations,
+            manual_guidance,
+        } => {
+            assert!(observations.iter().any(|o| o == "client_manual_guidance"));
+            manual_guidance
+        }
+        other => panic!("expected ActionRequired, got: {other:?}"),
+    };
+    assert_eq!(guidance.client, "claude-desktop");
+    assert_eq!(
+        guidance.redacted_fragment,
+        r#"{"claude-desktop":{"delivery":"mcpb","server":"nowdocs","status":"future_deliverable"}}"#
+    );
+    assert_eq!(guidance.steps.len(), 3);
+    assert!(guidance.steps.iter().all(|step| !step.is_empty()));
+    assert_manual_guidance_redacted(&guidance, root.path());
+    assert!(
+        !root.path().join("Claude").exists(),
+        "guidance-only setup must not create Claude Desktop configuration"
+    );
 }
 
 #[test]
@@ -633,6 +680,26 @@ fn generic_plan_produces_manual_only_and_no_write() {
             .any(|a| a.kind == "client_manual_guidance"),
         "generic must have client_manual_guidance action"
     );
+
+    let result = setup_apply(&plan_hash, root.path(), 1_000_000_001).unwrap();
+    let guidance = match result {
+        SetupApplyResult::ActionRequired {
+            observations,
+            manual_guidance,
+        } => {
+            assert!(observations.iter().any(|o| o == "client_manual_guidance"));
+            manual_guidance
+        }
+        other => panic!("expected ActionRequired, got: {other:?}"),
+    };
+    assert_eq!(guidance.client, "generic");
+    assert_eq!(
+        guidance.redacted_fragment,
+        r#"{"mcpServers":{"nowdocs":{"command":"<binary>","args":["serve"]}}}"#
+    );
+    assert_eq!(guidance.steps.len(), 2);
+    assert!(guidance.steps.iter().all(|step| !step.is_empty()));
+    assert_manual_guidance_redacted(&guidance, root.path());
 }
 
 // ---- 5. Cursor conflict, missing config, malformed JSON ----
@@ -685,7 +752,22 @@ fn cursor_apply_returns_action_required_for_missing_cursor_config() {
 
     let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
     match result {
-        SetupApplyResult::PartialNoRollback { .. } => {}
+        SetupApplyResult::PartialNoRollback {
+            observations,
+            manual_guidance,
+        } => {
+            assert!(observations.iter().any(|o| o == "target_absent_or_unsafe"));
+            assert_eq!(manual_guidance.client, "cursor");
+            assert_eq!(
+                manual_guidance.redacted_fragment,
+                r#"{"mcpServers":{"nowdocs":{"command":"<binary>","args":["serve"]}}}"#
+            );
+            assert_eq!(
+                manual_guidance.steps,
+                vec!["Add the nowdocs server entry to ~/.cursor/mcp.json."]
+            );
+            assert_manual_guidance_redacted(&manual_guidance, root.path());
+        }
         other => panic!(
             "expected PartialNoRollback for missing target, got: {:?}",
             other
@@ -986,7 +1068,27 @@ fn claude_code_apply_returns_action_required_without_claude_cli() {
 
     let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
     match result {
-        SetupApplyResult::PartialNoRollback { .. } => {}
+        SetupApplyResult::PartialNoRollback {
+            observations,
+            manual_guidance,
+        } => {
+            assert!(
+                observations
+                    .iter()
+                    .any(|o| o.contains("claude") || o.contains("CLI")),
+                "missing CLI result must retain a stable client observation"
+            );
+            assert_eq!(manual_guidance.client, "claude-code");
+            assert_eq!(
+                manual_guidance.redacted_fragment,
+                r#"{"mcpServers":{"nowdocs":{"command":"<binary>","args":["serve"]}}}"#
+            );
+            assert_eq!(
+                manual_guidance.steps,
+                vec!["Run the generated claude mcp command at user scope."]
+            );
+            assert_manual_guidance_redacted(&manual_guidance, root.path());
+        }
         other => panic!(
             "expected PartialNoRollback when claude CLI is missing, got: {:?}",
             other
@@ -1082,7 +1184,7 @@ fn partial_no_rollback_has_no_operation_id() {
 
     let result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
     match result {
-        SetupApplyResult::PartialNoRollback { observations } => {
+        SetupApplyResult::PartialNoRollback { observations, .. } => {
             assert!(
                 !observations
                     .iter()
@@ -1118,8 +1220,8 @@ fn apply_result_observations_contain_no_absolute_paths() {
     let observations = match &result {
         SetupApplyResult::SetupComplete { observations, .. }
         | SetupApplyResult::ClientReloadRequired { observations, .. }
-        | SetupApplyResult::ActionRequired { observations }
-        | SetupApplyResult::PartialNoRollback { observations }
+        | SetupApplyResult::ActionRequired { observations, .. }
+        | SetupApplyResult::PartialNoRollback { observations, .. }
         | SetupApplyResult::Partial { observations, .. }
         | SetupApplyResult::AppliedButUnverified { observations } => observations,
     };
