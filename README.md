@@ -6,11 +6,11 @@ Coding agents can confidently suggest APIs that have changed since their trainin
 
 ![Architecture overview: documentation sources are ingested, embedded, indexed locally, retrieved through hybrid search, sanitized, and served to MCP clients over stdio.](docs/assets/architecture.png)
 
-**Current release:** [v0.1.2](https://github.com/nowdocs/nowdocs/releases/tag/v0.1.2). nowdocs is free to run, has no telemetry, and keeps queries, embeddings, and indexed documentation on your device.
+**Current release:** [v0.1.2](https://github.com/nowdocs/nowdocs/releases/tag/v0.1.2). nowdocs is free to run, has no telemetry, and by default keeps queries, embeddings, and indexed documentation on your device.
 
 ## Why nowdocs
 
-- **Local-first:** query text, embeddings, and document content stay on your machine.
+- **Local-first by default:** query text, embeddings, and document content stay on your machine unless you opt in to native Cohere reranking.
 - **Hybrid retrieval:** semantic search, BM25 full-text search, and reciprocal-rank fusion (RRF).
 - **MCP over stdio:** no listening port, host, or public service to configure.
 - **Curated registry:** start with current Next.js, React, and Vue docsets, or ingest local Markdown documentation.
@@ -78,6 +78,13 @@ Register the server with an MCP client using this generic configuration:
 ```
 
 Client-specific configuration for Cursor, Claude Code, Claude Desktop, and Aider is in [MCP Clients](docs/MCP_CLIENTS.md).
+
+## Optional native Cohere reranking
+
+Reranking is disabled by default. When enabled, it sends search inputs to
+Cohere using your account. Read the [native Cohere reranking guide](docs/RERANKING.md)
+before enabling it: it covers configuration, data transfer, failure fallback,
+model selection, MCP-client environments, and the current OpenRouter boundary.
 
 ## Common workflows
 
