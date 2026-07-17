@@ -1598,3 +1598,465 @@ fn count_regular_files_recursive(path: &std::path::Path) -> usize {
         })
         .unwrap_or(0)
 }
+
+// ---- 13. Codex CLI integration (C7R5) ----
+//
+// These tests exercise setup plan/apply for the `codex` client through a local
+// fake `codex` executable. They isolate PATH/HOME/XDG/TMPDIR/XDG_CACHE_HOME so
+// no real Codex configuration, model, registry network, or client process is
+// touched, and they assert that Codex never causes setup to inspect, create,
+// or fingerprint `.cursor/mcp.json`.
+
+#[cfg(unix)]
+fn make_executable(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(path).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms).unwrap();
+}
+
+/// Escape a string for safe insertion into a JSON string literal. Only handles
+/// the characters that can realistically appear in a test-binary path.
+#[cfg(unix)]
+fn json_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Isolated environment with a fake `codex` on PATH. The fake records its argv
+/// and maintains state (absent/present/present-other) in the scratch directory.
+#[cfg(unix)]
+struct CodexTestEnv {
+    #[allow(dead_code)]
+    tmp: tempfile::TempDir,
+    bin_dir: std::path::PathBuf,
+    client_root: std::path::PathBuf,
+    argv_log: std::path::PathBuf,
+    state_file: std::path::PathBuf,
+    command_file: std::path::PathBuf,
+    _env_guard: CodexEnvGuard,
+}
+
+#[cfg(unix)]
+impl CodexTestEnv {
+    fn new() -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let client_root = tmp.path().join("client-root");
+        std::fs::create_dir_all(&client_root).unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let argv_log = tmp.path().join("argv.log");
+        let state_file = tmp.path().join("codex-state");
+        let command_file = tmp.path().join("codex-command");
+
+        let env_guard = CodexEnvGuard::new(&bin_dir, &home, tmp.path());
+
+        let mut env = Self {
+            tmp,
+            bin_dir,
+            client_root,
+            argv_log,
+            state_file,
+            command_file,
+            _env_guard: env_guard,
+        };
+        env.install_fake_codex();
+        env
+    }
+
+    fn approved_root(&self) -> ApprovedRoot {
+        make_approved_root(&self.client_root)
+    }
+
+    fn install_docset(&self, docset: &str, version: &str) {
+        let archive = make_release_archive(docset, version);
+        let tar_path = self.tmp.path().join(format!("{docset}-{version}.tar"));
+        std::fs::write(&tar_path, &archive).unwrap();
+        let url = format!("file://{}", tar_path.display());
+        registry::install(docset, &url).expect("install fixture docset");
+    }
+
+    fn setup_index(&self, docset: &str, version: &str) -> RegistryPackage {
+        let archive_path = self
+            .tmp
+            .path()
+            .join(format!("{docset}-{version}.lance.tar"));
+        let package = package_for(docset, version, &archive_path);
+        let index_path = self.tmp.path().join("index.json");
+        std::fs::write(&index_path, make_index_json(&package)).unwrap();
+        std::env::set_var(
+            "NOWDOCS_REGISTRY_INDEX_URL",
+            format!("file://{}", index_path.display()),
+        );
+        package
+    }
+
+    fn set_state(&self, state: &str) {
+        std::fs::write(&self.state_file, state).unwrap();
+    }
+
+    fn set_command(&self, command: &str) {
+        std::fs::write(&self.command_file, json_escape(command)).unwrap();
+    }
+
+    fn recorded_argv(&self) -> Vec<String> {
+        let bytes = std::fs::read(&self.argv_log).unwrap_or_default();
+        bytes
+            .split(|&b| b == 0)
+            .filter(|s| !s.is_empty())
+            .map(|s| String::from_utf8_lossy(s).to_string())
+            .collect()
+    }
+
+    fn install_fake_codex(&mut self) {
+        let script = r#"#!/bin/sh
+{
+  printf 'codex\0'
+  for a in "$@"; do
+    printf '%s\0' "$a"
+  done
+} >> "__ARGV_LOG__"
+state_file="__STATE__"
+command_file="__COMMAND__"
+subcmd="$2"
+case "$subcmd" in
+  get)
+    if [ -r "$state_file" ]; then
+      read -r state < "$state_file"
+    else
+      state=absent
+    fi
+    case "$state" in
+      present)
+        read -r cmd < "$command_file"
+        printf '{"name":"nowdocs","enabled":true,"transport":{"type":"stdio","command":"%s","args":["serve"]}}\n' "$cmd"
+        exit 0
+        ;;
+      present-other)
+        printf '{"name":"nowdocs","enabled":true,"transport":{"type":"stdio","command":"/bin/other-nowdocs","args":["serve"]}}\n'
+        exit 0
+        ;;
+      disabled)
+        read -r cmd < "$command_file"
+        printf '{"name":"nowdocs","enabled":false,"transport":{"type":"stdio","command":"%s","args":["serve"]}}\n' "$cmd"
+        exit 0
+        ;;
+      *)
+        printf "Error: No MCP server named 'nowdocs' found.\n" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  add)
+    echo present > "$state_file"
+    exit 0
+    ;;
+  remove)
+    echo absent > "$state_file"
+    exit 0
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+"#;
+        let script = script
+            .replace("__ARGV_LOG__", &self.argv_log.display().to_string())
+            .replace("__STATE__", &self.state_file.display().to_string())
+            .replace("__COMMAND__", &self.command_file.display().to_string());
+        let codex = self.bin_dir.join("codex");
+        std::fs::write(&codex, script).unwrap();
+        make_executable(&codex);
+
+        // Prime the canonical command file with the current test binary path.
+        let binary = std::env::current_exe().unwrap();
+        self.set_command(&binary.display().to_string());
+    }
+}
+
+/// RAII guard that holds the global ENV_LOCK and restores PATH/HOME/XDG env
+/// values on drop.
+#[cfg(unix)]
+struct CodexEnvGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    saved_path: Option<std::ffi::OsString>,
+    saved_home: Option<std::ffi::OsString>,
+    saved_xdg_config: Option<std::ffi::OsString>,
+    saved_xdg_data: Option<std::ffi::OsString>,
+    saved_xdg_cache: Option<std::ffi::OsString>,
+    saved_tmpdir: Option<std::ffi::OsString>,
+    saved_index_url: Option<std::ffi::OsString>,
+}
+
+#[cfg(unix)]
+impl CodexEnvGuard {
+    fn new(bin_dir: &std::path::Path, home: &std::path::Path, xdg_root: &std::path::Path) -> Self {
+        let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved_path = std::env::var_os("PATH");
+        let saved_home = std::env::var_os("HOME");
+        let saved_xdg_config = std::env::var_os("XDG_CONFIG_HOME");
+        let saved_xdg_data = std::env::var_os("XDG_DATA_HOME");
+        let saved_xdg_cache = std::env::var_os("XDG_CACHE_HOME");
+        let saved_tmpdir = std::env::var_os("TMPDIR");
+        let saved_index_url = std::env::var_os("NOWDOCS_REGISTRY_INDEX_URL");
+
+        std::env::set_var("PATH", bin_dir);
+        std::env::set_var("HOME", home);
+        std::env::set_var("XDG_CONFIG_HOME", xdg_root.join(".config"));
+        std::env::set_var("XDG_DATA_HOME", xdg_root.join(".local").join("share"));
+        std::env::set_var("XDG_CACHE_HOME", xdg_root);
+        std::env::set_var("TMPDIR", xdg_root);
+        std::env::remove_var("NOWDOCS_REGISTRY_INDEX_URL");
+
+        Self {
+            _lock: lock,
+            saved_path,
+            saved_home,
+            saved_xdg_config,
+            saved_xdg_data,
+            saved_xdg_cache,
+            saved_tmpdir,
+            saved_index_url,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for CodexEnvGuard {
+    fn drop(&mut self) {
+        restore_env("PATH", &self.saved_path);
+        restore_env("HOME", &self.saved_home);
+        restore_env("XDG_CONFIG_HOME", &self.saved_xdg_config);
+        restore_env("XDG_DATA_HOME", &self.saved_xdg_data);
+        restore_env("XDG_CACHE_HOME", &self.saved_xdg_cache);
+        restore_env("TMPDIR", &self.saved_tmpdir);
+        restore_env("NOWDOCS_REGISTRY_INDEX_URL", &self.saved_index_url);
+    }
+}
+
+#[cfg(unix)]
+fn restore_env(key: &str, saved: &Option<std::ffi::OsString>) {
+    match saved {
+        Some(v) => std::env::set_var(key, v),
+        None => std::env::remove_var(key),
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn codex_plan_absent_creates_apply_and_verify_actions() {
+    let env = CodexTestEnv::new();
+    env.setup_index("nextjs", "14.2.5");
+    env.set_state("absent");
+    let ar = env.approved_root();
+
+    let result = setup_plan("nextjs", "codex", &ar, true, 1_000_000_000).unwrap();
+    let plan_hash = match result {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
+        other => panic!("expected PlanCreated, got: {:?}", other),
+    };
+
+    let plan = load_plan(&plan_hash, 1_000_000_001).unwrap();
+    assert_eq!(plan.inputs.client.as_deref(), Some("codex"));
+
+    let kinds: Vec<&str> = plan.actions.iter().map(|a| a.kind.as_str()).collect();
+    assert!(
+        kinds.contains(&"client_apply"),
+        "absent codex registration must produce client_apply, got: {:?}",
+        kinds
+    );
+    assert!(
+        kinds.contains(&"client_verify"),
+        "absent codex registration must produce client_verify, got: {:?}",
+        kinds
+    );
+    assert!(
+        !kinds.contains(&"client_manual_guidance"),
+        "absent registration must not produce manual guidance"
+    );
+
+    assert!(
+        plan.preconditions.target_files.is_empty(),
+        "codex plan must not carry Cursor target-file preconditions"
+    );
+    assert!(
+        !env.client_root.join(".cursor").exists(),
+        "codex planning must not create .cursor files"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn codex_plan_canonical_docset_returns_already_satisfied() {
+    let env = CodexTestEnv::new();
+    env.install_docset("react", "18.3.1");
+    env.set_state("present");
+    let ar = env.approved_root();
+
+    let result = setup_plan("react", "codex", &ar, false, 1_000_000_000).unwrap();
+    assert!(
+        matches!(result, SetupPlanResult::AlreadySatisfied { .. }),
+        "healthy docset + canonical codex registration must be already satisfied, got: {:?}",
+        result
+    );
+
+    assert!(
+        !env.client_root.join(".cursor").exists(),
+        "codex already-satisfied check must not touch .cursor"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn codex_plan_noncanonical_returns_manual_guidance() {
+    let env = CodexTestEnv::new();
+    env.setup_index("nextjs", "14.2.5");
+    env.set_state("present-other");
+    let ar = env.approved_root();
+
+    let result = setup_plan("nextjs", "codex", &ar, true, 1_000_000_000).unwrap();
+    let plan_hash = match result {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
+        other => panic!("expected PlanCreated, got: {:?}", other),
+    };
+
+    let plan = load_plan(&plan_hash, 1_000_000_001).unwrap();
+    let kinds: Vec<&str> = plan.actions.iter().map(|a| a.kind.as_str()).collect();
+    assert!(
+        kinds.contains(&"client_manual_guidance"),
+        "noncanonical codex registration must produce client_manual_guidance, got: {:?}",
+        kinds
+    );
+    assert!(
+        !kinds.contains(&"client_apply"),
+        "noncanonical codex registration must not produce client_apply"
+    );
+    assert!(
+        !kinds.contains(&"client_verify"),
+        "noncanonical codex registration must not produce client_verify"
+    );
+    assert!(plan.preconditions.target_files.is_empty());
+    assert!(!env.client_root.join(".cursor").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn codex_apply_invokes_add_then_verifies() {
+    let env = CodexTestEnv::new();
+    env.setup_index("nextjs", "14.2.5");
+    env.set_state("absent");
+    let ar = env.approved_root();
+
+    let plan_hash = match setup_plan("nextjs", "codex", &ar, true, 1_000_000_000).unwrap() {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
+        other => panic!("expected PlanCreated, got: {:?}", other),
+    };
+
+    let result = setup_apply(&plan_hash, &env.client_root, 1_000_000_001).unwrap();
+    assert!(
+        matches!(result, SetupApplyResult::SetupComplete { .. }),
+        "absent->add->verify must complete, got: {:?}",
+        result
+    );
+
+    let argv = env.recorded_argv();
+    assert!(
+        argv.windows(5)
+            .any(|w| w == ["codex", "mcp", "get", "nowdocs", "--json"]),
+        "fake codex must have been asked to get the registration, got: {:?}",
+        argv
+    );
+    assert!(
+        argv.windows(4)
+            .any(|w| w == ["codex", "mcp", "add", "nowdocs"]),
+        "fake codex must have been asked to add the registration, got: {:?}",
+        argv
+    );
+    assert!(
+        !env.client_root.join(".cursor").exists(),
+        "codex apply must not create .cursor files"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn codex_apply_noncanonical_returns_action_required_without_add() {
+    let env = CodexTestEnv::new();
+    env.setup_index("nextjs", "14.2.5");
+    env.set_state("present-other");
+    let ar = env.approved_root();
+
+    let plan_hash = match setup_plan("nextjs", "codex", &ar, true, 1_000_000_000).unwrap() {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
+        other => panic!("expected PlanCreated, got: {:?}", other),
+    };
+
+    let result = setup_apply(&plan_hash, &env.client_root, 1_000_000_001).unwrap();
+    assert!(
+        matches!(result, SetupApplyResult::ActionRequired { .. }),
+        "noncanonical codex must return ActionRequired, got: {:?}",
+        result
+    );
+
+    let argv = env.recorded_argv();
+    assert!(
+        !argv
+            .windows(4)
+            .any(|w| w == ["codex", "mcp", "add", "nowdocs"]),
+        "noncanonical codex must not invoke codex mcp add, got: {:?}",
+        argv
+    );
+    assert!(!env.client_root.join(".cursor").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn codex_does_not_create_cursor_fingerprint_even_if_cursor_file_exists() {
+    let env = CodexTestEnv::new();
+    env.setup_index("nextjs", "14.2.5");
+    env.set_state("absent");
+
+    // Pre-create a Cursor config file in the approved root. Codex planning must
+    // ignore it entirely and not create a target-file precondition for it.
+    std::fs::create_dir_all(env.client_root.join(".cursor")).unwrap();
+    std::fs::write(
+        env.client_root.join(".cursor").join("mcp.json"),
+        b"{\"mcpServers\":{}}",
+    )
+    .unwrap();
+
+    let ar = env.approved_root();
+    let result = setup_plan("nextjs", "codex", &ar, true, 1_000_000_000).unwrap();
+    let plan_hash = match result {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
+        other => panic!("expected PlanCreated, got: {:?}", other),
+    };
+
+    let plan = load_plan(&plan_hash, 1_000_000_001).unwrap();
+    assert!(
+        plan.preconditions.target_files.is_empty(),
+        "codex plan must not inherit Cursor target-file preconditions"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn cursor_regression_still_creates_target_fingerprint() {
+    let env = CodexTestEnv::new();
+    env.setup_index("nextjs", "14.2.5");
+    // No fake `cursor` is needed because planning only inspects the file.
+    let ar = env.approved_root();
+
+    let result = setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap();
+    let plan_hash = match result {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
+        other => panic!("expected PlanCreated, got: {:?}", other),
+    };
+
+    let plan = load_plan(&plan_hash, 1_000_000_001).unwrap();
+    assert!(
+        !plan.preconditions.target_files.is_empty(),
+        "cursor plan must retain target-file preconditions"
+    );
+}
