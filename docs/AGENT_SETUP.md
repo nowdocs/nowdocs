@@ -112,10 +112,12 @@ Rollback is guarded by operation metadata and content digests. It does not unins
 | Client id | Detect | Generate | Apply | Verify | Setup behavior |
 |---|---|---|---|---|---|
 | `claude-code` | supported | supported | conditional | conditional | Uses the official `claude mcp` CLI at user scope and refuses to replace an existing `nowdocs` entry. |
-| `claude-desktop` | supported | supported | unsupported | unsupported | Returns truthful MCPB guidance. It never edits the legacy Desktop JSON file. |
+| `claude-desktop` | supported | conditional | unsupported | unsupported | Returns truthful MCPB guidance. It never edits the legacy Desktop JSON file. |
 | `codex` | supported | supported | conditional | conditional | Uses the official `codex mcp` CLI and never reads or edits Codex configuration files directly. |
 | `cursor` | supported | supported | conditional | conditional | Can safely update an existing approved-root `.cursor/mcp.json`; unsafe, missing, malformed, or conflicting targets require manual action. |
 | `generic` | unsupported | supported | unsupported | unsupported | Generates deterministic stdio configuration for manual installation. |
+
+`conditional` means the adapter acts only after it proves its runtime preconditions. Codex CLI and Claude Code use their official CLIs rather than editing client-owned configuration files. Cursor uses only the explicitly approved root and refuses unsafe or ambiguous files. Claude Desktop and generic clients remain guidance-only. See [MCP Clients](MCP_CLIENTS.md) for exact commands and recovery boundaries.
 
 ## Machine-readable results and exit classes
 
