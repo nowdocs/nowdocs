@@ -70,6 +70,15 @@ pub struct SetupApplyDisclosure {
     pub reversible: bool,
 }
 
+/// Redacted, machine-readable instructions for a client change that nowdocs
+/// cannot apply automatically.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ClientManualGuidance {
+    pub client: String,
+    pub redacted_fragment: String,
+    pub steps: Vec<String>,
+}
+
 impl SetupApplyDisclosure {
     fn from_actions(actions: &[PlannedAction]) -> Self {
         let risk = actions
@@ -131,10 +140,16 @@ pub enum SetupApplyResult {
         observations: Vec<String>,
     },
     /// The plan could not be fully applied; the caller must take manual action.
-    ActionRequired { observations: Vec<String> },
+    ActionRequired {
+        observations: Vec<String>,
+        manual_guidance: ClientManualGuidance,
+    },
     /// Docset work succeeded but client application could not start. No client
     /// rollback metadata is retained because no client change committed.
-    PartialNoRollback { observations: Vec<String> },
+    PartialNoRollback {
+        observations: Vec<String>,
+        manual_guidance: ClientManualGuidance,
+    },
     /// A client change committed but final verification did not confirm it.
     Partial {
         operation_id: String,
@@ -395,7 +410,11 @@ pub fn setup_apply(
     if has_manual_guidance {
         let mut observations = docset_observations;
         observations.push("client_manual_guidance".to_string());
-        return Ok(SetupApplyResult::ActionRequired { observations });
+        let manual_guidance = build_client_manual_guidance(adapter.as_ref())?;
+        return Ok(SetupApplyResult::ActionRequired {
+            observations,
+            manual_guidance,
+        });
     }
 
     // If the client has no conditional apply capability, this is a manual-only
@@ -403,7 +422,11 @@ pub fn setup_apply(
     if caps.apply != CapabilitySupport::Conditional {
         let mut observations = docset_observations;
         observations.push("client_manual_guidance".to_string());
-        return Ok(SetupApplyResult::ActionRequired { observations });
+        let manual_guidance = build_client_manual_guidance(adapter.as_ref())?;
+        return Ok(SetupApplyResult::ActionRequired {
+            observations,
+            manual_guidance,
+        });
     }
 
     // Resolve the nowdocs binary path at apply time.
@@ -431,13 +454,21 @@ pub fn setup_apply(
             // committed, so there is no rollback metadata to retain.
             let mut observations = docset_observations;
             observations.extend(apply_result.observations);
-            return Ok(SetupApplyResult::PartialNoRollback { observations });
+            let manual_guidance = build_client_manual_guidance(adapter.as_ref())?;
+            return Ok(SetupApplyResult::PartialNoRollback {
+                observations,
+                manual_guidance,
+            });
         }
         ClientExecutionOutcome::Verified | ClientExecutionOutcome::RolledBack => {
             // Unexpected for apply, but treat as partial-no-rollback.
             let mut observations = docset_observations;
             observations.extend(apply_result.observations);
-            return Ok(SetupApplyResult::PartialNoRollback { observations });
+            let manual_guidance = build_client_manual_guidance(adapter.as_ref())?;
+            return Ok(SetupApplyResult::PartialNoRollback {
+                observations,
+                manual_guidance,
+            });
         }
     }
 
@@ -485,6 +516,24 @@ pub fn setup_apply(
             })
         }
     }
+}
+
+fn build_client_manual_guidance(adapter: &dyn ClientAdapter) -> Result<ClientManualGuidance> {
+    let binary_path = std::env::current_exe().context("resolve nowdocs executable path")?;
+    if !binary_path.is_absolute() {
+        anyhow::bail!("nowdocs executable path is not absolute");
+    }
+
+    let generated = adapter.generate(&binary_path)?;
+    if generated.redacted_fragment.is_empty() || generated.manual_steps.is_empty() {
+        anyhow::bail!("client adapter returned incomplete manual guidance");
+    }
+
+    Ok(ClientManualGuidance {
+        client: adapter.id().to_string(),
+        redacted_fragment: generated.redacted_fragment,
+        steps: generated.manual_steps,
+    })
 }
 
 /// Roll back a setup operation by its operation id.

@@ -965,7 +965,10 @@ fn run_setup_apply(plan_hash: &str, json: bool) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Ok(nowdocs::automation::setup::SetupApplyResult::ActionRequired { observations }) => {
+        Ok(nowdocs::automation::setup::SetupApplyResult::ActionRequired {
+            observations,
+            manual_guidance,
+        }) => {
             if json {
                 print_setup_json(
                     "setup.apply",
@@ -975,6 +978,7 @@ fn run_setup_apply(plan_hash: &str, json: bool) -> anyhow::Result<()> {
                     serde_json::json!({
                         "plan_hash": plan_hash,
                         "observations": observations,
+                        "manual_guidance": manual_guidance,
                     }),
                     Vec::new(),
                     None,
@@ -984,10 +988,16 @@ fn run_setup_apply(plan_hash: &str, json: bool) -> anyhow::Result<()> {
                 for obs in &observations {
                     println!("  - {obs}");
                 }
+                for step in &manual_guidance.steps {
+                    println!("  - {step}");
+                }
             }
             Ok(())
         }
-        Ok(nowdocs::automation::setup::SetupApplyResult::PartialNoRollback { observations }) => {
+        Ok(nowdocs::automation::setup::SetupApplyResult::PartialNoRollback {
+            observations,
+            manual_guidance,
+        }) => {
             // Docset succeeded but client apply could not start. No client
             // change committed, so no rollback metadata is retained.
             if json {
@@ -999,6 +1009,7 @@ fn run_setup_apply(plan_hash: &str, json: bool) -> anyhow::Result<()> {
                     serde_json::json!({
                         "plan_hash": plan_hash,
                         "observations": observations,
+                        "manual_guidance": manual_guidance,
                     }),
                     Vec::new(),
                     None,
@@ -1007,6 +1018,9 @@ fn run_setup_apply(plan_hash: &str, json: bool) -> anyhow::Result<()> {
                 println!("partial: docset installed but client requires manual configuration");
                 for obs in &observations {
                     println!("  - {obs}");
+                }
+                for step in &manual_guidance.steps {
+                    println!("  - {step}");
                 }
             }
             Ok(())
