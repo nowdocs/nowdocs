@@ -31,8 +31,7 @@ Native Cohere reranking is optional and must be configured in the environment
 of the process that starts `nowdocs serve`, not in an MCP tool request. Desktop
 clients can launch with a restricted environment, so make the required
 variables available to that client or server process. Read the [native Cohere
-reranking configuration and data-transfer disclosure](../README.md#optional-native-cohere-reranking)
-before enabling it.
+reranking guide](RERANKING.md) before enabling it.
 
 ## Cursor
 

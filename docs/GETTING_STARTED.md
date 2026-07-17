@@ -94,8 +94,8 @@ The server uses newline-delimited JSON over stdio. It does not bind a host or po
 
 Native Cohere reranking is optional. If you explicitly enable it, the server
 process sends search inputs to Cohere instead of operating local-only. See the
-[native Cohere reranking configuration and disclosure](../README.md#optional-native-cohere-reranking)
-before setting its environment variables.
+[native Cohere reranking guide](RERANKING.md) before setting its environment
+variables.
 
 ## 6. Configure an MCP client
 

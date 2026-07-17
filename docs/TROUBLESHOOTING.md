@@ -105,7 +105,25 @@ Fixes:
 - Restart the MCP client after changing config.
 - See [`MCP_CLIENTS.md`](MCP_CLIENTS.md) for snippets.
 
-## 6. Search returns no useful results
+## 6. Native Cohere reranking does not start or falls back
+
+Symptoms:
+
+- `nowdocs serve` or `nowdocs smoke` reports a reranker configuration error.
+- A desktop MCP client appears to use local ranking after enabling Cohere.
+
+Checks and fixes:
+
+- Confirm the server process receives `NOWDOCS_RERANK_PROVIDER=cohere`,
+  `NOWDOCS_RERANK_MODEL`, and `COHERE_API_KEY`.
+- Keep `NOWDOCS_RERANK_TIMEOUT_MS` between 100 and 10000 when set.
+- A failed Cohere request deliberately falls back to local ranking for that
+  search; check account access, model access, network connectivity, and rate
+  limits.
+- See [`RERANKING.md`](RERANKING.md) for the configuration, data-transfer, and
+  disable instructions.
+
+## 7. Search returns no useful results
 
 Symptoms:
 
@@ -125,7 +143,7 @@ Fixes:
 - Re-ingest if the source docs changed.
 - For release validation, run the real-docset eval gate before publishing.
 
-## 7. Source build fails around Rust version or protoc
+## 8. Source build fails around Rust version or protoc
 
 Symptoms:
 
@@ -138,7 +156,7 @@ Fixes:
 - Install `protoc` and protobuf well-known type include files.
 - In constrained environments, set `PROTOC=/path/to/protoc` if the binary is not on `PATH`.
 
-## 8. OS cache paths
+## 9. OS cache paths
 
 nowdocs uses the OS cache directory plus `nowdocs`:
 

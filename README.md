@@ -81,48 +81,10 @@ Client-specific configuration for Cursor, Claude Code, Claude Desktop, and Aider
 
 ## Optional native Cohere reranking
 
-Reranking is disabled by default. When you explicitly enable native Cohere
-reranking, nowdocs sends each search query and up to 40 sanitized, size-bounded
-candidate document strings to Cohere using your account. Disabled mode remains
-local-only. `nowdocs smoke` uses the same configured reranker and can also make
-a request under your Cohere account. If a remote request fails, nowdocs falls
-back to local ranking for that search, although the failed request may already
-have transmitted its input.
-
-Configure the environment of the process that starts `nowdocs serve`:
-
-```bash
-export NOWDOCS_RERANK_PROVIDER=cohere
-export NOWDOCS_RERANK_MODEL=rerank-v3.5
-export COHERE_API_KEY='your-cohere-api-key'
-# Optional; defaults to 2000 and must be an integer from 100 through 10000.
-export NOWDOCS_RERANK_TIMEOUT_MS=2000
-nowdocs serve
-```
-
-nowdocs does not persist the key. `COHERE_API_KEY` is sent only in Cohere's
-required Authorization header; nowdocs never includes it in logs, MCP output,
-or evaluator output. A partial or invalid opt-in is a startup error rather than
-a silent fallback.
-
-The integration accepts any model identifier that Cohere's native v2 Rerank
-endpoint accepts, subject to your account access. These are non-binding
-examples:
-
-| Example identifier | Use when |
-|---|---|
-| `rerank-v3.5` | You already use this Cohere Rerank model or want an established baseline to evaluate. |
-| `rerank-v4.0-fast` | Interactive latency and throughput matter most. |
-| `rerank-v4.0-pro` | You prioritize ranking quality for more complex workloads. |
-
-See Cohere's [Rerank model documentation](https://docs.cohere.com/docs/rerank)
-for current model availability and account terms. OpenRouter credentials and
-OpenRouter model slugs are not supported by this native Cohere integration.
-
-Cohere changes only the candidate order before nowdocs applies its local MMR
-diversity ranking. nowdocs does not expose or use Cohere relevance scores as an
-answer-confidence score, and this optional integration does not promise a
-quality improvement.
+Reranking is disabled by default. When enabled, it sends search inputs to
+Cohere using your account. Read the [native Cohere reranking guide](docs/RERANKING.md)
+before enabling it: it covers configuration, data transfer, failure fallback,
+model selection, MCP-client environments, and the current OpenRouter boundary.
 
 ## Common workflows
 

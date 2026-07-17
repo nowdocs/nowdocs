@@ -30,8 +30,7 @@ When downloads occur, GitHub and Hugging Face receive standard connection metada
 
 Native Cohere reranking is disabled by default and uses your Cohere account and
 key only after explicit configuration. Review Cohere's [Privacy Policy](https://cohere.com/privacy)
-and the [native Cohere reranking configuration](../README.md#optional-native-cohere-reranking)
-before enabling it.
+and the [native Cohere reranking guide](RERANKING.md) before enabling it.
 
 ## Data we do not collect
 
