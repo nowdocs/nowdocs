@@ -1583,6 +1583,38 @@ fn test_verify_json_emits_exactly_one_document() {
 }
 
 #[test]
+fn test_setup_plan_help_lists_codex_client() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["setup", "plan", "--help"]);
+    assert!(
+        out.status.success(),
+        "setup plan --help should exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("codex"),
+        "setup plan --help must list codex in the client help string, got: {stdout}"
+    );
+}
+
+#[test]
+fn test_verify_help_lists_codex_client() {
+    let root = tempfile::tempdir().unwrap();
+    let out = run_nowdocs_isolated(root.path(), &["verify", "--help"]);
+    assert!(
+        out.status.success(),
+        "verify --help should exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("codex"),
+        "verify --help must list codex in the client help string, got: {stdout}"
+    );
+}
+
+#[test]
 fn test_capabilities_reports_verify_implemented() {
     let root = tempfile::tempdir().unwrap();
     let out = run_nowdocs_isolated(root.path(), &["capabilities", "--json"]);

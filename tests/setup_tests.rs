@@ -2060,3 +2060,318 @@ fn cursor_regression_still_creates_target_fingerprint() {
         "cursor plan must retain target-file preconditions"
     );
 }
+
+// =========================================================================
+// C7R6: one-shot rollback authorization + Codex CLI help
+// =========================================================================
+
+/// Resolve the operation directory path for a setup operation id under the
+/// isolated cache root. The cache layout is `<root>/nowdocs/automation/
+/// operations/<id>/`.
+#[cfg(unix)]
+fn operation_dir(root: &std::path::Path, operation_id: &str) -> std::path::PathBuf {
+    root.join("nowdocs")
+        .join("automation")
+        .join("operations")
+        .join(operation_id)
+}
+
+/// The active setup-meta pathname inside an operation directory.
+#[cfg(unix)]
+const SETUP_META_FILENAME: &str = "setup-meta.json";
+
+// ---- RED 1: Codex apply/rollback, recreate same registration, old op id
+//      currently invokes remove again (replayable authorization) ----
+
+#[test]
+#[cfg(unix)]
+fn red_codex_replay_after_recreate_invokes_remove_again() {
+    let env = CodexTestEnv::new();
+    env.setup_index("nextjs", "14.2.5");
+    env.set_state("absent");
+    let ar = env.approved_root();
+
+    let plan_hash = match setup_plan("nextjs", "codex", &ar, true, 1_000_000_000).unwrap() {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
+        other => panic!("expected PlanCreated, got: {:?}", other),
+    };
+
+    // Apply: absent -> add -> verify (SetupComplete).
+    let apply_result = setup_apply(&plan_hash, &env.client_root, 1_000_000_001).unwrap();
+    let operation_id = match apply_result {
+        SetupApplyResult::SetupComplete { operation_id, .. } => operation_id,
+        other => panic!("expected SetupComplete, got: {:?}", other),
+    };
+
+    // Rollback: present -> remove (RolledBack).
+    let rollback_result = setup_rollback(&operation_id, &env.client_root).unwrap();
+    assert!(
+        matches!(
+            rollback_result,
+            nowdocs::automation::setup::SetupRollbackResult::RolledBack { .. }
+        ),
+        "first rollback must succeed, got: {:?}",
+        rollback_result
+    );
+
+    // User recreates the exact same canonical registration.
+    env.set_state("present");
+
+    // Replay: the old operation id must NOT invoke codex mcp remove again.
+    // It must return the existing operation_not_recorded_by_setup manual path.
+    let argv_before = env.recorded_argv();
+    let replay_result = setup_rollback(&operation_id, &env.client_root).unwrap();
+    match replay_result {
+        nowdocs::automation::setup::SetupRollbackResult::ManualRequired { observations } => {
+            assert!(
+                observations
+                    .iter()
+                    .any(|o| o == "operation_not_recorded_by_setup"),
+                "replayed rollback must return operation_not_recorded_by_setup, got: {:?}",
+                observations
+            );
+        }
+        other => panic!("replayed rollback must be ManualRequired, got: {:?}", other),
+    }
+
+    // No new codex mcp remove argv after the first rollback.
+    let argv_after = env.recorded_argv();
+    let removes_before: Vec<_> = argv_before
+        .windows(4)
+        .filter(|w| *w == ["codex", "mcp", "remove", "nowdocs"])
+        .collect();
+    let removes_after: Vec<_> = argv_after
+        .windows(4)
+        .filter(|w| *w == ["codex", "mcp", "remove", "nowdocs"])
+        .collect();
+    assert_eq!(
+        removes_after.len(),
+        removes_before.len(),
+        "replayed rollback must not invoke codex mcp remove again, argv: {:?}",
+        argv_after
+    );
+}
+
+// ---- RED 2: active setup-meta.json remains after successful rollback ----
+
+#[test]
+#[cfg(unix)]
+fn red_active_setup_meta_remains_after_successful_rollback() {
+    let env = CodexTestEnv::new();
+    env.setup_index("nextjs", "14.2.5");
+    env.set_state("absent");
+    let ar = env.approved_root();
+
+    let plan_hash = match setup_plan("nextjs", "codex", &ar, true, 1_000_000_000).unwrap() {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
+        other => panic!("expected PlanCreated, got: {:?}", other),
+    };
+
+    let apply_result = setup_apply(&plan_hash, &env.client_root, 1_000_000_001).unwrap();
+    let operation_id = match apply_result {
+        SetupApplyResult::SetupComplete { operation_id, .. } => operation_id,
+        other => panic!("expected SetupComplete, got: {:?}", other),
+    };
+
+    let meta_path = operation_dir(env.tmp.path(), &operation_id).join(SETUP_META_FILENAME);
+    assert!(
+        meta_path.is_file(),
+        "active setup-meta must exist after apply"
+    );
+
+    let rollback_result = setup_rollback(&operation_id, &env.client_root).unwrap();
+    assert!(
+        matches!(
+            rollback_result,
+            nowdocs::automation::setup::SetupRollbackResult::RolledBack { .. }
+        ),
+        "rollback must succeed"
+    );
+
+    // RED: the active pathname must be absent after a successful rollback.
+    assert!(
+        !meta_path.exists(),
+        "active setup-meta must be consumed/removed after successful rollback"
+    );
+}
+
+// ---- RED 3: non-mutating rollback failure can be retried ----
+
+#[test]
+#[cfg(unix)]
+fn red_non_mutating_rollback_failure_can_be_retried() {
+    let env = CodexTestEnv::new();
+    env.setup_index("nextjs", "14.2.5");
+    env.set_state("absent");
+    let ar = env.approved_root();
+
+    let plan_hash = match setup_plan("nextjs", "codex", &ar, true, 1_000_000_000).unwrap() {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
+        other => panic!("expected PlanCreated, got: {:?}", other),
+    };
+
+    let apply_result = setup_apply(&plan_hash, &env.client_root, 1_000_000_001).unwrap();
+    let operation_id = match apply_result {
+        SetupApplyResult::SetupComplete { operation_id, .. } => operation_id,
+        other => panic!("expected SetupComplete, got: {:?}", other),
+    };
+
+    // Make the first rollback fail non-mutatingly: set the state to
+    // present-other so the adapter refuses to remove (ManualRequired).
+    env.set_state("present-other");
+
+    let meta_path = operation_dir(env.tmp.path(), &operation_id).join(SETUP_META_FILENAME);
+
+    let first_result = setup_rollback(&operation_id, &env.client_root).unwrap();
+    match first_result {
+        nowdocs::automation::setup::SetupRollbackResult::ManualRequired { .. } => {}
+        other => panic!(
+            "non-mutating failure must be ManualRequired, got: {:?}",
+            other
+        ),
+    }
+
+    // The active authorization must be restored so the user can retry.
+    assert!(
+        meta_path.is_file(),
+        "non-mutating failure must restore active authorization for retry"
+    );
+
+    // Fix the state and retry: should succeed now.
+    env.set_state("present");
+    let retry_result = setup_rollback(&operation_id, &env.client_root).unwrap();
+    assert!(
+        matches!(
+            retry_result,
+            nowdocs::automation::setup::SetupRollbackResult::RolledBack { .. }
+        ),
+        "retry after non-mutating failure must succeed, got: {:?}",
+        retry_result
+    );
+
+    // After successful retry, the active authorization must be consumed.
+    assert!(
+        !meta_path.exists(),
+        "active authorization must be consumed after successful retry"
+    );
+}
+
+// ---- RED 4: Cursor rollback is also one-shot ----
+
+#[test]
+#[cfg(unix)]
+fn red_cursor_rollback_is_one_shot() {
+    let root = tempfile::tempdir().unwrap();
+    let _g = isolate(root.path());
+    let original = serde_json::json!({
+        "mcpServers": {"filesystem": {"command": "/usr/bin/fs", "args": []}}
+    });
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", Some(&original));
+
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
+        other => panic!("expected PlanCreated, got: {:?}", other),
+    };
+
+    let apply_result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
+    let operation_id = match apply_result {
+        SetupApplyResult::SetupComplete { operation_id, .. }
+        | SetupApplyResult::ClientReloadRequired { operation_id, .. } => operation_id,
+        other => panic!("expected success variant, got: {:?}", other),
+    };
+
+    let meta_path = operation_dir(root.path(), &operation_id).join(SETUP_META_FILENAME);
+    assert!(
+        meta_path.is_file(),
+        "active setup-meta must exist after apply"
+    );
+
+    // Rollback succeeds.
+    let rollback_result = setup_rollback(&operation_id, &config_root).unwrap();
+    assert!(
+        matches!(
+            rollback_result,
+            nowdocs::automation::setup::SetupRollbackResult::RolledBack { .. }
+        ),
+        "cursor rollback must succeed"
+    );
+
+    // Active authorization must be consumed.
+    assert!(
+        !meta_path.exists(),
+        "cursor rollback must consume active authorization"
+    );
+
+    // Replay must return ManualRequired (operation_not_recorded_by_setup),
+    // not invoke the adapter again.
+    let replay_result = setup_rollback(&operation_id, &config_root).unwrap();
+    match replay_result {
+        nowdocs::automation::setup::SetupRollbackResult::ManualRequired { observations } => {
+            assert!(
+                observations
+                    .iter()
+                    .any(|o| o == "operation_not_recorded_by_setup"),
+                "cursor replay must return operation_not_recorded_by_setup, got: {:?}",
+                observations
+            );
+        }
+        other => panic!("cursor replay must be ManualRequired, got: {:?}", other),
+    }
+
+    // The restored original config must be intact.
+    let restored: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(config_root.join(".cursor").join("mcp.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(restored, original);
+}
+
+// ---- RED 5: unsafe metadata (symlink at active path) fails closed ----
+
+#[test]
+#[cfg(unix)]
+fn red_symlinked_active_meta_fails_closed() {
+    let root = tempfile::tempdir().unwrap();
+    let _g = isolate(root.path());
+    let original = serde_json::json!({
+        "mcpServers": {"filesystem": {"command": "/usr/bin/fs", "args": []}}
+    });
+    let (ar, config_root) = setup_fixture(root.path(), "nextjs", "14.2.5", Some(&original));
+
+    let plan_hash = match setup_plan("nextjs", "cursor", &ar, true, 1_000_000_000).unwrap() {
+        SetupPlanResult::PlanCreated { plan_hash, .. } => plan_hash,
+        other => panic!("expected PlanCreated, got: {:?}", other),
+    };
+
+    let apply_result = setup_apply(&plan_hash, &config_root, 1_000_000_001).unwrap();
+    let operation_id = match apply_result {
+        SetupApplyResult::SetupComplete { operation_id, .. }
+        | SetupApplyResult::ClientReloadRequired { operation_id, .. } => operation_id,
+        other => panic!("expected success variant, got: {:?}", other),
+    };
+
+    // Replace the active metadata with a symlink.
+    let meta_path = operation_dir(root.path(), &operation_id).join(SETUP_META_FILENAME);
+    std::fs::remove_file(&meta_path).unwrap();
+    std::os::unix::fs::symlink("/dev/null", &meta_path).unwrap();
+
+    // Rollback must fail closed: ManualRequired, no adapter mutation.
+    let rollback_result = setup_rollback(&operation_id, &config_root).unwrap();
+    match rollback_result {
+        nowdocs::automation::setup::SetupRollbackResult::ManualRequired { .. } => {}
+        other => panic!(
+            "symlinked active meta must fail closed with ManualRequired, got: {:?}",
+            other
+        ),
+    }
+
+    // The user's config must be untouched.
+    let current: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(config_root.join(".cursor").join("mcp.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        current["mcpServers"]["nowdocs"].is_object(),
+        "symlinked meta must not trigger adapter rollback mutation"
+    );
+}
