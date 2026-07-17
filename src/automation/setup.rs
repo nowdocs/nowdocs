@@ -49,6 +49,13 @@ const KIND_CLIENT_MANUAL_GUIDANCE: &str = "client_manual_guidance";
 /// own successful apply" record that guards rollback dispatch.
 const SETUP_META_FILENAME: &str = "setup-meta.json";
 
+/// Fixed consumed/in-progress name for setup metadata that has been atomically
+/// claimed by a rollback attempt. A successful rollback permanently consumes
+/// the authorization (the active pathname is absent); `read_setup_meta`
+/// recognizes only the active name, so a leftover consumed tombstone safely
+/// prevents replay.
+const SETUP_META_CONSUMED_FILENAME: &str = "setup-meta.consumed.json";
+
 /// The global Cursor MCP configuration relative target.
 const CURSOR_TARGET_RELATIVE: &str = ".cursor/mcp.json";
 
@@ -486,6 +493,16 @@ pub fn setup_apply(
 /// setup-owned metadata file written during apply. Refuses unknown, unsafe, or
 /// later-user-edited state without overwriting it. Unsupported/manual-only
 /// clients have no automatic rollback.
+///
+/// The setup metadata (`setup-meta.json`) is treated as a one-shot
+/// authorization token. Before invoking any client adapter, the active
+/// metadata is atomically renamed to a fixed consumed pathname within the same
+/// verified operation directory. This means the active authorization is absent
+/// before any client mutation. A successful rollback (`RolledBack`) permanently
+/// consumes the authorization; a non-mutating failure (`ManualRequired`,
+/// `Conflict`, `Unsupported`, or an error before `RolledBack`) safely restores
+/// the active metadata so the user can retry. Concurrent/repeated rollback
+/// attempts serialize through the existing global operation lock.
 pub fn setup_rollback(
     operation_id: &str,
     approved_root_path: &Path,
@@ -499,20 +516,34 @@ pub fn setup_rollback(
 
     let id = OperationId::new(operation_id)?;
 
-    // Read the setup metadata to determine which client owns this operation.
-    // This is the "only after the trusted setup operation recorded its own
-    // successful apply" guard: without the metadata file, rollback refuses.
-    // read_setup_meta must NOT create an operation directory (contract 5).
-    let meta = match read_setup_meta(&id) {
-        Ok(m) => m,
+    // Acquire the global operation lock before reading or consuming setup
+    // metadata. Concurrent/repeated rollback attempts must serialize.
+    let op_lock = match lock::acquire_operation_lock(operation_id) {
+        Ok(guard) => guard,
         Err(_) => {
+            return Ok(SetupRollbackResult::ManualRequired {
+                observations: vec!["operation_lock_contention".to_string()],
+            });
+        }
+    };
+
+    // Claim the one-shot authorization: read/parse the active metadata, then
+    // atomically rename it to the consumed pathname before any adapter call.
+    // On any non-mutating failure or error, the guard restores the active
+    // metadata on drop unless explicitly committed as consumed.
+    let mut authz = match SetupAuthzGuard::claim(&id) {
+        Ok(guard) => guard,
+        Err(_) => {
+            // The operation was not recorded by setup, or the metadata is
+            // unsafe. No authorization to consume.
+            drop(op_lock);
             return Ok(SetupRollbackResult::ManualRequired {
                 observations: vec!["operation_not_recorded_by_setup".to_string()],
             });
         }
     };
 
-    let client_id = parse_client(&meta.client)?;
+    let client_id = parse_client(authz.client())?;
     let root = approved_root(approved_root_path)?;
     let binary_path = std::env::current_exe().context("resolve nowdocs executable path")?;
 
@@ -524,20 +555,41 @@ pub fn setup_rollback(
 
     let caps = adapter.capabilities();
     if caps.apply != CapabilitySupport::Conditional {
+        // Non-mutating: restore authorization for retry.
+        drop(authz);
+        drop(op_lock);
         return Ok(SetupRollbackResult::ManualRequired {
             observations: vec!["client_does_not_support_rollback".to_string()],
         });
     }
 
     let request = ClientExecutionRequest::new(&id.to_string(), root, binary_path)?;
+
     let result = adapter.rollback(&request)?;
-    match result.outcome {
-        ClientExecutionOutcome::RolledBack => Ok(SetupRollbackResult::RolledBack {
-            observations: result.observations,
-        }),
-        _ => Ok(SetupRollbackResult::ManualRequired {
-            observations: result.observations,
-        }),
+    let outcome = result.outcome;
+
+    match outcome {
+        ClientExecutionOutcome::RolledBack => {
+            // Successful rollback: permanently consume the authorization.
+            // Never restore the active metadata. Remove the consumed tombstone
+            // best-effort; leaving it is safe because read_setup_meta
+            // recognizes only the active name.
+            authz.commit_consumed();
+            drop(authz);
+            drop(op_lock);
+            Ok(SetupRollbackResult::RolledBack {
+                observations: result.observations,
+            })
+        }
+        // Non-mutating outcomes: restore the active metadata so the user can
+        // retry. The guard restores on drop unless committed.
+        _ => {
+            drop(authz);
+            drop(op_lock);
+            Ok(SetupRollbackResult::ManualRequired {
+                observations: result.observations,
+            })
+        }
     }
 }
 
@@ -858,22 +910,6 @@ fn write_setup_meta(id: &OperationId, client: &str) -> Result<()> {
     Ok(())
 }
 
-/// Read setup-owned operation metadata. Returns an error if the file is absent
-/// (the operation was not recorded by setup) or malformed. Does NOT create an
-/// operation directory (contract 5).
-fn read_setup_meta(id: &OperationId) -> Result<SetupMeta> {
-    let path = crate::automation::operation::operations_root()
-        .join(id.to_string())
-        .join(SETUP_META_FILENAME);
-
-    // Use no-follow read. If the file doesn't exist, the operation was not
-    // recorded by setup.
-    let bytes = read_meta_nofollow(&path)?;
-    let meta: SetupMeta = serde_json::from_slice(&bytes)
-        .with_context(|| format!("parse setup meta {}", path.display()))?;
-    Ok(meta)
-}
-
 /// Write a metadata file with no-follow open and 0600 on Unix. Fail closed on
 /// non-Unix (contract 5).
 #[cfg(unix)]
@@ -941,4 +977,154 @@ fn read_meta_nofollow(path: &Path) -> Result<Vec<u8>> {
         "unsupported platform for no-follow I/O at {}",
         path.display()
     );
+}
+
+// ---- One-shot rollback authorization guard ----
+
+/// RAII guard that treats `setup-meta.json` as a one-shot authorization token
+/// for rollback.
+///
+/// On [`claim`], the active metadata is read via no-follow open, parsed, and
+/// then atomically renamed to a fixed consumed pathname within the same
+/// verified operation directory. This means the active authorization is absent
+/// before any client adapter mutation. On drop, unless explicitly committed via
+/// [`commit_consumed`], the consumed metadata is restored to the active name so
+/// a non-mutating failure can be retried.
+///
+/// Safety properties:
+/// - Refuses symlink/non-regular active or consumed metadata.
+/// - Refuses an existing consumed path (ambiguous authorization state).
+/// - Refuses unsafe parent components.
+/// - Preserves the existing non-Unix fail-closed boundary.
+/// - If restoration fails, remains fail-closed: no active authorization and a
+///   stable redacted manual outcome.
+struct SetupAuthzGuard {
+    /// The parsed client id from the consumed metadata.
+    client: String,
+    /// The active pathname (`dir/setup-meta.json`).
+    active_path: std::path::PathBuf,
+    /// The consumed pathname (`dir/setup-meta.consumed.json`).
+    consumed_path: std::path::PathBuf,
+    /// Whether the authorization has been permanently consumed (commit or
+    /// restoration already handled). When false, drop attempts restoration.
+    committed: bool,
+}
+
+impl SetupAuthzGuard {
+    /// Read/parse the active metadata, verify the operation directory and both
+    /// pathnames, then atomically rename active to consumed. The active
+    /// pathname is absent before this function returns Ok.
+    fn claim(id: &OperationId) -> Result<Self> {
+        // Read and parse the active metadata first. This uses no-follow open
+        // and does NOT create an operation directory.
+        let active_path = crate::automation::operation::operations_root()
+            .join(id.to_string())
+            .join(SETUP_META_FILENAME);
+        let bytes = read_meta_nofollow(&active_path)?;
+        let meta: SetupMeta = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parse setup meta {}", active_path.display()))?;
+
+        // Compute the consumed pathname in the same directory.
+        let dir = active_path
+            .parent()
+            .context("setup meta has no parent directory")?
+            .to_path_buf();
+        let consumed_path = dir.join(SETUP_META_CONSUMED_FILENAME);
+
+        // Refuse unsafe parent components: the operation directory must be a
+        // real directory (not a symlink).
+        verify_regular_dir(&dir)?;
+
+        // Refuse an existing consumed path: it means a previous claim is in
+        // progress or the state is ambiguous. Fail closed.
+        if std::fs::symlink_metadata(&consumed_path).is_ok() {
+            anyhow::bail!("setup authorization already consumed or in progress (refused)");
+        }
+
+        // Atomically rename active to consumed. std::fs::rename is atomic on
+        // the same filesystem (POSIX rename(2)). Both paths are in the same
+        // verified operation directory, so they share the same filesystem.
+        //
+        // Refuse a symlink/non-regular active file: rename would move the
+        // symlink, not the target. read_meta_nofollow already verified the
+        // active file is regular via O_NOFOLLOW + fstat, but re-check the
+        // symlink_metadata to be defense-in-depth before rename.
+        let active_meta = std::fs::symlink_metadata(&active_path)
+            .with_context(|| format!("stat active setup meta {}", active_path.display()))?;
+        if active_meta.file_type().is_symlink() || !active_meta.is_file() {
+            anyhow::bail!("active setup meta is a symlink or non-regular (refused)");
+        }
+
+        std::fs::rename(&active_path, &consumed_path).with_context(|| {
+            format!("rename active setup meta to consumed in {}", dir.display())
+        })?;
+
+        Ok(Self {
+            client: meta.client,
+            active_path,
+            consumed_path,
+            committed: false,
+        })
+    }
+
+    /// The parsed client id from the consumed metadata.
+    fn client(&self) -> &str {
+        &self.client
+    }
+
+    /// Permanently consume the authorization: mark as committed so drop does
+    /// not restore. Best-effort remove the consumed tombstone; leaving it is
+    /// safe because `read_setup_meta` recognizes only the active name.
+    fn commit_consumed(&mut self) {
+        self.committed = true;
+        // Best-effort: remove the consumed tombstone. A leftover tombstone is
+        // safe: read_setup_meta only looks for the active name.
+        let _ = std::fs::remove_file(&self.consumed_path);
+    }
+}
+
+impl Drop for SetupAuthzGuard {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        // Non-mutating failure or error: restore the active metadata from the
+        // consumed pathname so the user can retry. Only restore when this can
+        // be done safely and atomically (rename consumed back to active).
+        //
+        // If restoration fails, remain fail-closed: no active authorization
+        // and a stable redacted manual/error outcome. The consumed tombstone
+        // is safe because read_setup_meta recognizes only the active name.
+        if self.consumed_path.exists() {
+            // Defense-in-depth: refuse to restore if the active path reappeared
+            // (concurrent tampering). Fail closed by leaving the consumed
+            // tombstone in place.
+            if self.active_path.exists() {
+                return;
+            }
+            // Atomic rename back to active.
+            let _ = std::fs::rename(&self.consumed_path, &self.active_path);
+        }
+    }
+}
+
+/// Verify that `dir` is a real directory (not a symlink or non-directory).
+/// Uses symlink_metadata (no-follow) so a symlink at the final component is
+/// rejected.
+fn verify_regular_dir(dir: &Path) -> Result<()> {
+    let meta = std::fs::symlink_metadata(dir)
+        .with_context(|| format!("stat operation directory {}", dir.display()))?;
+    if meta.file_type().is_symlink() {
+        anyhow::bail!(
+            "operation directory {} is a symlink (refused)",
+            dir.display()
+        );
+    }
+    if !meta.is_dir() {
+        anyhow::bail!(
+            "operation directory {} is not a directory (refused)",
+            dir.display()
+        );
+    }
+    Ok(())
 }

@@ -134,7 +134,7 @@ pub enum Commands {
         /// Docset to verify
         #[arg(long)]
         docset: String,
-        /// Optional client to verify (claude-code, claude-desktop, cursor, generic)
+        /// Optional client to verify (claude-code, claude-desktop, codex, cursor, generic)
         #[arg(long)]
         client: Option<String>,
         /// Output in JSON format
@@ -181,7 +181,7 @@ pub enum RegistryCommands {
 pub enum SetupCommands {
     /// Create one reusable setup plan for one client plus one docset
     Plan {
-        /// Client to configure (claude-code, claude-desktop, cursor, generic)
+        /// Client to configure (claude-code, claude-desktop, codex, cursor, generic)
         #[arg(long)]
         client: String,
         /// Docset to ensure
