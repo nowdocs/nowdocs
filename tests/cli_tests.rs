@@ -1189,6 +1189,137 @@ fn test_setup_apply_rejects_missing_plan_hash() {
     assert_eq!(v["code"], "plan_not_found");
 }
 
+#[cfg(unix)]
+fn setup_apply_plan_for_client(root: &std::path::Path, client: &str) -> String {
+    let docset = "manual-guidance-fixture";
+    let version = "1.0.0";
+    let tar = write_tarball(root, docset, version);
+    let tar_url = format!("file://{}", tar.display());
+
+    {
+        let _g = EnvGuard::set("XDG_CACHE_HOME", root.to_str().unwrap());
+        nowdocs::registry::install(docset, &tar_url).expect("install matching fixture docset");
+    }
+
+    let archive = std::fs::read(&tar).expect("read fixture archive");
+    let index = serde_json::json!({
+        "schema_version": 1,
+        "generated_at": "2026-07-17T00:00:00Z",
+        "packages": [{
+            "docset": docset,
+            "version": version,
+            "license": "MIT",
+            "chunk_count": 2,
+            "freshness": "2026-07-17",
+            "download_url": tar_url,
+            "sha256": nowdocs::registry::sha256_hex(&archive),
+            "description": "manual guidance CLI fixture"
+        }]
+    });
+    let index_path = root.join("manual-guidance-index.json");
+    std::fs::write(&index_path, index.to_string()).expect("write fixture index");
+
+    let index_url = format!("file://{}", index_path.display());
+    let _g = EnvGuard::set("NOWDOCS_REGISTRY_INDEX_URL", &index_url);
+    let out = run_nowdocs_isolated(
+        root,
+        &[
+            "setup", "plan", "--client", client, "--docset", docset, "--online", "--json",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "setup plan must succeed, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let plan: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("setup plan emits one JSON document");
+    plan["data"]["plan_hash"]
+        .as_str()
+        .expect("setup plan hash")
+        .to_string()
+}
+
+fn assert_redacted_manual_guidance(
+    envelope: &serde_json::Value,
+    expected_client: &str,
+    forbidden_root: &std::path::Path,
+) {
+    let guidance = &envelope["data"]["manual_guidance"];
+    assert_eq!(guidance["client"], expected_client);
+    assert!(
+        guidance["redacted_fragment"]
+            .as_str()
+            .is_some_and(|fragment| fragment.contains("<binary>")),
+        "manual guidance must contain a redacted binary placeholder: {guidance}"
+    );
+    assert!(
+        guidance["steps"]
+            .as_array()
+            .is_some_and(|steps| !steps.is_empty()
+                && steps
+                    .iter()
+                    .all(|step| step.as_str().is_some_and(|s| !s.is_empty()))),
+        "manual guidance must contain non-empty steps: {guidance}"
+    );
+    assert_eq!(envelope["next_actions"], serde_json::json!([]));
+    assert!(envelope["rollback"].is_null());
+
+    let serialized = envelope.to_string();
+    assert!(!serialized.contains(&forbidden_root.to_string_lossy().to_string()));
+    assert!(!serialized.contains(env!("CARGO_BIN_EXE_nowdocs")));
+    for forbidden in ["TOKEN", "token", "secret", "HOME"] {
+        assert!(
+            !serialized.contains(forbidden),
+            "manual guidance envelope must not expose {forbidden}: {serialized}"
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn test_setup_apply_generic_json_exposes_redacted_manual_guidance() {
+    let root = tempfile::tempdir().unwrap();
+    let plan_hash = setup_apply_plan_for_client(root.path(), "generic");
+    let out = run_nowdocs_isolated(
+        root.path(),
+        &["setup", "apply", "--plan-hash", &plan_hash, "--json"],
+    );
+    assert!(
+        out.status.success(),
+        "generic manual guidance should be an agent-readable success, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("setup apply emits one JSON document");
+    assert_eq!(envelope["command"], "setup.apply");
+    assert_eq!(envelope["status"], "action_required");
+    assert_eq!(envelope["code"], "action_required");
+    assert_redacted_manual_guidance(&envelope, "generic", root.path());
+}
+
+#[test]
+#[cfg(unix)]
+fn test_setup_apply_missing_cursor_json_exposes_redacted_manual_guidance() {
+    let root = tempfile::tempdir().unwrap();
+    let plan_hash = setup_apply_plan_for_client(root.path(), "cursor");
+    let out = run_nowdocs_isolated(
+        root.path(),
+        &["setup", "apply", "--plan-hash", &plan_hash, "--json"],
+    );
+    assert!(
+        out.status.success(),
+        "missing Cursor target should produce partial guidance, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("setup apply emits one JSON document");
+    assert_eq!(envelope["command"], "setup.apply");
+    assert_eq!(envelope["status"], "partial");
+    assert_eq!(envelope["code"], "action_required");
+    assert_redacted_manual_guidance(&envelope, "cursor", root.path());
+}
+
 // ---------------------------------------------------------------------------
 // Update notification tests (unified update service)
 //
