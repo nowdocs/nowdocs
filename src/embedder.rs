@@ -266,7 +266,7 @@ pub fn preload_default_embedder() {
     if !default_model_cached() {
         return;
     }
-    if let Err(e) = Embedder::load() {
+    if let Err(e) = load_default_cached_only() {
         eprintln!("nowdocs: embedder preload failed (will retry on first search): {e}");
     }
 }

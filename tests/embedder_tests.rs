@@ -207,6 +207,33 @@ fn test_preload_skips_when_model_uncached() {
 }
 
 #[test]
+fn test_preload_uses_cached_only_loader() {
+    // `nowdocs serve` promises cache-only startup. When the pinned model is
+    // already present, warmup must use the local read-only loader instead of
+    // the normal loader, which sanitizes config.json by writing it back.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/embedder.rs");
+    let src = std::fs::read_to_string(&path).expect("read embedder.rs");
+    let start = src
+        .find("pub fn preload_default_embedder")
+        .expect("preload_default_embedder must exist");
+    let rest = &src[start..];
+    let end = rest[1..]
+        .find("\n}")
+        .map(|i| start + 1 + i + 2)
+        .expect("preload_default_embedder must have a function body");
+    let body = &src[start..end];
+
+    assert!(
+        body.contains("load_default_cached_only()"),
+        "serve-time warmup must use the cached-only loader: {body}"
+    );
+    assert!(
+        !body.contains("Embedder::load()"),
+        "serve-time warmup must not use the write-capable normal loader: {body}"
+    );
+}
+
+#[test]
 fn test_default_model_cached_requires_all_files() {
     // Cold-cache / interrupted-load guard: weights alone must NOT count as
     // "cached", otherwise serve-time preload would try to fetch the missing
