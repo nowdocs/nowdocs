@@ -6,7 +6,7 @@ Coding agents can confidently suggest APIs that have changed since their trainin
 
 ![Architecture overview: documentation sources are ingested, embedded, indexed locally, retrieved through hybrid search, sanitized, and served to MCP clients over stdio.](docs/assets/architecture.png)
 
-**Version 0.2.0:** This documentation describes the v0.2.0 release. Prebuilt assets appear on the [v0.2.0 release page](https://github.com/nowdocs/nowdocs/releases/tag/v0.2.0) after the release workflow finishes; until then, [v0.1.2](https://github.com/nowdocs/nowdocs/releases/tag/v0.1.2) remains the latest published binary. nowdocs is free to run, has no telemetry, and by default keeps queries, embeddings, and indexed documentation on your device.
+**Version 0.2.0:** Prebuilt binaries and checksums are available on the [v0.2.0 release page](https://github.com/nowdocs/nowdocs/releases/tag/v0.2.0). nowdocs is free to run, has no telemetry, and by default keeps queries, embeddings, and indexed documentation on your device.
 
 ## Why nowdocs
 
@@ -18,10 +18,12 @@ Coding agents can confidently suggest APIs that have changed since their trainin
 
 ## Install
 
-### Prebuilt binary
+### Prebuilt binary (recommended)
+
+Download the archive for your platform and its checksum from the [v0.2.0 release page](https://github.com/nowdocs/nowdocs/releases/tag/v0.2.0). This avoids compiling the Rust dependency tree locally.
 
 ```bash
-# Recommended: Cargo binstall verifies GitHub Release checksums.
+# Optional convenience for users who already have cargo-binstall.
 cargo binstall nowdocs
 
 # macOS or Linux through the Homebrew tap.
@@ -104,6 +106,14 @@ Agents must inspect the JSON `status`, `code`, `next_actions`, and optional `rol
 Discovery and planning are separate from mutation. `setup apply` requires the exact stored plan hash and explicit user approval. Automatic rollback accepts only setup-owned operation IDs, and a successful rollback consumes that authorization so it cannot be replayed against a user-recreated registration.
 
 The returned `setup-apply` action discloses the highest planned risk and whether apply may use the network. It is not marked fully reversible: a returned rollback operation can restore an operation-owned client configuration change, but it does not uninstall or downgrade a docset.
+
+## Built with Codex and GPT-5.6
+
+The v0.2.0 agent-first workflow and its release hardening were developed through an orchestrated Codex process. GPT-5.6 Sol handled architecture reasoning, implementation specifications, and task plans. GPT-5.6 Terra monitored implementation progress, checked agent reports against the specifications, reviewed failures, and coordinated verification. Lower-cost coding models implemented bounded code tasks selected according to their difficulty, risk, and importance.
+
+The human maintainer retained the final decisions: defining the product and security boundaries, approving state-changing actions, reviewing proposed changes, and authorizing merges and releases. Codex was used throughout the build rather than only to generate an initial codebase. That collaboration also influenced the product design itself: agents can inspect and plan, but configuration writes require explicit approval; verification is separate from mutation; and rollback authorization is guarded and one-shot.
+
+For a quick evaluation, use a prebuilt binary and run the five-minute quick start above. To exercise the Codex integration, create a setup plan with `nowdocs setup plan --client codex --docset nextjs --online --json`, review the returned risk and exact action, apply only the approved plan hash, then run `nowdocs verify --docset nextjs --client codex --json`.
 
 ## Optional native Cohere reranking
 
