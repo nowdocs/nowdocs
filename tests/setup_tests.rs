@@ -826,6 +826,25 @@ fn setup_plan_refuses_symlinked_cursor_target() {
     assert!(result.is_err(), "symlinked Cursor target must fail closed");
 }
 
+#[cfg(unix)]
+#[test]
+fn setup_plan_refuses_symlinked_cursor_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let _g = isolate(root.path());
+    let config_root = root.path().join("client-root");
+    let outside = root.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::create_dir_all(&config_root).unwrap();
+    std::os::unix::fs::symlink(&outside, config_root.join(".cursor")).unwrap();
+    let ar = make_approved_root(&config_root);
+
+    let result = setup_plan("nextjs", "cursor", &ar, false, 1_000_000_000);
+    assert!(
+        result.is_err(),
+        "symlinked Cursor directory must fail closed"
+    );
+}
+
 #[test]
 #[cfg(unix)]
 fn cursor_apply_succeeds_and_verifies() {

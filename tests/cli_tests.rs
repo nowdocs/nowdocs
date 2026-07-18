@@ -1189,6 +1189,38 @@ fn test_setup_apply_rejects_missing_plan_hash() {
     assert_eq!(v["code"], "plan_not_found");
 }
 
+#[test]
+#[cfg(unix)]
+fn test_setup_apply_unknown_plan_json_is_stable_and_redacted() {
+    let root = tempfile::tempdir().unwrap();
+    let args = [
+        "setup",
+        "apply",
+        "--plan-hash",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "--json",
+    ];
+    let first = run_nowdocs_isolated(root.path(), &args);
+    let second = run_nowdocs_isolated(root.path(), &args);
+
+    assert_eq!(first.status.code(), Some(10));
+    assert_eq!(second.status.code(), Some(10));
+    let first_json: serde_json::Value =
+        serde_json::from_slice(&first.stdout).expect("first setup apply emits JSON");
+    let second_json: serde_json::Value =
+        serde_json::from_slice(&second.stdout).expect("second setup apply emits JSON");
+    assert_eq!(first_json, second_json);
+    assert_eq!(first_json["command"], "setup.apply");
+    assert_eq!(first_json["code"], "plan_not_found");
+    assert!(
+        !first
+            .stdout
+            .windows(root.path().as_os_str().as_encoded_bytes().len())
+            .any(|window| window == root.path().as_os_str().as_encoded_bytes()),
+        "unknown-plan JSON must not expose the temporary root"
+    );
+}
+
 #[cfg(unix)]
 fn setup_apply_plan_for_client(root: &std::path::Path, client: &str) -> String {
     let docset = "manual-guidance-fixture";
