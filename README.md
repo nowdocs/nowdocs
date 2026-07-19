@@ -4,7 +4,7 @@
 
 Coding agents can confidently suggest APIs that have changed since their training data was collected. nowdocs indexes documentation on your machine and exposes it through MCP, so Codex CLI, Claude Code, Cursor, and other MCP clients can search current documentation instead of relying only on model memory.
 
-![Architecture overview: documentation sources are ingested, embedded, indexed locally, retrieved through hybrid search, sanitized, and served to MCP clients over stdio.](docs/assets/architecture.png)
+![Architecture overview: documentation is indexed locally and served through read-only MCP; optional Cohere reranking is an explicit opt-in outside the local boundary, and writes use approval-gated CLI commands.](docs/assets/architecture.png)
 
 **Version 0.2.0:** Prebuilt binaries and checksums are available on the [v0.2.0 release page](https://github.com/nowdocs/nowdocs/releases/tag/v0.2.0). nowdocs is free to run, has no telemetry, and by default keeps queries, embeddings, and indexed documentation on your device.
 
