@@ -31,7 +31,7 @@ jobs:
       run_release: ${{ steps.classify.outputs.run_release }}
       run_cross: ${{ steps.classify.outputs.run_cross }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
       - id: classify
@@ -51,7 +51,7 @@ jobs:
     if: needs.changes.outputs.docs_only == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
       - name: Check documentation whitespace
@@ -63,7 +63,7 @@ jobs:
     name: Lockfile
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
@@ -76,7 +76,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
       - name: Test DCO merge-commit handling
@@ -95,7 +95,7 @@ jobs:
       # Setting PROTOC explicitly avoids PATH-lookup flakiness in cargo subprocesses.
       PROTOC: /usr/bin/protoc
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
@@ -121,7 +121,7 @@ jobs:
     env:
       PROTOC: /usr/bin/protoc
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
@@ -142,7 +142,7 @@ jobs:
     env:
       PROTOC: /usr/bin/protoc
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
@@ -170,7 +170,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
@@ -197,7 +197,7 @@ jobs:
     name: cargo-deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@v2
       # Backlog (A1.3): surface the active RUSTSEC ignores on every run so an
       # ignore can't silently outlive its Revisit-date comment in deny.toml.
@@ -211,7 +211,7 @@ jobs:
     name: Compliance (manifest + no-vectors + audit-tests)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
       - name: Install jq
