@@ -18,6 +18,10 @@ updates:
       cargo-deps:
         patterns:
           - "*"
+    ignore:
+      - dependency-name: "arrow"
+      - dependency-name: "arrow-array"
+      - dependency-name: "arrow-schema"
 
   - package-ecosystem: "github-actions"
     directory: "/"
