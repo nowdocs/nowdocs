@@ -66,9 +66,9 @@ async-trait = "0.1"
 # (including inside the Cross container for aarch64 musl builds).
 lance = { version = "8", default-features = false }
 tokio = { version = "1", features = ["rt", "macros", "fs"] }
-arrow = "59.1"
-arrow-array = "59.1"
-arrow-schema = "59.1"
+arrow = "58.3"
+arrow-array = "58.3"
+arrow-schema = "58.3"
 half = "2"
 futures = "0.3"
 lance-arrow = "8"
