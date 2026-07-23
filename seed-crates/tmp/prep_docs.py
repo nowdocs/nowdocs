@@ -64,7 +64,7 @@ def strip_mdx_preserving_code(text: str) -> str:
         return f"\x00SCRIPT{len(script_blocks) - 1}\x00"
 
     text = re.sub(
-        r"<script\b[^>]*>.*?</script>",
+        r"<script\b[^>]*>.*?</script\b[^>]*>",
         _stash_script,
         text,
         flags=re.DOTALL | re.IGNORECASE,
