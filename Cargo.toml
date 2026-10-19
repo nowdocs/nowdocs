@@ -44,7 +44,7 @@ anyhow = "1.0"
 regex = "1.10"
 sha2 = "0.11"
 flate2 = "1.1"
-dirs = "6.0"
+dirs = "7.0"
 ureq = { version = "3.3", default-features = false, features = ["rustls"] }
 # Used by the update cache to atomically replace a same-directory temporary
 # file on every supported release platform.
@@ -60,18 +60,18 @@ candle-transformers = "0.11"
 tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 hf-hub = { version = "0.5", default-features = false, features = ["tokio", "ureq", "rustls-tls"] }
 # store (Wave 2 — only task 2b may touch these lines, AGENTS §4.5)
-lancedb = "0.31"
+lancedb = "0.40"
 async-trait = "0.1"
 # Use the runner-provided protobuf compiler; release CI installs it explicitly
 # (including inside the Cross container for aarch64 musl builds).
-lance = { version = "8", default-features = false }
+lance = { version = "13", default-features = false }
 tokio = { version = "1", features = ["rt", "macros", "fs"] }
-arrow = "58.3"
-arrow-array = "58.3"
-arrow-schema = "58.3"
+arrow = "60.0"
+arrow-array = "60.0"
+arrow-schema = "60.0"
 half = "2"
 futures = "0.3"
-lance-arrow = "8"
+lance-arrow = "13"
 # Cross-platform process-lifetime advisory file lock for the automation
 # operation lock and the hardened per-docset install lock (C3). fs2's
 # `try_lock_exclusive` maps to `flock(2)` on Unix and `LockFileEx` on Windows;
